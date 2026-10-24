@@ -47,6 +47,15 @@ impl CockpitApp {
             .collect()
     }
 
+    /// The leader's menus, by their key: the view's own, then each group.
+    pub(in crate::app) fn menu_keys(&self) -> Vec<char> {
+        let groups = self.config.keymap.groups.keys().filter_map(|k| {
+            let mut chars = k.chars();
+            chars.next().filter(|_| chars.next().is_none())
+        });
+        std::iter::once(self.config.keymap.view_menu).chain(groups).collect()
+    }
+
     /// The top bar's button for every menu: the leader's own (its root).
     pub(in crate::app) fn every_menu(&self) -> crate::hosted::GroupButton {
         let keys = self.config.keymap.leader.label();

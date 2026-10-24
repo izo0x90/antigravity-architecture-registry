@@ -119,8 +119,13 @@ pub enum Layer {
     Panel,
     /// What holds the panel: the quick look, the panel.
     Host,
-    /// The rest: panels, servers, the palette, the bell.
+    /// The rest: panels, servers, the action list, the bell.
     Everywhere,
+}
+
+impl Layer {
+    /// Closest first.
+    pub const ALL: [Self; 4] = [Self::On, Self::Panel, Self::Host, Self::Everywhere];
 }
 
 /// Where an action's control shows. Hosts draw them; views draw none.
@@ -309,6 +314,14 @@ impl When {
             Self::Marked => "a mark set",
             Self::Reaches(_) => "something it leads to from here",
         })
+    }
+
+    /// Why it can't run where it doesn't apply, in words.
+    pub fn why_not(self) -> String {
+        match self.needs() {
+            Some(needs) => format!("it needs {needs}"),
+            None => "nothing here it applies to".to_owned(),
+        }
     }
 }
 
@@ -516,8 +529,6 @@ impl Bound {
         }
     }
 
-    /// Every way to run it: its keys, its leader path, its gestures (what
-    /// the `?` sheet lists).
     /// Drawn where its keys don't run it (a panel not focused): its keys
     /// unsaid.
     pub fn unkeyed(mut self) -> Self {
@@ -525,6 +536,8 @@ impl Bound {
         self
     }
 
+    /// Every way to run it: its keys, its leader path, its gestures (what
+    /// `?` lists).
     pub fn ways(&self) -> Vec<String> {
         let typed = self.action.typed.map(|sent| crate::keymap::local().input.label(sent));
         let keys = typed.into_iter().chain(self.keys.iter().map(|seq| seq.iter().map(Chord::label).collect::<Vec<_>>().join(" ")));
@@ -646,10 +659,10 @@ pub fn control(ui: &mut egui::Ui, bound: &Bound, cx: &mut RunCx<'_>) -> bool {
     let action = &bound.action;
     // One that doesn't apply where you are: shown greyed, never run.
     let used = if action.when == When::Unavailable {
-        ui.add_enabled_ui(false, |ui| draw_control(ui, bound));
+        ui.add_enabled_ui(false, |ui| draw_control(ui, bound, cx.input_mode));
         None
     } else {
-        draw_control(ui, bound)
+        draw_control(ui, bound, cx.input_mode)
     };
     let Some(used) = used else { return false };
     let value = match used {
@@ -704,6 +717,11 @@ pub fn caption_and_key(ui: &egui::Ui, caption: &str, key: &str, tone: Option<Ton
     job.into()
 }
 
+/// Whether a setting's list of choices (`InputMode::Choosing`) is open.
+pub fn list_open(ctx: &egui::Context, list: egui::Id) -> bool {
+    egui::ComboBox::is_open(ctx, list)
+}
+
 /// Narrowest a picker gets before its text is truncated.
 const PICKER_MIN_WIDTH: f32 = 90.0;
 
@@ -714,7 +732,7 @@ const SETTING_LIST_ROWS: usize = 8;
 
 /// Draws a bound action's control; hovering it says what it does and its
 /// key, and the key shows beside its caption when there's room.
-fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
+fn draw_control(ui: &mut egui::Ui, bound: &Bound, mode: &mut InputMode) -> Option<ControlUse> {
     let action = &bound.action;
     let toolbar = action.control.as_ref()?;
     let key = bound.key_hint();
@@ -752,11 +770,12 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
             // The one list choices are picked from (as the action list's):
             // sized to what it holds (the popup's own scrolling never needed),
             // its highlight starting on what's chosen, the list keys and
-            // Enter taken while it's open.
+            // Enter taken while it's open (it has the keys: `Choosing`).
             let list_id = ui.make_persistent_id(("control_list", action.id.as_str()));
+            let combo_salt = ("control", action.id.as_str());
             let details = choices.iter().any(|c| c.detail.is_some());
             let height = crate::pick_list::PickList::fitting(ui, choices.len(), details, SETTING_LIST_ROWS);
-            let open = egui::ComboBox::from_id_salt(("control", action.id.as_str()))
+            let open = egui::ComboBox::from_id_salt(combo_salt)
                 .width(PICKER_MIN_WIDTH.min(ui.available_width()))
                 .height(height + 2.0 * ui.spacing().item_spacing.y)
                 .truncate()
@@ -768,7 +787,7 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
                     let keys = &crate::keymap::local().list;
                     let (moved, enter) = ui.input_mut(|i| (keys.moved(i), keys.picked(i)));
                     let listing = crate::pick_list::Listing { id: action.id.as_str(), height, len: choices.len(), details, empty: "Nothing to choose" };
-                    if let Some(i) = list.show(ui, listing, moved, enter, |i| crate::pick_list::Row::of_choice(&choices[i])) {
+                    if let Some(i) = list.show(ui, listing, moved, enter, crate::pick_list::every_row_picks, |i| crate::pick_list::Row::of_choice(&choices[i])) {
                         picked = (!choices[i].current).then(|| choices[i].value.clone());
                         ui.close();
                     }
@@ -776,8 +795,20 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
                 })
                 .inner
                 .is_some();
-            if !open {
+            // Who has the keys changed: the bars, drawn before, say so next.
+            // (The combo box's own id: its salt made an id, in this ui.)
+            let choosing = InputMode::Choosing { list: ui.make_persistent_id(egui::Id::new(combo_salt)) };
+            let was = *mode;
+            if open && *mode != InputMode::Palette {
+                *mode = choosing;
+            } else if !open {
                 ui.data_mut(|d| d.remove::<crate::pick_list::PickList>(list_id));
+                if *mode == choosing {
+                    *mode = InputMode::Normal;
+                }
+            }
+            if *mode != was {
+                ui.ctx().request_repaint();
             }
             picked.map(|v| ControlUse::Run(Some(v)))
         }

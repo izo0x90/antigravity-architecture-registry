@@ -22,8 +22,11 @@ pub enum InputMode {
     Normal,
     /// Leader menu open, awaiting menu keys (path kept by the app).
     Leader,
-    /// The command palette owns the keyboard.
+    /// The action list (or a value's picker) owns the keyboard.
     Palette,
+    /// A setting's list of choices, open over a panel (its combo box: `list`),
+    /// reads the list keys.
+    Choosing { list: egui::Id },
     /// Keystrokes flow into the text field of the buffer this holds.
     Insert { at: Host },
     /// The shell reads typed keys for the buffer this holds (search, hint

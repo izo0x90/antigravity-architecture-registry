@@ -142,7 +142,7 @@ fn the_at_picker_keeps_its_rows_until_the_next_are_all_in_and_enter_waits_for_th
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     let shown = texts(&frame(&ctx, &mut app, vec![]));
     assert_eq!(app.palette.picking(), Some("link.thing"), "Enter on the rows of `a` waits for those of `ab`");
-    assert!(shown.contains("Looking… · Enter runs"), "and the key line says it's waiting: {shown}");
+    assert!(shown.contains("Looking… · Enter picks"), "and the key line says it's waiting: {shown}");
     // An answer for `a` coming late changes nothing.
     assert!(!app.desk.net.answer(&first_files[0], 200, &files("a", &["src/late.rs"])), "already answered");
     let (next_files, next_symbols) = asked(&app, "ab");

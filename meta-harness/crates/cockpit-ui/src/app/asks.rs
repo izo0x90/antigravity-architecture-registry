@@ -49,7 +49,7 @@ impl CockpitApp {
             // too; it isn't typed anywhere else.)
             Ask::Trigger(c) => {
                 if let Some(pick) = self.triggered(c) {
-                    self.open_palette(Some(&pick));
+                    self.open_palette(&pick);
                     self.palette.give_back_typing();
                     super::keys::typed_away(ctx);
                 }

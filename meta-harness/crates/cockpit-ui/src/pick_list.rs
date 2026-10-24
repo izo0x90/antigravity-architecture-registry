@@ -31,6 +31,11 @@ pub enum RowKind {
     Heading,
 }
 
+/// The kind of every row of a list of choices (each is picked).
+pub fn every_row_picks(_: usize) -> RowKind {
+    RowKind::Pick
+}
+
 /// One row as it's drawn.
 #[derive(Clone, Debug, Default)]
 pub struct Row<'a> {
@@ -42,7 +47,6 @@ pub struct Row<'a> {
     pub detail: Option<Cow<'a, str>>,
     /// Its keys, on the right.
     pub keys: Cow<'a, str>,
-    pub kind: RowKind,
     /// Drawn faint: it doesn't apply where you are now.
     pub faint: bool,
 }
@@ -123,18 +127,19 @@ impl PickList {
         len.clamp(1, most.max(1)) as f32 * stride
     }
 
-    /// Draws the rows listed (`row` gives each), after the keys' move
-    /// (`moved`); returns the one picked (tapped, or the highlight on
+    /// Draws the rows listed (`row` gives each, only those drawn; `kind`
+    /// says what each is, asked of any, so it's cheap), after the keys'
+    /// move (`moved`); returns the one picked (tapped, or the highlight on
     /// `enter`).
-    pub fn show<'a>(&mut self, ui: &mut egui::Ui, listing: Listing<'_>, moved: Option<Motion>, enter: bool, row: impl Fn(usize) -> Row<'a>) -> Option<usize> {
+    pub fn show<'a>(&mut self, ui: &mut egui::Ui, listing: Listing<'_>, moved: Option<Motion>, enter: bool, kind: impl Fn(usize) -> RowKind, row: impl Fn(usize) -> Row<'a>) -> Option<usize> {
         let Listing { id, height, len, details, empty } = listing;
         let now = ui.input(|i| i.time);
         let row_h = Self::row_height(ui, details);
         let stride = row_h + ui.spacing().item_spacing.y;
         self.highlight = self.highlight.min(len.saturating_sub(1));
         // Never on a heading: the next row that isn't.
-        if len > 0 && row(self.highlight).kind == RowKind::Heading {
-            self.highlight = (self.highlight..len).chain(0..self.highlight).find(|i| row(*i).kind != RowKind::Heading).unwrap_or(self.highlight);
+        if len > 0 && kind(self.highlight) == RowKind::Heading {
+            self.highlight = (self.highlight..len).chain(0..self.highlight).find(|i| kind(*i) != RowKind::Heading).unwrap_or(self.highlight);
         }
         // This frame's window and rows, before any move (not the last
         // frame's: a list just opened, or rows just come).
@@ -150,7 +155,7 @@ impl PickList {
             y
         });
         if let Some(motion) = moved.filter(|_| len > 0) {
-            let stops: Vec<usize> = (0..len).filter(|i| row(*i).kind != RowKind::Heading).collect();
+            let stops: Vec<usize> = (0..len).filter(|i| kind(*i) != RowKind::Heading).collect();
             self.go(motion, &stops, stride, now);
         }
         let mut area = egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]).max_height(height).min_scrolled_height(height);
@@ -178,23 +183,23 @@ impl PickList {
                 && moved.is_none()
                 && let Some((i, ..)) = laid.iter().find(|(_, _, r)| r.hovered())
                 && *i != self.highlight
-                && row(*i).kind != RowKind::Heading
+                && kind(*i) != RowKind::Heading
             {
                 (self.highlight, self.chosen) = (*i, true);
             }
             for (i, rect, response) in laid {
-                let row = row(i);
-                if response.clicked() && row.kind == RowKind::Pick {
+                let kind = kind(i);
+                if response.clicked() && kind == RowKind::Pick {
                     picked = Some(i);
                 }
-                Self::paint(ui, rect, row, i == self.highlight);
+                Self::paint(ui, rect, row(i), kind, i == self.highlight);
             }
         });
         self.viewport.drawn(output.state.offset, output.inner_rect.size(), output.content_size);
         if self.viewport.gliding() {
             ui.ctx().request_repaint();
         }
-        if enter && picked.is_none() && row(self.highlight).kind == RowKind::Pick {
+        if enter && picked.is_none() && kind(self.highlight) == RowKind::Pick {
             picked = Some(self.highlight);
         }
         picked
@@ -226,7 +231,7 @@ impl PickList {
 
     /// A row, painted: its fill when highlighted, its label (cut to fit
     /// beside its keys), its keys, its description under them.
-    fn paint(ui: &egui::Ui, rect: egui::Rect, row: Row<'_>, highlighted: bool) {
+    fn paint(ui: &egui::Ui, rect: egui::Rect, row: Row<'_>, kind: RowKind, highlighted: bool) {
         let (look, theme) = (crate::theme::look(), colors());
         if highlighted {
             ui.painter().rect_filled(rect, look.radius_m, theme.selection);
@@ -234,7 +239,7 @@ impl PickList {
         let inner = rect.shrink2(egui::vec2(look.space_m, look.space_sm));
         let keys = ui.painter().layout_no_wrap(row.keys.into_owned(), egui::FontId::monospace(look.text_small), theme.key);
         let label_width = (inner.width() - keys.size().x - look.space_m).max(0.0);
-        if row.kind == RowKind::Heading {
+        if kind == RowKind::Heading {
             let title = egui::RichText::new(row.label).strong().size(look.text_label).color(theme.accent);
             let galley = egui::WidgetText::from(title).into_galley(ui, Some(egui::TextWrapMode::Truncate), inner.width(), egui::TextStyle::Body);
             ui.painter().galley(egui::pos2(inner.left(), inner.bottom() - galley.size().y), galley, theme.accent);
@@ -289,9 +294,10 @@ mod tests {
             let (list, len, inform) = (&mut self.list, self.len, self.inform);
             let output = self.ctx.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let row = |i: usize| Row { label: &labels[i], kind: if inform == Some(i) { RowKind::Inform } else { RowKind::Pick }, ..Row::default() };
+                    let kind = |i: usize| if inform == Some(i) { RowKind::Inform } else { RowKind::Pick };
+                    let row = |i: usize| Row { label: &labels[i], ..Row::default() };
                     let top = ui.cursor().top();
-                    picked = list.show(ui, Listing { id: "test_list", height: 120.0, len, details: false, empty: "Nothing here" }, moved, enter, row);
+                    picked = list.show(ui, Listing { id: "test_list", height: 120.0, len, details: false, empty: "Nothing here" }, moved, enter, kind, row);
                     height = ui.cursor().top() - top;
                 });
             });

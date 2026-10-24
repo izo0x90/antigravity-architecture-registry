@@ -26,19 +26,23 @@ impl CockpitApp {
         keys.into_iter().take(self.config.keymap.bar.max).map(|(_, b)| b).collect()
     }
 
-    /// While a mode has the keys (typing, the palette, a search, labels, a
-    /// mark): its name and its keys, as configured, each with what it does.
-    pub(in crate::app) fn mode_keys(&self) -> Option<(&'static str, Vec<(String, &'static str)>)> {
+    /// While `mode` has the keys (typing, a search, labels, a mark): its
+    /// name and its keys, as configured, each with what it does. (The
+    /// action list says its own.)
+    pub(in crate::app) fn mode_keys(&self, mode: InputMode) -> Option<(&'static str, Vec<(String, &'static str)>)> {
         let local = crate::keymap::local();
         let back = local.back.label();
-        match (&self.capture, self.input_mode) {
-            (Some(Capture::Search(_)), _) => Some(("Searching", vec![(local.input.label(crate::keymap::Sent::Send), "jumps to it"), (back, "gives up")])),
-            (Some(Capture::Hint(_)), _) => Some(("Labels", vec![("a label".into(), "goes there"), (back, "gives up")])),
-            (Some(Capture::MarkSet | Capture::MarkJump), _) => Some(("Marks", vec![("a letter".into(), "the mark"), (back, "gives up")])),
-            (None, InputMode::Insert { at }) if self.field_at(at) == crate::keymap::Field::Keys => Some(("Typing", local.input.leave_keys())),
-            (None, InputMode::Insert { .. }) => Some(("Typing", local.input.keys(&local.back, "leaves the field"))),
-            (None, InputMode::Palette) => Some(("The palette", local.list.keys(&local.back, "closes"))),
-            (None, _) => None,
+        match mode {
+            InputMode::Capture { .. } => match &self.capture {
+                Some(Capture::Search(_)) => Some(("Searching", vec![(local.input.label(crate::keymap::Sent::Send), "jumps to it"), (back, "gives up")])),
+                Some(Capture::Hint(_)) => Some(("Labels", vec![("a label".into(), "goes there"), (back, "gives up")])),
+                Some(Capture::MarkSet | Capture::MarkJump) => Some(("Marks", vec![("a letter".into(), "the mark"), (back, "gives up")])),
+                None => None,
+            },
+            InputMode::Insert { at } if self.field_at(at) == crate::keymap::Field::Keys => Some(("Typing", local.input.leave_keys())),
+            InputMode::Insert { .. } => Some(("Typing", local.input.keys(&local.back, "leaves the field"))),
+            InputMode::Choosing { .. } => Some(("A list", local.list.keys(&local.back, "closes"))),
+            InputMode::Normal | InputMode::Leader | InputMode::Palette => None,
         }
     }
 
@@ -78,12 +82,19 @@ impl CockpitApp {
         }
     }
 
-    /// The keys that matter now (while a mode has the keys, its keys),
-    /// tappable; the one tapped in `run`.
+    /// The keys that matter now (while a mode has the keys, its keys; the
+    /// action list's, as it says them), tappable; the one tapped in `run`.
     fn draw_bar_keys(&self, ui: &mut egui::Ui, bound: &[Bound], narrow: bool, run: &mut Option<Bound>) {
-        if let Some((_, typing)) = self.mode_keys() {
+        let said = |ui: &mut egui::Ui, text: String| ui.label(RichText::new(text).size(crate::theme::look().text_body).color(colors().muted));
+        if self.input_mode == InputMode::Palette {
+            for keys in self.palette.keys_said() {
+                said(ui, keys.clone());
+            }
+            return;
+        }
+        if let Some((_, typing)) = self.mode_keys(self.input_mode) {
             for (keys, what) in typing {
-                ui.label(RichText::new(format!("{keys} {what}")).size(crate::theme::look().text_body).color(colors().muted));
+                said(ui, format!("{keys} {what}"));
             }
             return;
         }
@@ -150,25 +161,37 @@ impl CockpitApp {
         });
     }
 
-    /// What the action list needs of where you are: which actions apply
-    /// (another view's own are judged there: they apply unless it says
-    /// not), the layers' titles, and the keys that run nothing themselves
-    /// (the mode's it was opened from, the pointer's and fingers').
-    pub(in crate::app) fn sheet_of(&self, bound: &[Bound]) -> crate::sheet::Sheet {
+    /// What the action list lists (`bound`), each judged where you are
+    /// (as its key is), and what it needs of where you are: the titles of
+    /// what holds you, the keys that run nothing themselves (the mode's it
+    /// was opened from, the pointer's and fingers'), the leader's groups'
+    /// names, and going to a line.
+    pub(in crate::app) fn sheet_of(&self, bound: Vec<Bound>) -> (Vec<crate::sheet::Offered>, crate::sheet::Sheet) {
+        use crate::sheet::{Inform, Informs, Offered, Sheet};
+        #[cfg(test)]
+        self.listed.set(self.listed.get() + 1);
         let here = self.here();
-        let applies = bound.iter().map(|b| self.applies(b, here)).collect();
+        let offered: Vec<Offered> = bound.into_iter().map(|bound| Offered { applies: self.applies(&bound, here), bound }).collect();
         let host = match here.at {
             crate::keymap::Host::Look => "Quick look".to_owned(),
             crate::keymap::Host::Panel(panel) => format!("Panel {}", panel + 1),
         };
-        let layers = ["On what you're on".to_owned(), self.desk.view(here.kind).title().text, host, "Everywhere".to_owned()];
+        let inform = |keys: String, does: &str| Inform { keys, does: does.to_owned() };
         let mut informs = Vec::new();
-        if let Some((name, keys)) = &self.sheet_mode {
-            informs.push((format!("{name}: its keys"), keys.iter().map(|(k, w)| (k.clone(), (*w).to_owned())).collect()));
+        if let Some((name, keys)) = self.mode_keys(self.palette_from) {
+            informs.push(Informs { title: format!("{name}: its keys"), keys: keys.into_iter().map(|(k, does)| inform(k, does)).collect() });
         }
         let go_to = format!("{}+click", crate::keymap::local().pointer.go_to.label());
-        let pointer = [("click / tap", "put the cursor on an item"), ("double click / tap", "open it"), ("long press", "what can be done with it (the palette)"), (go_to.as_str(), "go to the name under it (code)")];
-        informs.push(("Pointer and touch".to_owned(), pointer.iter().map(|(k, w)| ((*k).to_owned(), (*w).to_owned())).collect()));
-        crate::sheet::Sheet { applies, layers, informs }
+        let pointer = [
+            ("click / tap".to_owned(), "put the cursor on an item"),
+            ("double click / tap".to_owned(), "open it"),
+            ("long press".to_owned(), "on an item, what can be done with it (the action list); on a button, what it does"),
+            (go_to, "go to the name under it (code)"),
+        ];
+        informs.push(Informs { title: "Pointer and touch".to_owned(), keys: pointer.into_iter().map(|(k, does)| inform(k, does)).collect() });
+        let groups = self.menu_keys().into_iter().map(|key| (key, self.group_name(&[key], here.kind))).collect();
+        let line = offered.iter().find(|o| o.bound.action.command::<ShellCommand>() == Some(&ShellCommand::Line)).map(|o| o.bound.clone());
+        let sheet = Sheet { view: self.desk.view(here.kind).title().text, host, informs, groups, line };
+        (offered, sheet)
     }
 }

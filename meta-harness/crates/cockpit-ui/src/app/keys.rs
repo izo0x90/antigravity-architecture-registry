@@ -57,9 +57,13 @@ impl CockpitApp {
         let leader_tapped = leader_released && self.leader_tap.release();
 
         match self.input_mode {
-            // A setting's list of choices, open over a panel, reads its own
-            // keys, whatever has them otherwise.
-            _ if egui::Popup::is_any_open(ctx) => {}
+            // A setting's list of choices reads its own keys; one gone without
+            // closing (its panel closed) gives them back.
+            InputMode::Choosing { list } => {
+                if !crate::actions::list_open(ctx, list) {
+                    self.input_mode = InputMode::Normal;
+                }
+            }
 
             // A field that takes every key: only the leave keys leave it
             // (a sequence's first key held until the next, or the wait).

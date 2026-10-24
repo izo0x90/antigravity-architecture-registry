@@ -117,7 +117,7 @@ impl CockpitApp {
             _ => {
                 self.desk.choosing = Some(Choosing { op, from, origin, candidates: found, panel: self.landing });
                 if let Some(pick) = self.bound_actions().into_iter().find(|b| b.action.id == "goto.pick") {
-                    self.open_palette(Some(&pick));
+                    self.open_palette(&pick);
                 }
             }
         }

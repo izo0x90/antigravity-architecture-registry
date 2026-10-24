@@ -258,6 +258,10 @@ pub struct CockpitApp {
     /// How many times the actions were gathered (counted for the tests).
     #[cfg(test)]
     gathered: std::cell::Cell<usize>,
+    /// How many times the action list's rows were built (counted for the
+    /// tests).
+    #[cfg(test)]
+    listed: std::cell::Cell<usize>,
     /// Every action run, by id (what keys and controls ran).
     #[cfg(test)]
     ran: std::cell::RefCell<Vec<String>>,
@@ -310,9 +314,6 @@ pub struct CockpitApp {
     /// A short note in the key bar (why something didn't happen), and since when.
     pub note: Option<String>,
     note_since: Option<f64>,
-    /// The keys of the mode the cockpit was in when the action list was
-    /// opened on everything (`?`): listed in it.
-    sheet_mode: Option<(&'static str, Vec<(String, &'static str)>)>,
     /// Where each panel was drawn last frame (hint labels stay inside theirs).
     panel_rects: Vec<egui::Rect>,
     /// Where the buttons of what you're on show, once changed here (else
@@ -367,6 +368,8 @@ impl CockpitApp {
             #[cfg(test)]
             gathered: Default::default(),
             #[cfg(test)]
+            listed: Default::default(),
+            #[cfg(test)]
             ran: Default::default(),
             feedback: FeedbackInspectorState::default(),
 
@@ -395,7 +398,6 @@ impl CockpitApp {
             capture: None,
             note: None,
             note_since: None,
-            sheet_mode: None,
             panel_rects: Vec::new(),
             item_buttons: None,
             item_bars: Vec::new(),

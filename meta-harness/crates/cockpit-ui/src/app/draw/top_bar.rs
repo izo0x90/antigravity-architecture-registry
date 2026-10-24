@@ -231,7 +231,8 @@ impl CockpitApp {
                             colors().info_bg,
                         ),
                         InputMode::Leader => (self.menu_path().join(" \u{203a} "), colors().key, colors().warn_bg),
-                        InputMode::Palette => ("PALETTE".to_string(), colors().info, colors().info_bg),
+                        InputMode::Palette => ("ACTION LIST".to_string(), colors().info, colors().info_bg),
+                        InputMode::Choosing { .. } => ("CHOOSING".to_string(), colors().info, colors().info_bg),
                         InputMode::Insert { at } => (
                             match at {
                                 crate::keymap::Host::Panel(panel) => format!("INSERT [{}]", panel + 1),

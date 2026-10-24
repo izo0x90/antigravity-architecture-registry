@@ -41,18 +41,22 @@ impl CockpitApp {
     /// The palette overlay (opened by its key, or its control on the top
     /// bar).
     pub fn render_palette(&mut self, ctx: &egui::Context) {
-        let bound = self.palette_actions();
         // A view asked for an action's picker (e.g. Resume once sessions loaded).
-        for kind in BufferKind::ALL {
-            // (Only one that's offered there now: none of them, nothing opens.)
-            if let Some(id) = self.desk.view_mut(kind).take_palette_request()
-                && let Some(action) = bound.iter().find(|b| b.action.id == id && b.action.when != crate::actions::When::Unavailable)
-            {
-                self.open_palette(Some(action));
+        let requests: Vec<String> = BufferKind::ALL.into_iter().filter_map(|kind| self.desk.view_mut(kind).take_palette_request()).collect();
+        // Closed and not asked for: nothing to list (what it lists isn't
+        // gathered, or judged).
+        if !self.palette.is_open() && requests.is_empty() && self.input_mode != InputMode::Palette {
+            return;
+        }
+        let bound = self.palette_actions();
+        // (Only one that's offered there now: none of them, nothing opens.)
+        for id in requests {
+            if let Some(action) = bound.iter().find(|b| b.action.id == id && b.action.when != crate::actions::When::Unavailable) {
+                self.open_palette(action);
             }
         }
-        let sheet = self.sheet_of(&bound);
-        let picked = self.palette.render(ctx, &bound, &sheet, &self.config.keymap);
+        let (offered, sheet) = self.sheet_of(bound);
+        let picked = self.palette.render(ctx, &offered, &sheet, &self.config.keymap);
         // A trigger in what's written there: its picker, what it picks put after it.
         if let Some(pick) = self.palette.take_trigger().and_then(|c| self.triggered(c)) {
             self.palette.hold_for(&pick);

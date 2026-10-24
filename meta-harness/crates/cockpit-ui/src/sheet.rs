@@ -1,36 +1,99 @@
 //! What the action list lists: what applies where you are (`:`), or
 //! everything (`?`): every action, faded where it doesn't apply (and what
 //! it needs, when that's known), then keys that run nothing themselves (a
-//! mode's, the pointer's), each under its section's title. Matched by the
-//! shared fuzzy matcher; with everything, each section keeps its rows in
-//! the order they matched.
+//! mode's, the pointer's), each under its section's title. `:42` lists
+//! going to line 42 first. Matched by the shared fuzzy matcher; each
+//! section keeps its rows in the order they matched.
 
 use std::borrow::Cow;
 
 use crate::actions::{Bound, Group, Layer, Param};
-use crate::keymap::KeymapConfig;
 use crate::pick_list::{Row, RowKind};
 
-/// What the list needs to know of where you are, beyond the actions:
-/// which of them apply now (in their order), the layers' titles (what
-/// you're on, the panel's view, what holds it, everywhere), and keys that
-/// run nothing themselves, by section (a mode's, the pointer's).
-pub struct Sheet {
-    pub applies: Vec<bool>,
-    pub layers: [String; 4],
-    pub informs: Vec<Informs>,
+/// How far the action list reaches: what applies where you are, or
+/// everything.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Reach {
+    #[default]
+    Here,
+    Everything,
 }
 
-/// A section of keys that run nothing themselves: its title, and each key
-/// with what it does.
-pub type Informs = (String, Vec<(String, String)>);
+impl Reach {
+    /// The other (what the list's cycle key switches to).
+    pub fn other(self) -> Self {
+        match self {
+            Self::Here => Self::Everything,
+            Self::Everything => Self::Here,
+        }
+    }
+}
 
-const LAYERS: [Layer; 4] = [Layer::On, Layer::Panel, Layer::Host, Layer::Everywhere];
+/// An action offered here, and whether it applies where you are (judged
+/// once, by the app, for every surface).
+pub struct Offered {
+    pub bound: Bound,
+    pub applies: bool,
+}
+
+impl Offered {
+    /// Asked to run: what's said instead, when it isn't. One that asks for
+    /// a value isn't asked for it where it doesn't apply; one that doesn't
+    /// runs (its view says why it can't, in its own words), as a switch
+    /// flips. (Its key, its control and the action list all ask this.)
+    pub fn refused(&self) -> Option<String> {
+        let action = &self.bound.action;
+        let asks = !matches!(action.param, Param::None | Param::Toggle { .. });
+        (asks && !self.applies).then(|| format!("{}: {}.", action.label, action.when.why_not()))
+    }
+}
+
+/// A key that runs nothing itself, and what it does.
+pub struct Inform {
+    pub keys: String,
+    pub does: String,
+}
+
+/// A section of keys that run nothing themselves (a mode's, the pointer's).
+pub struct Informs {
+    pub title: String,
+    pub keys: Vec<Inform>,
+}
+
+/// What the list needs to know of where you are, beyond the actions: the
+/// titles of what holds you (the panel's view, its host), the keys that
+/// run nothing themselves, the leader's groups' names (what its actions
+/// are found by too), and going to a line, when the view has lines.
+pub struct Sheet {
+    pub view: String,
+    pub host: String,
+    pub informs: Vec<Informs>,
+    pub groups: Vec<(char, String)>,
+    pub line: Option<Bound>,
+}
+
+impl Sheet {
+    /// A layer's section title.
+    pub fn title(&self, layer: Layer) -> &str {
+        match layer {
+            Layer::On => "On what you're on",
+            Layer::Panel => &self.view,
+            Layer::Host => &self.host,
+            Layer::Everywhere => "Everywhere",
+        }
+    }
+
+    fn group(&self, key: char) -> &str {
+        self.groups.iter().find(|(k, _)| *k == key).map_or("", |(_, name)| name.as_str())
+    }
+}
 
 /// One thing listed.
 pub enum Item<'a> {
-    Action { bound: &'a Bound, applies: bool },
-    Inform { keys: &'a str, what: &'a str },
+    Action(&'a Offered),
+    /// Going to the line typed (its number, said as a label).
+    Line { number: usize, label: String, bound: &'a Bound },
+    Inform(&'a Inform),
 }
 
 /// One line of the list: a section's title, or an entry (by its place).
@@ -40,42 +103,63 @@ pub enum Line {
     Entry(usize),
 }
 
-/// The entries listed, each in its section, and the sections' titles.
+/// A section: its title (none: none drawn), and whether its actions say
+/// every way to run them (or only their key).
+struct Section {
+    title: Option<String>,
+    every_way: bool,
+}
+
+/// The entries listed, each in its section.
 pub struct Listed<'a> {
-    titles: Vec<String>,
+    sections: Vec<Section>,
     entries: Vec<(usize, Item<'a>)>,
-    everything: bool,
+    /// The entry going to the line typed (always first).
+    line: Option<usize>,
+    sheet: &'a Sheet,
 }
 
 impl<'a> Listed<'a> {
-    /// What applies, closest to where you are first, then by name; or
-    /// everything, by layer and group (most important first), then the
-    /// keys that only inform.
-    pub fn of(actions: &'a [Bound], sheet: &'a Sheet, everything: bool) -> Self {
-        let applies = |i: usize| sheet.applies.get(i).copied().unwrap_or(true);
-        if !everything {
-            let mut listed: Vec<(usize, &Bound)> = actions.iter().enumerate().filter(|(i, _)| applies(*i)).collect();
-            listed.sort_by(|(_, a), (_, b)| (a.layer, &a.action.label).cmp(&(b.layer, &b.action.label)));
-            let entries = listed.into_iter().map(|(_, bound)| (0, Item::Action { bound, applies: true })).collect();
-            return Self { titles: Vec::new(), entries, everything };
-        }
-        let (mut titles, mut entries) = (Vec::new(), Vec::new());
-        for (layer, title) in LAYERS.into_iter().zip(&sheet.layers) {
-            for group in Group::ALL {
-                let mut these: Vec<(usize, &Bound)> = actions.iter().enumerate().filter(|(_, b)| b.layer == layer && b.action.group == group).collect();
-                if these.is_empty() {
-                    continue;
+    /// What applies, closest to where you are first, then by name, in one
+    /// untitled section; or everything, by layer and group (most important
+    /// first), then the keys that only inform. Here, a number typed lists
+    /// going to that line first.
+    pub fn of(offered: &'a [Offered], sheet: &'a Sheet, reach: Reach, typed: &str) -> Self {
+        let mut listed = Self { sections: Vec::new(), entries: Vec::new(), line: None, sheet };
+        match reach {
+            Reach::Here => {
+                listed.sections.push(Section { title: None, every_way: false });
+                if let Some(number) = typed.trim().parse::<usize>().ok().filter(|n| *n > 0)
+                    && let Some(bound) = &sheet.line
+                {
+                    listed.line = Some(0);
+                    listed.entries.push((0, Item::Line { number, label: format!("Go to line {number}"), bound }));
                 }
-                these.sort_by_key(|(_, b)| b.action.importance);
-                titles.push(format!("{title} · {}", group.title()));
-                entries.extend(these.into_iter().map(|(i, bound)| (titles.len() - 1, Item::Action { bound, applies: applies(i) })));
+                let mut here: Vec<&Offered> = offered.iter().filter(|o| o.applies).collect();
+                here.sort_by(|a, b| (a.bound.layer, &a.bound.action.label).cmp(&(b.bound.layer, &b.bound.action.label)));
+                listed.entries.extend(here.into_iter().map(|o| (0, Item::Action(o))));
+            }
+            Reach::Everything => {
+                for layer in Layer::ALL {
+                    for group in Group::ALL {
+                        let mut these: Vec<&Offered> = offered.iter().filter(|o| o.bound.layer == layer && o.bound.action.group == group).collect();
+                        if these.is_empty() {
+                            continue;
+                        }
+                        these.sort_by_key(|o| o.bound.action.importance);
+                        listed.sections.push(Section { title: Some(format!("{} · {}", sheet.title(layer), group.title())), every_way: true });
+                        let section = listed.sections.len() - 1;
+                        listed.entries.extend(these.into_iter().map(|o| (section, Item::Action(o))));
+                    }
+                }
+                for informs in sheet.informs.iter().filter(|i| !i.keys.is_empty()) {
+                    listed.sections.push(Section { title: Some(informs.title.clone()), every_way: false });
+                    let section = listed.sections.len() - 1;
+                    listed.entries.extend(informs.keys.iter().map(|inform| (section, Item::Inform(inform))));
+                }
             }
         }
-        for (title, keys) in sheet.informs.iter().filter(|(_, keys)| !keys.is_empty()) {
-            titles.push(title.clone());
-            entries.extend(keys.iter().map(|(keys, what)| (titles.len() - 1, Item::Inform { keys, what })));
-        }
-        Self { titles, entries, everything }
+        listed
     }
 
     pub fn len(&self) -> usize {
@@ -96,69 +180,88 @@ impl<'a> Listed<'a> {
         self.entries
             .iter()
             .map(|(section, item)| match item {
-                Item::Action { bound, applies } => (*section, bound.action.id.as_str(), bound.action.label.as_str(), bound.action.detail.as_str(), *applies),
-                Item::Inform { keys, what } => (*section, *keys, *what, "", true),
+                Item::Action(o) => (*section, o.bound.action.id.as_str(), o.bound.action.label.as_str(), o.bound.action.detail.as_str(), o.applies),
+                Item::Line { label, bound, .. } => (*section, bound.action.id.as_str(), label.as_str(), "", true),
+                Item::Inform(inform) => (*section, inform.keys.as_str(), inform.does.as_str(), "", true),
             })
             .collect()
     }
 
     /// The text an entry is matched by: its label, id, the leader group
     /// it's in, its description (an informing key: what it does, the key).
-    pub fn haystack(&self, entry: usize, keymap: &KeymapConfig) -> String {
+    pub fn haystack(&self, entry: usize) -> String {
         match &self.entries[entry].1 {
-            Item::Action { bound, .. } => {
-                let group = bound.leader.as_ref().filter(|l| l.len() > 1).and_then(|l| keymap.group_label(&l[..1])).unwrap_or("");
-                format!("{} {} {group} {}", bound.action.label, bound.action.id, bound.action.detail)
+            Item::Action(o) => {
+                let action = &o.bound.action;
+                let group = o.bound.leader.as_ref().filter(|l| l.len() > 1).map_or("", |l| self.sheet.group(l[0]));
+                format!("{} {} {group} {}", action.label, action.id, action.detail)
             }
-            Item::Inform { keys, what } => format!("{what} {keys}"),
+            Item::Line { label, .. } => label.clone(),
+            Item::Inform(inform) => format!("{} {}", inform.does, inform.keys),
         }
     }
 
-    /// The lines for the entries matched (`order`, best first): as they
-    /// are; with everything, by section, each under its title, best first
-    /// within each, and the sections in the order of their best (nothing
-    /// typed: their own order).
+    /// The lines for the entries matched (`order`, best first): going to
+    /// the line typed first, then by section, each under its title (if it
+    /// has one), best first within each, the sections in the order of
+    /// their best (nothing typed: their own order).
     pub fn lines(&self, order: &[usize]) -> Vec<Line> {
-        if !self.everything {
-            return order.iter().map(|e| Line::Entry(*e)).collect();
-        }
-        let mut best = vec![usize::MAX; self.titles.len()];
+        let order: Vec<usize> = order.iter().copied().filter(|e| Some(*e) != self.line).collect();
+        let mut best = vec![usize::MAX; self.sections.len()];
         for (rank, e) in order.iter().enumerate() {
             let section = self.entries[*e].0;
             best[section] = best[section].min(rank);
         }
-        let mut order = order.to_vec();
+        let mut order = order;
         order.sort_by_key(|e| best[self.entries[*e].0]);
-        let mut lines = Vec::with_capacity(order.len() + self.titles.len());
+        let mut lines: Vec<Line> = self.line.map(Line::Entry).into_iter().collect();
+        lines.reserve(order.len() + self.sections.len());
+        let mut last = None;
         for e in order {
             let section = self.entries[e].0;
-            if lines.last().is_none_or(|l| !matches!(l, Line::Entry(p) if self.entries[*p].0 == section)) {
+            if last != Some(section) && self.sections[section].title.is_some() {
                 lines.push(Line::Title(section));
             }
+            last = Some(section);
             lines.push(Line::Entry(e));
         }
         lines
     }
 
-    /// A line as it's drawn: a title; an action (with everything, every
-    /// way to run it; faded where it doesn't apply, saying what it needs,
-    /// and then picked only when it can say why itself, run); a key that
-    /// only informs.
+    /// What a line is (without drawing it): a title, an action or the
+    /// line to go to (picked), a key that only informs.
+    pub fn kind(&self, line: Line) -> RowKind {
+        match line {
+            Line::Title(_) => RowKind::Heading,
+            Line::Entry(e) => match &self.entries[e].1 {
+                Item::Action(_) | Item::Line { .. } => RowKind::Pick,
+                Item::Inform(_) => RowKind::Inform,
+            },
+        }
+    }
+
+    /// A line as it's drawn: a title; an action (its key, or in a section
+    /// that says them, every way to run it; faded where it doesn't apply,
+    /// saying what it needs); the line to go to; a key that only informs.
     pub fn row(&self, line: Line) -> Row<'_> {
         match line {
-            Line::Title(section) => Row { label: &self.titles[section], kind: RowKind::Heading, ..Row::default() },
-            Line::Entry(e) => match &self.entries[e].1 {
-                Item::Action { bound, applies } => {
-                    let keys = if self.everything { bound.ways().join(" · ") } else { bound.key_hint() };
-                    let detail = match bound.action.when.needs().filter(|_| !applies) {
-                        Some(needs) => Cow::Owned(format!("Needs {needs} · {}", bound.action.detail)),
-                        None => Cow::Borrowed(bound.action.detail.as_str()),
-                    };
-                    let kind = if *applies || bound.action.param == Param::None { RowKind::Pick } else { RowKind::Inform };
-                    Row { label: &bound.action.label, detail: Some(detail), keys: keys.into(), kind, faint: !applies, ..Row::default() }
+            Line::Title(section) => Row { label: self.sections[section].title.as_deref().unwrap_or_default(), ..Row::default() },
+            Line::Entry(e) => {
+                let (section, item) = &self.entries[e];
+                match item {
+                    Item::Action(o) => {
+                        let (action, applies) = (&o.bound.action, o.applies);
+                        let keys = if self.sections[*section].every_way { o.bound.ways().join(" · ") } else { o.bound.key_hint() };
+                        let detail = match action.when.needs().filter(|_| !applies) {
+                            Some(needs) => Cow::Owned(format!("Needs {needs} · {}", action.detail)),
+                            None => Cow::Borrowed(action.detail.as_str()),
+                        };
+                        Row { label: &action.label, detail: Some(detail), keys: keys.into(), faint: !applies, ..Row::default() }
+                    }
+                    Item::Line { label, .. } => Row { label, keys: ":N".into(), ..Row::default() },
+                    Item::Inform(inform) => Row { label: &inform.does, keys: Cow::Borrowed(&inform.keys), ..Row::default() },
                 }
-                Item::Inform { keys, what } => Row { label: what, keys: Cow::Borrowed(keys), kind: RowKind::Inform, ..Row::default() },
-            },
+            }
         }
     }
 }

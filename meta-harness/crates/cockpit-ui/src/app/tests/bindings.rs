@@ -222,14 +222,13 @@ fn question_mark_lists_everything_by_section_faded_where_it_doesnt_apply() {
     assert!(text.contains("Pointer and touch") && text.contains("what can be done with it"), "{text}");
     // One that doesn't apply here: listed, saying what it needs; not in
     // what applies here.
-    let bound = app.bound_actions();
-    let applies = app.sheet_of(&bound).applies;
-    let idle = bound.iter().zip(&applies).find(|(b, applies)| !**applies && b.action.when.needs().is_some()).map(|(b, _)| b.action.label.clone()).expect("something that doesn't apply here");
+    let (offered, _) = app.sheet_of(app.palette_actions());
+    let idle = offered.iter().find(|o| !o.applies && o.bound.action.when.needs().is_some()).map(|o| o.bound.action.label.clone()).expect("something that doesn't apply here");
     let text = everything(&ctx, &mut app, &idle);
     assert!(text.contains(&idle) && text.contains("Needs "), "{idle}: {text}");
     frame(&ctx, &mut app, press(egui::Key::Tab, false));
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("Run an action") && !text.contains("Needs "), "what applies here: {text}");
+    assert!(text.contains("What can be done here") && !text.contains("Needs "), "what applies here: {text}");
     let selection = app.desk.graph_mut().selection.clone();
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert!(!app.palette.is_open());
@@ -382,7 +381,7 @@ fn enter_and_backspace_are_only_offered_where_they_act() {
 #[test]
 fn lists_move_with_the_configured_keys_ctrl_j_and_k_by_default() {
     let (ctx, mut app) = full_app();
-    app.open_palette(None);
+    app.open_list(crate::sheet::Reach::Here);
     frame(&ctx, &mut app, vec![]);
     ctrl(&ctx, &mut app, egui::Key::J);
     ctrl(&ctx, &mut app, egui::Key::J);

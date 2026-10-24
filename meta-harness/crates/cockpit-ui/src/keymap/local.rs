@@ -1,5 +1,5 @@
 //! The keys outside the views' bindings, from the same config: moving and
-//! picking in a list (the palette, its pickers), sending from a typing box
+//! picking in a list (the action list, its pickers), sending from a typing box
 //! and its new line, the modifier held while clicking a name to go to it,
 //! the leader and the way back out. Views read them through `local()` (set
 //! with the rest of the config), never as keys of their own, and say them
@@ -20,7 +20,7 @@ fn any(chords: &[Chord], input: &egui::InputState) -> bool {
     chords.iter().any(|c| c.pressed(input))
 }
 
-/// Every list: the palette and its pickers.
+/// Every list: the action list and its pickers, a setting's choices.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ListKeys {
@@ -33,8 +33,9 @@ pub struct ListKeys {
     pub first: Vec<Chord>,
     pub last: Vec<Chord>,
     pub pick: Vec<Chord>,
-    /// While a value is picked: what it's for, the next of its kinds (what
-    /// a tag goes on: a line, its command).
+    /// In the action list: everything, or what applies here. While a value
+    /// is picked: what it's for, the next of its kinds (what a tag goes on:
+    /// a line, its command).
     pub cycle: Vec<Chord>,
 }
 
@@ -78,7 +79,7 @@ impl ListKeys {
         let first = |chords: &[Chord]| chords.first().map(Chord::label).unwrap_or_default();
         let pair = |a: &[Chord], b: &[Chord]| format!("{}/{}", first(a), first(b));
         vec![
-            (self.pick_label(), "runs"),
+            (self.pick_label(), "picks"),
             (pair(&self.next, &self.prev), "choose"),
             (pair(&self.half_down, &self.half_up), "half a page"),
             (pair(&self.first, &self.last), "first, last"),

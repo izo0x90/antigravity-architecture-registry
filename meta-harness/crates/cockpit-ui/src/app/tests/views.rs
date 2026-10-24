@@ -104,7 +104,7 @@ fn find_in_the_code_asks_the_graph_as_its_typed() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Graph);
     let find = app.palette_actions().into_iter().find(|b| b.action.id == "graph.find").expect("the graph offers find");
-    app.open_palette(Some(&find));
+    app.open_palette(&find);
     frame(&ctx, &mut app, vec![]);
     frame(&ctx, &mut app, vec![egui::Event::Text("run".into())]);
     frame(&ctx, &mut app, vec![]);
@@ -126,7 +126,7 @@ fn find_in_the_code_works_from_anywhere_and_starts_afresh() {
     frame(&ctx, &mut app, vec![]);
     let open_find = |ctx: &egui::Context, app: &mut CockpitApp| {
         let find = app.palette_actions().into_iter().find(|b| b.action.id == "graph.find").expect("offered from anywhere");
-        app.open_palette(Some(&find));
+        app.open_palette(&find);
         frame(ctx, app, vec![]);
     };
     open_find(&ctx, &mut app);
@@ -144,7 +144,7 @@ fn find_in_the_code_works_from_anywhere_and_starts_afresh() {
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert!(!app.palette.is_open());
     let find = app.palette_actions().into_iter().find(|b| b.action.id == "graph.find").unwrap();
-    app.open_palette(Some(&find));
+    app.open_palette(&find);
     for _ in 0..3 {
         assert!(!texts(&frame(&ctx, &mut app, vec![])).contains("runner_fn"), "opened again: nothing of the search before, from its first frame");
     }
@@ -307,12 +307,23 @@ fn a_settings_picker_lists_its_choices_as_the_action_list_does_and_picks_one() {
     assert!(shown.contains("Who calls whom"), "each with its description: {shown}");
     click_on(&ctx, &mut app, "data flow");
     assert_eq!(app.desk.graph().nav.view, arch_graph::tree::ViewKind::DataFlow);
-    // By keys: it opens on what's chosen; up one and Enter picks it, and
-    // the panel's own keys are left alone meanwhile.
+    // By keys: it opens on what's chosen, and has the keys (a mode of its
+    // own, said in the key bar): the panel's own (`j` moves the graph's
+    // selection) do nothing meanwhile; up one and Enter picks it, and the
+    // keys go back.
     click_on(&ctx, &mut app, "data flow");
+    let repaint = frame(&ctx, &mut app, vec![]);
+    assert!(repaint.viewport_output.values().any(|v| v.repaint_delay.is_zero()), "the bars are drawn again at once");
+    let shown = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(matches!(app.input_mode, InputMode::Choosing { .. }) && shown.contains("CHOOSING") && shown.contains("Escape closes"), "{:?}: {shown}", app.input_mode);
     let selected = app.desk.graph().selection.clone();
+    frame(&ctx, &mut app, key("j"));
+    assert_eq!(app.desk.graph().selection, selected, "the panel's keys stand aside");
     frame(&ctx, &mut app, press(egui::Key::ArrowUp, false));
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     frame(&ctx, &mut app, vec![]);
-    assert_eq!((app.desk.graph().nav.view, app.desk.graph().selection.clone()), (arch_graph::tree::ViewKind::Calls, selected));
+    assert_eq!((app.desk.graph().nav.view, app.desk.graph().selection.clone()), (arch_graph::tree::ViewKind::Calls, selected.clone()));
+    assert_eq!(app.input_mode, InputMode::Normal, "closed: the keys are the panel's again");
+    frame(&ctx, &mut app, key("j"));
+    assert_ne!(app.desk.graph().selection, selected, "and they run");
 }

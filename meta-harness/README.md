@@ -667,15 +667,17 @@ follow. `Space` opens the leader menu (the focused view's entries
 first), and `:` opens the action list: what applies where you are,
 fuzzy-matched as you type (`:42` goes to line 42). `?` opens the same
 list on everything: every action, faded where it doesn't apply (saying
-what it needs), each with every way to run it (keys, leader path,
+what it needs; picked there, one that asks for a value says why not, as
+its key does), each with every way to run it (keys, leader path,
 gesture), under a title for where it acts (what you're on, this buffer,
 what holds it, everywhere), then the keys of the mode you were in and
 the pointer and touch grammar. Tab switches between the two. The list
 and its pickers move as every view does: `Ctrl+J`/`Ctrl+K` (or
 `Ctrl+N`/`Ctrl+P`, or the arrows) one at a time, going round at the
 ends, `Ctrl+D`/`Ctrl+U` half a page, `Ctrl+Home`/`Ctrl+End` to the first
-and last; `Enter` or a tap picks. A panel's setting picker (View,
-Source, ...) is the same list.
+and last; `Enter` or a tap picks. The list and the key bar say the same
+keys. A panel's setting picker (View, Source, ...) is the same list, and
+has the keys while it's open (the top bar says CHOOSING).
 
 A buffer reaches past itself only by asking, and every ask is done the
 one way whichever buffer asked: showing something in another buffer is

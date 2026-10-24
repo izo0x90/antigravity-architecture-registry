@@ -1,5 +1,6 @@
 //! The shell's tests; helpers here, tests by topic below.
 
+mod action_list;
 mod asks;
 mod attention;
 mod desks;
@@ -226,16 +227,20 @@ fn ctrl(ctx: &egui::Context, app: &mut CockpitApp, key: egui::Key) {
     let _ = ctx.run(raw, |ctx| app.frame(ctx));
 }
 
-/// The calls sent to the server since last asked ("POST /api/…").
-/// The action list on everything (`?`), filtered: what it draws.
+/// The action list on everything, as the user opens it (`?`, from where
+/// the keys run actions) and types `filter` in it: what it draws.
 fn everything(ctx: &egui::Context, app: &mut CockpitApp, filter: &str) -> String {
-    app.palette.open_with(filter);
-    app.palette.show_everything();
-    app.input_mode = InputMode::Palette;
+    while app.palette.is_open() {
+        frame(ctx, app, press(egui::Key::Escape, false));
+    }
+    frame(ctx, app, key("?"));
+    assert!(app.palette.is_open(), "? opens the action list");
+    frame(ctx, app, key(filter));
     frame(ctx, app, vec![]);
     texts(&frame(ctx, app, vec![]))
 }
 
+/// The calls sent to the server since last asked ("POST /api/…").
 fn sent(app: &CockpitApp) -> Vec<String> {
     std::mem::take(&mut *app.desk.net.sent.lock().unwrap())
 }

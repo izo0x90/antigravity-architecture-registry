@@ -40,7 +40,8 @@ long_press_ms = 550.0
 swipe_min = 90.0
 swipe_max_ms = 450.0
 
-# Moving and picking in every list (the palette, its pickers).
+# Moving and picking in every list (the action list, its pickers, a
+# setting's choices).
 [keymap.list]
 next = ["ctrl+j", "ctrl+n", "ArrowDown"]
 prev = ["ctrl+k", "ctrl+p", "ArrowUp"]
@@ -49,8 +50,9 @@ half_up = ["ctrl+u", "PageUp"]
 first = ["ctrl+Home"]
 last = ["ctrl+End"]
 pick = ["Enter"]
-# While a value is picked: what it's for, the next of its kinds (tagging:
-# the line, or the command it's in).
+# In the action list: everything, or what applies here. While a value is
+# picked: what it's for, the next of its kinds (tagging: the line, or the
+# command it's in).
 cycle = ["Tab"]
 
 # Every typing box: send, (in the chat) add to what it's doing, and a new line.

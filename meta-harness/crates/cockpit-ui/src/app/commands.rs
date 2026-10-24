@@ -38,8 +38,7 @@ impl CockpitApp {
         actions.push(admin("palette.open".into(), "Action list".into(), "What can be done here, found by typing".into(), S::OpenPalette));
         // A menu of the leader's (each group's button opens its own).
         let kind = self.focused_kind();
-        let menus = std::iter::once(self.config.keymap.view_menu).chain(self.config.keymap.groups.keys().filter_map(|k| (k.chars().count() == 1).then(|| k.chars().next()).flatten()));
-        let choices = menus.map(|key| Choice::new(key.to_string(), self.group_name(&[key], kind))).collect();
+        let choices = self.menu_keys().into_iter().map(|key| Choice::new(key.to_string(), self.group_name(&[key], kind))).collect();
         actions.push(Action::new(MENU, "Open a menu", "A group of actions, as the leader and its key open it", S::Menu).param(Param::Choice(choices)).group(Group::View).importance(MINOR));
         let index = |id: &str, label: &str, detail: &str, op: IndexOp| Action::new(id, label, detail, S::Index(op)).group(Group::Act).importance(MINOR);
         actions.push(index("index.changed", "Re-read the code that changed", "The index takes in the files changed since it last read them", IndexOp::Changed));
@@ -325,37 +324,46 @@ impl CockpitApp {
         let bound = self.palette_actions();
         if let Some(b) = bound.into_iter().find(|b| b.action.id == id) {
             if value.is_none() && b.action.param != Param::None {
-                self.open_palette(Some(&b));
+                self.open_palette(&b);
             } else {
                 self.invoke(Invocation { action: b.action, origin: b.origin, value }, ctx);
             }
         }
     }
 
-    /// Opens the palette (at an action's parameter, if given) and gives it the keyboard.
-    pub(super) fn open_palette(&mut self, action: Option<&Bound>) {
+    /// Opens the action list, as far as `reach`, and gives it the keyboard.
+    pub(super) fn open_list(&mut self, reach: crate::sheet::Reach) {
+        self.palette.open(reach);
+        self.palette_takes_keys();
+    }
+
+    /// Opens the palette at an action's parameter and gives it the keyboard.
+    pub(super) fn open_palette(&mut self, action: &Bound) {
+        self.palette.open_for(action);
+        self.palette_takes_keys();
+    }
+
+    /// The palette has the keyboard (what had it is kept, to go back to).
+    fn palette_takes_keys(&mut self) {
         if self.input_mode != InputMode::Palette {
             self.palette_from = self.input_mode;
-        }
-        match action {
-            Some(action) => self.palette.open_for(action),
-            None => self.palette.open(),
         }
         self.input_mode = InputMode::Palette;
     }
 
     /// Runs an action (a switch's key flips it), or opens the palette at
-    /// its parameter if it needs one.
+    /// its parameter if it needs one (where it doesn't apply, why not is
+    /// said instead, as the action list does).
     pub(super) fn run_bound(&mut self, bound: &Bound, count: Option<u32>, ctx: &egui::Context) {
-        // A picker for something that doesn't apply here isn't opened: why not is said.
-        if bound.action.param != Param::None && bound.action.when == When::Unavailable {
-            self.note = Some(format!("{}: nothing here it applies to.", bound.action.label));
+        let offered = crate::sheet::Offered { applies: self.applies(bound, self.here()), bound: bound.clone() };
+        if let Some(why) = offered.refused() {
+            self.note = Some(why);
             return;
         }
         match &bound.action.param {
             Param::None => self.invoke_counted(Invocation { action: bound.action.clone(), origin: bound.origin, value: None }, count, ctx),
             Param::Toggle { on } => self.invoke(Invocation { action: bound.action.clone(), origin: bound.origin, value: Some((!on).to_string()) }, ctx),
-            _ => self.open_palette(Some(bound)),
+            _ => self.open_palette(bound),
         }
     }
 
@@ -415,7 +423,7 @@ impl CockpitApp {
                 self.desk.remote.agents = value.as_deref() == Some("true");
                 self.note = Some(if self.desk.remote.agents { "Agents can drive the cockpit (the server's cockpit tools)." } else { "Agents can't drive the cockpit." }.into());
             }
-            ShellCommand::OpenPalette => self.open_palette(None),
+            ShellCommand::OpenPalette => self.open_list(crate::sheet::Reach::Here),
             ShellCommand::Line => match value.as_deref().map(str::trim).and_then(|v| v.parse::<usize>().ok()) {
                 Some(n) => self.run_move(kind, Move::Motion(Motion::Line(n)), None, ctx),
                 None => self.note = Some("Give a line number.".into()),
@@ -451,13 +459,8 @@ impl CockpitApp {
                     None => self.note = Some(if command == ShellCommand::Back { "Nothing to go back to." } else { "Nothing to go forward to." }.into()),
                 }
             }
-            // The action list on everything, with the keys of the mode it
-            // was opened from.
-            ShellCommand::Keys => {
-                self.sheet_mode = self.mode_keys();
-                self.open_palette(None);
-                self.palette.show_everything();
-            }
+            // The action list on everything.
+            ShellCommand::Keys => self.open_list(crate::sheet::Reach::Everything),
             ShellCommand::Menu => {
                 let path: Vec<char> = value.as_deref().and_then(|v| v.chars().next()).into_iter().collect();
                 self.open_menu(&path, ctx);
