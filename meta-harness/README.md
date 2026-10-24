@@ -375,11 +375,11 @@ sub-slot); a chat buffer shows one.
 Each panel has its own buffer: two graphs side by side (calls beside data
 flow), several code files, several cards, several chats. There's one
 queue and one inbox (showing either in another panel moves it). Picking a
-kind in a panel (its tabs) gives it a new buffer, starting where the last
-one of that kind was. Panels: `H`/`L` (or `Tab`/`Shift+Tab`) go to the
+kind in a panel (its Buffer menu, `Space b`) gives it a new buffer,
+starting where the last one of that kind was. Panels: `H`/`L` (or `Tab`/`Shift+Tab`) go to the
 panel left and right; `+`/`-` in the top bar, `Space l 1`…`l 6` (or
 `alt+1`…`alt+6`), `Space l a` adds one, up to `[panels] max` (12).
-Closing a panel (`Space l x`, or the × on its header) or fewer panels only
+Closing a panel (`Space l x`, or its Panels menu) or fewer panels only
 hide its buffer, with its state, and more panels bring hidden buffers back
 where they were. `Space b b` lists every open buffer (on screen or hidden;
 the top bar counts the hidden ones) to show one in this panel; `Space b n`
@@ -688,10 +688,19 @@ stays, and shows what you're on once unpinned; another panel's graph
 keeps its own place.
 
 Every buffer is drawn the same way by what holds it (a panel, the quick
-look): its top line (its buttons first, then a place for its busy mark,
-its name and what it says about itself, which grow and wrap after the
-buttons and never move them; its settings on a row under), then its
-content. The bottom line does the same: its keys first, then a search or
+look): its top line, then its content. The top line is the panel's
+number and its menus first: the leader's groups about where it is
+(Buffer, Panels, Session, Account, the view's own "Graph actions"…),
+each its name and its one key, shown when something in it can be used
+there; tapped, the panel is focused and the menu opens, as `Space` and
+its letter would. Then a place for its busy mark, its name and what it
+says about itself, which grow and wrap after the menus and never move
+them. Under it, while there's something, a row of what needs you now
+(Connect, a sign-in's Copy link and Finish, Dismiss, Retry, Stop, an
+answer's Settle), then its settings. The which-key menu shows one key
+per entry under a path ("Space › Account ›"), each part tapped to go
+back there; a long press on any button says what it does and its keys,
+as hover does. The bottom line does the same: its keys first, then a search or
 a note. What you're on shows its own buttons under
 it, and only while you're on it: a review point's Reply, Accept and
 Reopen; a job's Approve or Retry; a card's Go into and go-tos; a request's

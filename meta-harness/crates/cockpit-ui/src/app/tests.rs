@@ -11,6 +11,7 @@ mod keys_snapshot;
 mod layout;
 mod links;
 mod look;
+mod menus;
 mod offers;
 mod moves;
 mod outside;
