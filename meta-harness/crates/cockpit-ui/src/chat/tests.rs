@@ -151,7 +151,7 @@ fn its_skills_tool_servers_and_adding_to_the_running_turn_are_actions() {
     assert!(!ids(&chat).iter().any(|a| a == "mcp.add" || a == "harness.skills" || a == "chat.inject"), "nothing known yet");
     let mut snapshot = ProviderSnapshot {
         status: ProviderStatus::Ready,
-        auth: harness_contracts::AuthState { status: harness_contracts::AuthStatus::SignedIn, account: None, methods: Vec::new(), waiting: None },
+        auth: harness_contracts::AuthState { status: harness_contracts::AuthStatus::SignedIn, account: None, methods: Vec::new(), waiting: None, ended: None },
         skills: vec![harness_contracts::Skill { name: "review".into(), description: Some("Review".into()), path: None, scope: harness_contracts::Scope::User }],
         ..ProviderSnapshot::new(InstanceId::new("i"), harness_contracts::DriverKind::new("acp"), "Claude Code")
     };
@@ -272,6 +272,7 @@ fn signed_out_harness(waiting: Option<harness_contracts::SignInWaiting>) -> Prov
             account: None,
             methods: vec![harness_contracts::AuthMethod { id: "oauth-personal".into(), name: "Google".into(), description: None, kind: harness_contracts::AuthMethodKind::Agent }],
             waiting,
+            ended: None,
         },
         home: Some(harness_contracts::HarnessHome { path: "/work/p/.nah/harness/i".into(), kept: true }),
         ..ProviderSnapshot::new(InstanceId::new("i"), harness_contracts::DriverKind::new("acp"), "Antigravity")
@@ -326,6 +327,7 @@ fn signing_in_shows_the_servers_sign_in_and_a_paste_that_was_not_taken() {
     chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::FinishSignIn { instance: InstanceId::new("i"), answer: "4/abc".into() }, &net, &ctx);
     chat.read();
     assert!(!on_top(&chat).contains(&"auth.complete".to_owned()), "not again while it's checked");
+    assert_eq!(net.bodies.lock().unwrap().last().map(|(_, body)| body["id"].clone()), Some(serde_json::json!(7)), "the paste names its sign-in");
     assert!(net.answer("POST /api/instances/i/auth/complete", 400, &serde_json::json!({ "error": "that isn't the address" })));
     tick(&mut chat, &ctx, &net);
     assert!(chat.agents().pasted(&InstanceId::new("i"), 7).is_some_and(|p| p.refused.is_some() && !p.finishing));
@@ -349,17 +351,15 @@ fn signing_in_shows_the_servers_sign_in_and_a_paste_that_was_not_taken() {
 }
 
 #[test]
-fn a_sign_in_that_stopped_waiting_offers_a_new_one_not_the_paste() {
+fn a_sign_in_that_stopped_waiting_offers_a_new_one_and_says_how_it_ended() {
     let mut chat = conversation();
     chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(3, -1))) });
     let top = on_top(&chat);
     assert!(top.contains(&"auth.login".to_owned()) && !top.contains(&"auth.complete".to_owned()) && !top.contains(&"auth.page".to_owned()), "{top:?}");
-    // The server ends it at its time: said as run out, until a new one.
-    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(None) });
-    assert!(chat.agents().ran_out(&InstanceId::new("i")));
-    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(4, 300))) });
-    assert!(!chat.agents().ran_out(&InstanceId::new("i")));
-    // One cancelled early isn't said as run out.
-    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(None) });
-    assert!(!chat.agents().ran_out(&InstanceId::new("i")));
+    // The server ends it, saying how: every device reads the same.
+    let mut over = signed_out_harness(None);
+    over.auth.ended = Some(Box::new(harness_contracts::SignInEnded { id: 3, how: harness_contracts::SignInEnd::RanOut }));
+    chat.apply(ClientEvent::InstanceUpdated { snapshot: over });
+    assert_eq!(chat.agents().sign_in_ended(&InstanceId::new("i")).map(|e| e.how.clone()), Some(harness_contracts::SignInEnd::RanOut));
+    assert!(on_top(&chat).contains(&"auth.login".to_owned()));
 }

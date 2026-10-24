@@ -27,14 +27,22 @@ pub type Said = tokio::sync::broadcast::Receiver<String>;
 /// How many of an agent's lines are held for a reader that's behind.
 pub const SAID_HELD: usize = 256;
 
-/// Whether the agent says something `pattern` matches (the first match),
-/// waiting as long as it runs.
-pub async fn says(mut said: Said, pattern: regex::Regex) -> Option<String> {
+/// A login's link in `line`: what `pattern` matches, else (none given) any
+/// `https://` link.
+pub(crate) fn link_in<'a>(pattern: Option<&regex::Regex>, line: &'a str) -> Option<&'a str> {
+    match pattern {
+        Some(pattern) => pattern.find(line).map(|found| found.as_str()),
+        None => line.find("https://").map(|at| line[at..].split(char::is_whitespace).next().unwrap_or_default()),
+    }
+}
+
+/// The first link (`link_in`) the agent says, waiting as long as it runs.
+pub(crate) async fn says(mut said: Said, pattern: Option<regex::Regex>) -> Option<String> {
     loop {
         match said.recv().await {
             Ok(line) => {
-                if let Some(found) = pattern.find(&line) {
-                    return Some(found.as_str().to_owned());
+                if let Some(found) = link_in(pattern.as_ref(), &line) {
+                    return Some(found.to_owned());
                 }
             }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}

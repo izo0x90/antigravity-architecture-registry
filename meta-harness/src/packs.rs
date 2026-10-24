@@ -67,8 +67,14 @@ fn own_settings(catalog: &Catalog, instances: &[String]) -> Result<BTreeMap<Stri
         };
         let wrong = |why: String| PackError::Config(format!("{}: {why}", file.display()));
         let entries: BTreeMap<String, OwnSettings> = toml::from_str(&text).map_err(|e| wrong(e.to_string()))?;
+        // The user's file is every project's: a name this one lacks is passed over.
+        let projects = file.starts_with(&catalog.project);
         for (instance, own) in entries {
             if !instances.contains(&instance) {
+                if !projects {
+                    tracing::info!("{}: no harness named {instance} in this project, passed over", file.display());
+                    continue;
+                }
                 return Err(wrong(format!("there's no harness named {instance} (the harnesses: {})", instances.join(", "))));
             }
             let entry = out.entry(instance.clone()).or_default();
@@ -86,13 +92,17 @@ fn own_settings(catalog: &Catalog, instances: &[String]) -> Result<BTreeMap<Stri
 }
 
 /// Where an instance's home is, from its `home` setting (`None`: its own
-/// folders). A folder of its own: not the project's, nor one above it.
+/// folders). Kept in the project, it's in `.nah/harness/`; a folder of your
+/// own is outside the project (`~/` is your home folder).
 fn home_of(project: &Path, instance: &str, home: &str) -> Result<Option<PathBuf>, String> {
     let dir = match home {
         "native" => return Ok(None),
-        "kept" => project.join(".nah/harness").join(instance),
+        "kept" => return Ok(Some(arch_service::kept_harness_home(project, instance))),
         "" => return Err("its home is empty: native, kept, or a folder".into()),
-        path => project.join(path),
+        path => match path.strip_prefix("~/") {
+            Some(rest) => PathBuf::from(std::env::var("HOME").map_err(|_| "~ in its home, and no HOME to say where that is".to_owned())?).join(rest),
+            None => project.join(path),
+        },
     };
     let normal: PathBuf = dir.components().fold(PathBuf::new(), |mut at, part| {
         match part {
@@ -104,8 +114,8 @@ fn home_of(project: &Path, instance: &str, home: &str) -> Result<Option<PathBuf>
         }
         at
     });
-    if project.starts_with(&normal) {
-        return Err(format!("its home {} would be the project's folder or one above it: give a folder of its own", normal.display()));
+    if normal.starts_with(project) || project.starts_with(&normal) {
+        return Err(format!("its home {} is in the project (or holds it): a home kept in the project is `kept` (.nah/harness/); a folder of your own is outside it", normal.display()));
     }
     Ok(Some(normal))
 }
@@ -151,7 +161,8 @@ pub fn harness_launches(catalog: &Catalog) -> Vec<HarnessEntry> {
             display_name: provides.display_name.clone().unwrap_or_else(|| pack.name().to_owned()),
             settings: serde_json::to_value(&provides.settings).unwrap_or_default(),
         };
-        out.push(HarnessEntry { profile, launch, home: mine.and_then(|m| m.home.clone()) });
+        let private = arch_service::private_paths(&catalog.project).to_vec();
+        out.push(HarnessEntry { profile, launch, home: mine.and_then(|m| m.home.clone()), private });
     }
     out.sort_by(|a, b| a.profile.instance.cmp(&b.profile.instance));
     out

@@ -73,7 +73,18 @@ impl AcpInstance {
             let on_auth = Arc::new(move |event: AuthEvent| {
                 let Some(instance) = me.upgrade() else { return };
                 let signed_in = match event {
-                    AuthEvent::Waiting(waiting) => return instance.snapshot.send_modify(|s| s.auth.waiting = waiting.map(Box::new)),
+                    AuthEvent::Waiting(waiting) => {
+                        return instance.snapshot.send_modify(|s| {
+                            s.auth.waiting = Some(Box::new(waiting));
+                            s.auth.ended = None;
+                        });
+                    }
+                    AuthEvent::Ended(ended) => {
+                        return instance.snapshot.send_modify(|s| {
+                            s.auth.waiting = None;
+                            s.auth.ended = Some(Box::new(ended));
+                        });
+                    }
                     AuthEvent::Status(signed_in) => signed_in,
                 };
                 if let Some(signed_in) = signed_in {

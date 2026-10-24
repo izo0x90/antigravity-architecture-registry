@@ -46,8 +46,20 @@ async fn fs_read_handler(
     if !canonical.starts_with(&root) {
         return Err((StatusCode::FORBIDDEN, "Only files inside the repository can be read".to_string()));
     }
-    // The server's own: its state and the harnesses' kept logins.
-    if arch_service::private_dirs(&root).iter().any(|dir| canonical.starts_with(dir)) {
+    // The server's own: its state and the harnesses' kept logins, however
+    // they're reached (a link included).
+    let asked = resolved.components().fold(std::path::PathBuf::new(), |mut at, part| {
+        match part {
+            std::path::Component::ParentDir => {
+                at.pop();
+            }
+            std::path::Component::CurDir => {}
+            part => at.push(part),
+        }
+        at
+    });
+    let private = arch_service::private_paths(&root);
+    if private.iter().any(|p| asked.starts_with(p) || canonical.starts_with(p) || p.canonicalize().is_ok_and(|p| canonical.starts_with(p))) {
         return Err((StatusCode::FORBIDDEN, "That's the server's own (its state, the harnesses' logins): it isn't served".to_string()));
     }
     if !canonical.is_file() {

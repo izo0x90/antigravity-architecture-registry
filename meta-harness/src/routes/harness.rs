@@ -86,7 +86,15 @@ async fn delete_saved_session(
 
 #[derive(Debug, Deserialize)]
 pub struct CompleteAuthRequest {
+    /// The sign-in it's for.
+    pub id: u64,
     pub response: String,
+}
+
+/// Which sign-in to stop.
+#[derive(Deserialize)]
+struct CancelAuthRequest {
+    pub id: u64,
 }
 
 fn auth_controller(state: &HarnessState, id: String) -> ApiResult<Arc<dyn harness_core::AuthController>> {
@@ -105,12 +113,12 @@ async fn complete_auth(
     Path(id): Path<String>,
     Json(body): Json<CompleteAuthRequest>,
 ) -> ApiResult<StatusCode> {
-    auth_controller(&state, id)?.complete(&body.response).await?;
+    auth_controller(&state, id)?.complete(body.id, &body.response).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn cancel_auth(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
-    auth_controller(&state, id)?.cancel().await?;
+async fn cancel_auth(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(id): Path<String>, Json(body): Json<CancelAuthRequest>) -> ApiResult<StatusCode> {
+    auth_controller(&state, id)?.cancel(body.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

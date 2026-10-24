@@ -103,12 +103,13 @@ impl ChatStreamState {
             banner(ui, colors().info_bg, colors().focus, |ui| match now {
                 None => {
                     let instance = &snapshot.instance_id;
-                    let said = if self.agents().signing_in(instance) {
-                        format!("{} Starting the sign-in to {}…", icon::HOURGLASS, snapshot.display_name)
-                    } else if self.agents().ran_out(instance) {
-                        format!("{} The sign-in to {} stopped waiting: its time ran out. Sign in again for a new link.", icon::CLOCK, snapshot.display_name)
-                    } else {
-                        format!("{} Sign in to {}", icon::KEY, snapshot.display_name)
+                    let name = &snapshot.display_name;
+                    let ended = self.agents().sign_in_ended(instance).map(|e| e.how.clone());
+                    let said = match ended {
+                        _ if self.agents().signing_in(instance) => format!("{} Starting the sign-in to {name}…", icon::HOURGLASS),
+                        Some(harness_contracts::SignInEnd::RanOut) => format!("{} The sign-in to {name} stopped waiting: its time ran out. Sign in again for a new link.", icon::CLOCK),
+                        Some(harness_contracts::SignInEnd::Failed { reason }) => format!("{} The sign-in to {name} failed: {reason}. Sign in again.", icon::X_CIRCLE),
+                        _ => format!("{} Sign in to {name}", icon::KEY),
                     };
                     ui.label(RichText::new(said).strong().size(look.text_label));
                 }
@@ -381,26 +382,26 @@ impl crate::hosted::Hosted for ChatStreamState {
     /// couldn't be read, its session, its tool servers and how much of its
     /// context is used.
     fn status(&self) -> Vec<Status> {
-        let mut out = vec![Status::new(self.instance().map(|s| s.display_name.clone()).unwrap_or_else(|| "No harness".into()), Tone::Plain)];
-        if let Some(account) = self.instance().and_then(|s| s.auth.account.clone()) {
+        let Some(s) = self.instance() else { return vec![Status::new("No harness", Tone::Plain)] };
+        let mut out = vec![Status::new(s.display_name.clone(), Tone::Plain)];
+        if let Some(account) = &s.auth.account {
             let detail = [account.email.clone(), account.organization.clone(), account.plan.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             let status = Status::new(format!("{} {}", icon::USER_CIRCLE, account.label), Tone::Muted);
             out.push(if detail.is_empty() { status } else { status.detail(detail) });
         }
-        if let Some(s) = self.instance() {
-            match s.auth.status {
-                harness_contracts::AuthStatus::SignedOut if !s.auth.methods.is_empty() => out.push(Status::new(format!("{} Not signed in", icon::KEY), Tone::Warn)),
-                harness_contracts::AuthStatus::SignedIn if s.auth.account.is_none() => out.push(Status::new(format!("{} Signed in", icon::KEY), Tone::Muted)),
-                _ => {}
-            }
-            if let Some(home) = &s.home {
-                let whose = if home.kept { "kept for this project" } else { "its own" };
-                out.push(Status::new(icon::HOUSE, Tone::Muted).detail(format!("Its home (sign-in, settings, sessions), {whose}: {}", home.path)));
-            }
+        match s.auth.status {
+            harness_contracts::AuthStatus::SignedOut if !s.auth.methods.is_empty() => out.push(Status::new(format!("{} Not signed in", icon::KEY), Tone::Warn)),
+            harness_contracts::AuthStatus::SignedIn if s.auth.account.is_none() => out.push(Status::new(format!("{} Signed in", icon::KEY), Tone::Muted)),
+            _ => {}
         }
-        if let Some(problems) = self.instance().map(|s| s.problems.clone()).filter(|p| !p.is_empty()) {
-            out.push(Status::new(icon::WARNING, Tone::Warn).detail(problems.join("\n")));
+        if let Some(home) = &s.home {
+            let whose = if home.kept { "kept for this project" } else { "its own" };
+            out.push(Status::new(icon::HOUSE, Tone::Muted).detail(format!("Its home (sign-in, settings, sessions), {whose}: {}", home.path)));
         }
+        if !s.problems.is_empty() {
+            out.push(Status::new(icon::WARNING, Tone::Warn).detail(s.problems.join("\n")));
+        }
+        drop(s);
         if let Some(thread) = &self.active_thread() {
             out.push(Status::new(format!("[{}]", thread.as_str().chars().take(8).collect::<String>()), Tone::Info));
         }

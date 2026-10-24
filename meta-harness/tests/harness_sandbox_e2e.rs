@@ -63,9 +63,9 @@ async fn the_driver_starts_the_installed_pack_and_opens_a_session_needs_the_pack
     println!("link in {:?}: {link}", started.elapsed());
     assert!(link.starts_with("https://accounts.google.com/") && link.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A"), "{link}");
     assert_eq!(instance.snapshot().borrow().auth.waiting.as_deref(), Some(&waiting), "every device sees it");
-    let wrong = auth.complete("http://127.0.0.1:1/?code=x").await.unwrap_err();
+    let wrong = auth.complete(waiting.id, "http://127.0.0.1:1/?code=x").await.unwrap_err();
     assert!(matches!(wrong, harness_core::HarnessError::Refused { .. }), "{wrong}");
-    auth.cancel().await.unwrap();
+    auth.cancel(waiting.id).await.unwrap();
     assert_eq!(instance.snapshot().borrow().auth.waiting, None);
 }
 

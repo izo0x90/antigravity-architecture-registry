@@ -30,6 +30,10 @@ impl AcpDriver {
 /// Makes a harness's home folder when it isn't there yet, for the server's
 /// user only. One that's there is used as it is.
 fn make_home(dir: &Path) -> std::io::Result<()> {
+    // A link would take the login wherever it points.
+    if std::fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(std::io::Error::other("it's a link: a home is a folder of its own"));
+    }
     if dir.exists() {
         return Ok(());
     }
@@ -73,7 +77,7 @@ impl ProviderDriver for AcpDriver {
                 launch = Err(format!("its home folder {}: {why}", dir.display()));
             }
         }
-        let profile = Arc::new(Profile::new(settings, &self.project, launch.as_ref().ok()).keeping_home(home.clone()));
+        let profile = Arc::new(Profile::new(settings, &self.project, launch.as_ref().ok()).keeping_home(home.clone()).keeping_out(entry.private.clone()));
         let launcher = launch.map(|launch| (Arc::new(ProcessLauncher::from(&launch)) as Arc<dyn AcpLauncher>, Some(launch)));
         let instance = AcpInstance::create(InstanceParts { id, harness: entry.profile, profile, launcher });
         let first = instance.clone();
@@ -83,5 +87,26 @@ impl ProviderDriver for AcpDriver {
             }
         });
         Ok(instance)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_home_is_made_for_the_servers_user_and_never_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join(".nah/harness/antigravity");
+        make_home(&home).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&home).unwrap().permissions().mode() & 0o777, 0o700);
+            let linked = dir.path().join(".nah/harness/claude-code");
+            std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+            std::os::unix::fs::symlink(dir.path().join("docs"), &linked).unwrap();
+            assert!(make_home(&linked).is_err(), "a login would land where the link points");
+        }
     }
 }

@@ -425,8 +425,8 @@ impl ActionProvider for ChatStreamState {
                 }
             }
             ChatCommand::CancelLogin => {
-                if let Some(instance) = self.active_instance() {
-                    self.act(Act::StopSigningIn { instance });
+                if let (Some(instance), Some(now)) = (self.active_instance(), self.sign_in_now()) {
+                    self.act(Act::StopSigningIn { instance, id: now.waiting.id });
                 }
             }
             ChatCommand::OpenPage(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),

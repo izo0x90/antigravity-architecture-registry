@@ -56,25 +56,30 @@ async fn the_sign_in_shows_its_link_takes_the_callback_and_then_sessions_open() 
     let agent = agent();
     let (auth, said) = controller(&agent, antigravity());
     let waiting = auth.begin("oauth-personal").await.unwrap().expect("a link to open");
+    let id = waiting.id;
     assert!(waiting.url.as_deref().is_some_and(|u| u.starts_with("https://accounts.google.com/")), "{waiting:?}");
     let left = waiting.until_ms.unwrap().saturating_sub(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64);
     assert!((295_000..=300_000).contains(&left), "it waits 300 s: {left}");
-    assert_eq!(last(&said), Some(AuthEvent::Waiting(Some(waiting.clone()))), "every device sees it");
+    let events = said.lock().unwrap().clone();
+    assert!(matches!(&events[0], AuthEvent::Waiting(w) if w.id == id && w.url.is_none()), "starting, from the start: {events:?}");
+    assert_eq!(last(&said), Some(AuthEvent::Waiting(waiting.clone())), "every device sees it");
     let port = port_of(&waiting);
 
     // Not its callback: refused, and it still waits.
     for wrong in ["4/abc", "https://accounts.google.com/x", &format!("http://127.0.0.1:{}/?code=x", port.wrapping_add(1))] {
-        assert!(matches!(auth.complete(wrong).await, Err(HarnessError::Refused { .. })), "{wrong}");
+        assert!(matches!(auth.complete(id, wrong).await, Err(HarnessError::Refused { .. })), "{wrong}");
     }
     assert!(!agent.login_done.load(std::sync::atomic::Ordering::SeqCst));
 
     // What the browser on another machine couldn't reach.
-    auth.complete(&format!("http://localhost:{port}/?code=4/abc&scope=email&state=s")).await.unwrap();
+    // Named for another sign-in: not this one's.
+    assert!(matches!(auth.complete(id + 1000, &format!("http://127.0.0.1:{port}/?code=4/abc")).await, Err(HarnessError::Conflict { .. })));
+    auth.complete(id, &format!("http://localhost:{port}/?code=4/abc&scope=email&state=s")).await.unwrap();
     assert!(agent.login_done.load(std::sync::atomic::Ordering::SeqCst));
     tokio::time::sleep(Duration::from_millis(50)).await;
     let events = said.lock().unwrap().clone();
-    assert!(events.contains(&AuthEvent::Status(Some(true))) && events.last() == Some(&AuthEvent::Waiting(None)), "{events:?}");
-    assert!(matches!(auth.complete(&format!("http://127.0.0.1:{port}/?code=4/abc")).await, Err(HarnessError::Conflict { .. })), "taken: nothing waits");
+    assert!(events.contains(&AuthEvent::Ended(SignInEnded { id, how: SignInEnd::SignedIn })) && events.contains(&AuthEvent::Status(Some(true))), "{events:?}");
+    assert!(matches!(auth.complete(id, &format!("http://127.0.0.1:{port}/?code=4/abc")).await, Err(HarnessError::Conflict { .. })), "taken: nothing waits");
 
     // Signed in: a session opens (its link isn't said any more).
     let adapter = AcpAdapter::new(InstanceId::new("mock"), profile(antigravity()), Arc::new(agent.clone()), Arc::new(|_| {}));
@@ -85,13 +90,15 @@ async fn the_sign_in_shows_its_link_takes_the_callback_and_then_sessions_open() 
 async fn a_callback_the_agent_turns_down_ends_the_sign_in_saying_why() {
     let agent = agent();
     let (auth, said) = controller(&agent, antigravity());
-    let port = port_of(&auth.begin("oauth-personal").await.unwrap().unwrap());
+    let waiting = auth.begin("oauth-personal").await.unwrap().unwrap();
+    let port = port_of(&waiting);
     // Cancelled on Google's page: the address says so, the agent's login fails.
-    let err = auth.complete(&format!("http://127.0.0.1:{port}/?error=access_denied")).await.unwrap_err();
+    let err = auth.complete(waiting.id, &format!("http://127.0.0.1:{port}/?error=access_denied")).await.unwrap_err();
     assert!(matches!(&err, HarnessError::Provider { reason } if reason.starts_with("the sign-in failed")), "{err}");
     tokio::time::sleep(Duration::from_millis(50)).await;
     let events = said.lock().unwrap().clone();
-    assert!(events.contains(&AuthEvent::Status(Some(false))) && events.last() == Some(&AuthEvent::Waiting(None)), "over: {events:?}");
+    assert!(matches!(events.last(), Some(AuthEvent::Ended(SignInEnded { how: SignInEnd::Failed { .. }, .. }))), "over, saying why: {events:?}");
+    assert!(!events.iter().any(|e| matches!(e, AuthEvent::Status(_))), "a failed sign-in says nothing of the login there is: {events:?}");
 }
 
 #[tokio::test]
@@ -101,13 +108,15 @@ async fn a_new_sign_in_replaces_the_one_under_way_and_cancel_stops_it() {
     let first = auth.begin("oauth-personal").await.unwrap().unwrap();
     let second = auth.begin("oauth-personal").await.unwrap().unwrap();
     assert_ne!(first.id, second.id);
-    // The first's address goes nowhere now: only the second's port is taken.
-    assert!(matches!(auth.complete(&format!("http://127.0.0.1:{}/?code=x", port_of(&first))).await, Err(HarnessError::Refused { .. })));
-    assert_eq!(last(&said), Some(AuthEvent::Waiting(Some(second.clone()))));
+    assert!(said.lock().unwrap().contains(&AuthEvent::Ended(SignInEnded { id: first.id, how: SignInEnd::Stopped })));
+    // A paste or a Cancel for the first doesn't touch the second.
+    assert!(matches!(auth.complete(first.id, &format!("http://127.0.0.1:{}/?code=x", port_of(&first))).await, Err(HarnessError::Conflict { .. })));
+    auth.cancel(first.id).await.unwrap();
+    assert_eq!(last(&said), Some(AuthEvent::Waiting(second.clone())));
 
-    auth.cancel().await.unwrap();
-    assert_eq!(last(&said), Some(AuthEvent::Waiting(None)));
-    assert!(matches!(auth.complete(&format!("http://127.0.0.1:{}/?code=x", port_of(&second))).await, Err(HarnessError::Conflict { .. })));
+    auth.cancel(second.id).await.unwrap();
+    assert_eq!(last(&said), Some(AuthEvent::Ended(SignInEnded { id: second.id, how: SignInEnd::Stopped })));
+    assert!(matches!(auth.complete(second.id, &format!("http://127.0.0.1:{}/?code=x", port_of(&second))).await, Err(HarnessError::Conflict { .. })));
 }
 
 #[tokio::test]
@@ -116,11 +125,12 @@ async fn the_server_stops_a_sign_in_when_its_time_is_up() {
     let mut settings = antigravity();
     settings.login.within_s = Some(1);
     let (auth, said) = controller(&agent, settings);
-    let port = port_of(&auth.begin("oauth-personal").await.unwrap().unwrap());
+    let waiting = auth.begin("oauth-personal").await.unwrap().unwrap();
     tokio::time::sleep(Duration::from_millis(1500)).await;
     let events = said.lock().unwrap().clone();
-    assert!(events.contains(&AuthEvent::Status(Some(false))) && events.last() == Some(&AuthEvent::Waiting(None)), "{events:?}");
-    assert!(matches!(auth.complete(&format!("http://127.0.0.1:{port}/?code=x")).await, Err(HarnessError::Conflict { .. })));
+    assert_eq!(events.last(), Some(&AuthEvent::Ended(SignInEnded { id: waiting.id, how: SignInEnd::RanOut })), "{events:?}");
+    assert!(!events.iter().any(|e| matches!(e, AuthEvent::Status(_))), "running out says nothing of the login there is");
+    assert!(matches!(auth.complete(waiting.id, &format!("http://127.0.0.1:{}/?code=x", port_of(&waiting))).await, Err(HarnessError::Conflict { .. })));
 }
 
 #[tokio::test]
@@ -157,8 +167,7 @@ async fn its_login_file_says_signed_in_only_while_nothing_says_more() {
 #[tokio::test]
 async fn what_a_real_agent_prints_on_its_error_output_reaches_the_driver() {
     let launch = Launch { program: "sh".into(), args: vec!["-c".into(), "echo 'Open the following link to authenticate the ACP server: https://accounts.google.com/x?y=1' >&2; sleep 2".into()], env: Vec::new(), env_remove: Vec::new() };
-    let transport = ProcessLauncher::from(&launch).launch(&config()).await.unwrap();
-    let pattern = regex::Regex::new(r"https://accounts\.google\.com/\S+").unwrap();
-    let link = tokio::time::timeout(Duration::from_secs(5), harness_acp::says(transport.said, pattern)).await.unwrap();
-    assert_eq!(link.as_deref(), Some("https://accounts.google.com/x?y=1"));
+    let mut transport = ProcessLauncher::from(&launch).launch(&config()).await.unwrap();
+    let line = tokio::time::timeout(Duration::from_secs(5), transport.said.recv()).await.unwrap().unwrap();
+    assert!(line.ends_with("https://accounts.google.com/x?y=1"), "{line}");
 }

@@ -288,9 +288,11 @@ agent made from its settings (`tests/harness_contract.rs`).
 Sessions, checks, logins and saved sessions run in the project. Signing in
 uses the agent's own login, run on the project's server and finished from
 any device (the browser, the cockpit's server and the project's server may
-be three machines). The sign-in under way is the server's: every device
-shows its link, the time left and Finish signing in, until it's taken,
-cancelled, started again or runs out. Claude Code's page shows a code to
+be three machines). The sign-in under way is the server's, from the moment
+it starts: every device shows it starting, then its link, the time left
+and Finish signing in, until it's taken, cancelled, started again or runs
+out; then how it ended. What's pasted back, or cancelled, names the
+sign-in it's for: a newer one isn't touched. Claude Code's page shows a code to
 paste back. Antigravity's ends on a page that fails to load (it goes to
 `127.0.0.1` on the device): paste that page's address within the time
 shown (5 minutes), and the server hands it to the waiting login, only to
@@ -303,9 +305,9 @@ Where each harness keeps its home (login, settings, sessions) is the
 project's choice, in its table in `harnesses.toml`: `home = "native"`, its
 own folders as when it runs by itself (the default); `"kept"`,
 `.nah/harness/<instance>/` (made for the server's user only, kept out of
-git and never served, nor to the agent's file access); or a folder of
-your own (the project's when relative; used as it is: keep it out of git
-yourself). Its line in the cockpit says where its home is.
+git, never served, nor reached by any agent's file access); or a folder of
+your own outside the project (`~/` is your home folder; used as it is).
+Its line in the cockpit says where its home is.
 
 While a turn runs, Enter queues the next message (the agent queues it, or
 the server sends it when the turn ends; it shows as QUEUED);

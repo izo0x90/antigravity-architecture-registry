@@ -41,7 +41,7 @@ pub struct Started {
 impl LoginRun {
     /// Starts it; its link is the first match of `pattern` in what it
     /// prints, within `wait`.
-    pub async fn start(launch: &Launch, login: &CommandLogin, cwd: &Path, pattern: &Regex, wait: Duration) -> Result<Started> {
+    pub async fn start(launch: &Launch, login: &CommandLogin, cwd: &Path, pattern: Option<Regex>, wait: Duration) -> Result<Started> {
         let mut command = tokio::process::Command::new(&launch.program);
         command.args(&launch.args).args(&login.args).current_dir(cwd);
         for name in &launch.env_remove {
@@ -78,7 +78,7 @@ impl LoginRun {
         let mut run = Self { child, stdin, output, readers };
         // The link it printed, or how it ended (it finished by itself).
         let first = tokio::select! {
-            found = tokio::time::timeout(wait, crate::launch::says(said, pattern.clone())) => Ok(found.ok().flatten()),
+            found = tokio::time::timeout(wait, crate::launch::says(said, pattern)) => Ok(found.ok().flatten()),
             status = run.child.wait() => Err(status.is_ok_and(|s| s.success())),
         };
         // Its output closed with no link: as it exits.
@@ -100,17 +100,17 @@ impl LoginRun {
 
     /// Hands it what the login page gave back and waits for it to finish.
     pub async fn finish(mut self, response: &str) -> Result<()> {
-        let mut stdin = self.stdin.take().ok_or_else(|| HarnessError::Provider { reason: "the login no longer takes input".into() })?;
+        let mut stdin = self.stdin.take().ok_or_else(|| HarnessError::Provider { reason: "the sign-in no longer takes input".into() })?;
         stdin.write_all(format!("{}\n", response.trim()).as_bytes()).await?;
         stdin.flush().await?;
         let status = tokio::time::timeout(FINISH_WAIT, self.child.wait())
             .await
-            .map_err(|_| HarnessError::Provider { reason: "the login didn't finish".into() })??;
+            .map_err(|_| HarnessError::Provider { reason: "the sign-in didn't finish".into() })??;
         self.read_out().await;
         if status.success() {
             Ok(())
         } else {
-            Err(HarnessError::Provider { reason: format!("the login failed: {}", self.last_words()) })
+            Err(HarnessError::Provider { reason: format!("the sign-in failed: {}", self.last_words()) })
         }
     }
 
@@ -136,9 +136,6 @@ mod tests {
 
     const WAIT: Duration = Duration::from_secs(30);
 
-    fn any_link() -> Regex {
-        Regex::new(r"https://\S+").unwrap()
-    }
 
     fn sh(script: &str) -> (Launch, CommandLogin) {
         let launch = Launch { program: "sh".into(), args: vec!["-c".into(), script.into()], env: vec![("A".into(), "1".into())], env_remove: Vec::new() };
@@ -150,7 +147,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let got = dir.path().join("code");
         let (launch, login) = sh(&format!(r#"echo "If the browser didn't open, visit: https://claude.ai/oauth?x=$A$B"; read code; echo "$code" > {}"#, got.display()));
-        let started = LoginRun::start(&launch, &login, dir.path(), &any_link(), WAIT).await.unwrap();
+        let started = LoginRun::start(&launch, &login, dir.path(), None, WAIT).await.unwrap();
         assert_eq!(started.link.as_deref(), Some("https://claude.ai/oauth?x=12"));
         started.run.finish(" abc#state \n").await.unwrap();
         assert_eq!(std::fs::read_to_string(got).unwrap().trim(), "abc#state");
@@ -159,7 +156,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_login_says_what_it_printed() {
         let (launch, login) = sh(r#"echo "visit https://x.example/a"; read code; echo "Invalid code" >&2; exit 1"#);
-        let started = LoginRun::start(&launch, &login, Path::new("."), &any_link(), WAIT).await.unwrap();
+        let started = LoginRun::start(&launch, &login, Path::new("."), None, WAIT).await.unwrap();
         let err = started.run.finish("nope").await.unwrap_err().to_string();
         assert!(err.contains("Invalid code"), "{err}");
     }
@@ -167,7 +164,7 @@ mod tests {
     #[tokio::test]
     async fn one_that_finishes_by_itself_says_how() {
         let (launch, login) = sh("echo already signed in");
-        let started = LoginRun::start(&launch, &login, Path::new("."), &any_link(), WAIT).await.unwrap();
+        let started = LoginRun::start(&launch, &login, Path::new("."), None, WAIT).await.unwrap();
         assert_eq!((started.exited, started.link), (Some(true), None));
     }
 }

@@ -124,3 +124,20 @@ fn test_enforces_max_file_size_and_symlink_escape() {
     .expect("relative path should resolve inside root");
     assert_eq!(rel_read.content, "hello");
 }
+
+#[test]
+fn a_path_stepping_back_through_a_missing_folder_stays_inside() {
+    let base = tempdir().unwrap();
+    let root = base.path().join("root");
+    fs::create_dir_all(&root).unwrap();
+    let roots = vec![root.clone()];
+    // `missing/..` can't be walked on disk: taken out by the words, the
+    // path is outside, and refused, nothing made on the way.
+    let request = WriteTextFileRequest { path: "missing/../../outside.txt".into(), content: "x".into() };
+    assert!(write_client_text_file(&roots, &request).is_err());
+    assert!(!base.path().join("outside.txt").exists() && !root.join("missing").exists());
+    // Inside, it's the file it names.
+    let request = WriteTextFileRequest { path: "missing/../inside.txt".into(), content: "x".into() };
+    write_client_text_file(&roots, &request).unwrap();
+    assert_eq!(fs::read_to_string(root.join("inside.txt")).unwrap(), "x");
+}

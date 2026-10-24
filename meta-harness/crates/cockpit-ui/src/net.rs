@@ -619,14 +619,15 @@ impl NetClient {
     }
 
     /// Stops the sign-in under way.
-    pub fn cancel_auth(&self, instance: &InstanceId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+    pub fn cancel_auth(&self, instance: &InstanceId, id: u64, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
         let path = format!("/api/instances/{instance}/auth/cancel");
-        self.call::<()>("POST", &path, Some(serde_json::json!({})), ctx, on_done);
+        self.call::<()>("POST", &path, Some(serde_json::json!({ "id": id })), ctx, on_done);
     }
 
-    pub fn complete_auth(&self, instance: &InstanceId, response: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+    /// Pastes what the sign-in page gave back to sign-in `id`.
+    pub fn complete_auth(&self, instance: &InstanceId, id: u64, response: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
         let path = format!("/api/instances/{instance}/auth/complete");
-        self.call::<()>("POST", &path, Some(serde_json::json!({ "response": response })), ctx, on_done);
+        self.call::<()>("POST", &path, Some(serde_json::json!({ "id": id, "response": response })), ctx, on_done);
     }
 
     // ---- tool servers ----

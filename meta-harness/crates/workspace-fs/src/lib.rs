@@ -55,6 +55,18 @@ pub fn resolve_client_file_path(
         raw_path.to_path_buf()
     };
 
+    // `..` taken out by the words first: a folder that isn't there can't
+    // be stepped back out of on disk, and would be made on the way.
+    let resolved = resolved.components().fold(PathBuf::new(), |mut at, part| {
+        match part {
+            std::path::Component::ParentDir => {
+                at.pop();
+            }
+            std::path::Component::CurDir => {}
+            part => at.push(part),
+        }
+        at
+    });
     let real = canonicalize_ancestor(&resolved);
 
     let canonical_roots: Vec<PathBuf> = allowed_roots
@@ -146,10 +158,14 @@ pub fn write_client_text_file(
     let file_path = resolve_client_file_path(allowed_roots, &request.path)?;
 
     // If destination path already exists as a symlink, verify its target is inside allowed roots
+    // (one whose target isn't there can't be checked: refused).
     if let Ok(meta) = fs::symlink_metadata(&file_path)
         && meta.file_type().is_symlink()
-        && let Ok(target) = fs::canonicalize(&file_path)
     {
+        let target = fs::canonicalize(&file_path).map_err(|_| WorkspaceFsError::Rejected { reason: format!(
+            "'{}' is a link to something that isn't there.",
+            request.path
+        ) })?;
         let canonical_roots: Vec<PathBuf> = allowed_roots
             .iter()
             .map(|r| fs::canonicalize(r).unwrap_or_else(|_| r.clone()))

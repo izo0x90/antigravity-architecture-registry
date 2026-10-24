@@ -31,6 +31,9 @@ pub struct HarnessEntry {
     /// sessions); none: its own folders.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<std::path::PathBuf>,
+    /// What of the project its file access never reaches (the server's own).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub private: Vec<std::path::PathBuf>,
 }
 
 /// Which harness it is, from its pack.

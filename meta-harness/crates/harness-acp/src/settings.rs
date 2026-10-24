@@ -66,7 +66,6 @@ impl AcpSettings {
 
     /// What can't be told from their shape alone.
     fn check(&self) -> Result<(), String> {
-        self.login.link_pattern()?;
         if self.login.on_session && self.login.link.is_none() {
             return Err("login.on_session needs login.link: the link that says it's asking for its login".into());
         }
@@ -158,7 +157,7 @@ pub struct LoginSettings {
     /// A pattern for the link its login prints (the first match is shown to
     /// open): its login command's on its output, a login it runs itself on
     /// its error output. Any `https://` link when not given.
-    pub link: Option<String>,
+    pub link: Option<Pattern>,
     /// What the login page gives back to paste in, in words.
     pub expects: Option<String>,
     /// How long a login it runs itself waits for the browser, in seconds.
@@ -179,10 +178,35 @@ impl Default for LoginSettings {
     }
 }
 
+/// A pattern, checked when the settings are read.
+#[derive(Debug, Clone)]
+pub struct Pattern(regex::Regex);
+
+impl Pattern {
+    pub fn regex(&self) -> &regex::Regex {
+        &self.0
+    }
+}
+
+impl PartialEq for Pattern {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_str() == other.0.as_str()
+    }
+}
+
+impl Eq for Pattern {}
+
+impl<'de> Deserialize<'de> for Pattern {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        regex::Regex::new(&text).map(Pattern).map_err(|e| serde::de::Error::custom(format!("the pattern {text} is wrong: {e}")))
+    }
+}
+
 impl LoginSettings {
-    /// The pattern of its login's link: any `https://` link when not given.
-    pub fn link_pattern(&self) -> Result<regex::Regex, String> {
-        regex::Regex::new(self.link.as_deref().unwrap_or(r"https://\S+")).map_err(|e| format!("the login link pattern is wrong: {e}"))
+    /// The pattern of its login's link, if it gives one (else any `https://` link).
+    pub fn link_pattern(&self) -> Option<regex::Regex> {
+        self.link.as_ref().map(|p| p.regex().clone())
     }
 }
 

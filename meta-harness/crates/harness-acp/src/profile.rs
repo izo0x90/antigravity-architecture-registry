@@ -20,11 +20,11 @@ pub struct Profile {
     pub project: PathBuf,
     pub places: Places,
     /// The folder the project keeps its home in (none: its own folders):
-    /// its login is there, so its file access never reaches it.
+    /// its login is there.
     pub kept_home: Option<PathBuf>,
-    /// The pattern of its login's link (its settings', checked when they
-    /// were read; none only if they weren't).
-    pub login_link: Option<regex::Regex>,
+    /// What of the project its file access never reaches (the server's own,
+    /// harnesses' kept homes included).
+    pub private: Vec<PathBuf>,
 }
 
 /// What the agent's `initialize` answer says it does beyond the protocol.
@@ -39,8 +39,7 @@ pub struct Declared {
 impl Profile {
     pub fn new(settings: AcpSettings, project: &Path, launch: Option<&Launch>) -> Self {
         let places = Places::new(&settings, project, launch);
-        let login_link = settings.login.link_pattern().ok();
-        Self { settings, project: project.to_path_buf(), places, kept_home: None, login_link }
+        Self { settings, project: project.to_path_buf(), places, kept_home: None, private: Vec::new() }
     }
 
     /// With its home kept in `dir` (by the project).
@@ -49,10 +48,19 @@ impl Profile {
         self
     }
 
+    /// With `private` out of its file access's reach.
+    pub fn keeping_out(mut self, private: Vec<PathBuf>) -> Self {
+        self.private = private;
+        self
+    }
+
     /// Where its home is, if its pack says, and whether the project keeps it.
     pub fn home(&self) -> Option<harness_contracts::HarnessHome> {
         let home = self.settings.home.as_ref()?;
-        Some(harness_contracts::HarnessHome { path: self.places.path(&format!("{{{}}}", home.dir)).display().to_string(), kept: self.kept_home.is_some() })
+        Some(match &self.kept_home {
+            Some(kept) => harness_contracts::HarnessHome { path: kept.display().to_string(), kept: true },
+            None => harness_contracts::HarnessHome { path: self.places.path(&format!("{{{}}}", home.dir)).display().to_string(), kept: false },
+        })
     }
 
     /// What it can do before it's asked (`initialize` fills in the rest).
@@ -180,7 +188,7 @@ impl Profile {
 
     /// File access for a session working in `cwd`, when it's given it.
     pub fn workspace(&self, cwd: &Path) -> Option<WorkspaceFs> {
-        self.settings.client_fs.then(|| WorkspaceFs::new(vec![cwd.to_path_buf()], self.kept_home.iter().cloned().collect()))
+        self.settings.client_fs.then(|| WorkspaceFs::new(vec![cwd.to_path_buf()], self.private.iter().chain(&self.kept_home).cloned().collect()))
     }
 
     /// The suffix of a question's own answer box, if its forms have them.

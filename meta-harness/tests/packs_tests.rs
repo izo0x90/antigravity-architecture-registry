@@ -137,7 +137,7 @@ async fn a_harness_without_a_launch_says_why_and_how_to_fix_it() {
     let driver = harness_acp::AcpDriver::new(std::env::temp_dir());
     let none = HarnessLaunch::Unavailable { reason: "antigravity-acp isn't installed".into(), fix: Some("meta-harness pack install antigravity-acp".into()) };
     let profile = harness_contracts::HarnessProfile { instance: harness_contracts::InstanceId::new("antigravity"), driver: harness_contracts::DriverKind::new("acp"), display_name: "Antigravity".into(), settings: serde_json::Value::Null };
-    let instance = driver.create(profile.instance.clone(), driver.default_config(&HarnessEntry { profile, launch: none, home: None })).await.unwrap();
+    let instance = driver.create(profile.instance.clone(), driver.default_config(&HarnessEntry { profile, launch: none, home: None, private: Vec::new() })).await.unwrap();
     instance.refresh().await.unwrap();
     let status = instance.snapshot().borrow().status.clone();
     assert!(matches!(&status, harness_contracts::ProviderStatus::Unavailable { reason } if reason.contains("isn't installed") && reason.contains("meta-harness pack install antigravity-acp")), "{status:?}");
@@ -183,7 +183,8 @@ fn a_harness_setting_that_cant_be_used_stops_the_harnesses_saying_why() {
     for (file, why) in [
         ("[antigravity-acp]\nhome = \"kept\"\n", "no harness named antigravity-acp"),
         ("[antigravity]\nhome = \"\"\n", "native, kept, or a folder"),
-        ("[antigravity]\nhome = \".\"\n", "the project's folder or one above it"),
+        ("[antigravity]\nhome = \".\"\n", "is in the project"),
+        ("[antigravity]\nhome = \"secrets/agy\"\n", "is in the project"),
         ("[antigravity]\nargs = [\"x\"]\n", "without its program"),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -203,7 +204,7 @@ async fn a_harness_whose_pack_cant_move_its_home_isnt_started_elsewhere() {
     let profile = harness_contracts::HarnessProfile { instance: harness_contracts::InstanceId::new("other"), driver: harness_contracts::DriverKind::new("acp"), display_name: "Other".into(), settings: serde_json::Value::Null };
     let launch = harness_contracts::Launch { program: "/bin/true".into(), args: Vec::new(), env: Vec::new(), env_remove: Vec::new() };
     let driver = harness_acp::AcpDriver::new(project.path().into());
-    let entry = HarnessEntry { profile, launch: HarnessLaunch::Ready { launch }, home: Some(project.path().join(".nah/harness/other")) };
+    let entry = HarnessEntry { profile, launch: HarnessLaunch::Ready { launch }, home: Some(project.path().join(".nah/harness/other")), private: Vec::new() };
     let other = driver.create(entry.profile.instance.clone(), driver.default_config(&entry)).await.unwrap();
     other.refresh().await.unwrap();
     let status = other.snapshot().borrow().status.clone();

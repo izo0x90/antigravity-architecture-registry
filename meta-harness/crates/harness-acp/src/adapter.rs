@@ -45,11 +45,11 @@ impl AcpAdapter {
         let transport = self.launcher.launch(&config).await?;
         // An agent that starts a login itself when it isn't signed in: its
         // link, said while the session opens, means it isn't.
-        let pattern = self.profile.settings.login.on_session.then(|| self.profile.login_link.clone()).flatten();
+        let pattern = self.profile.settings.login.on_session.then(|| self.profile.settings.login.link_pattern()).flatten();
         let said = transport.said;
         let asks_login = async move {
             match pattern {
-                Some(pattern) => crate::launch::says(said, pattern).await,
+                Some(pattern) => crate::launch::says(said, Some(pattern)).await,
                 None => std::future::pending().await,
             }
         };
@@ -149,7 +149,7 @@ impl AcpAdapter {
 }
 
 /// Why a session didn't open: the agent wants a login first.
-const NOT_SIGNED_IN: &str = "not signed in: sign in, then try again";
+const NOT_SIGNED_IN: &str = "sign in, then try again";
 
 /// A tool server as the agent takes it: an SSE one as HTTP when the agent
 /// doesn't say it takes SSE.

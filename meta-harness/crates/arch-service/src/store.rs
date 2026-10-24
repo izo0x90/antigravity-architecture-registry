@@ -127,11 +127,17 @@ const STATE_DIR: &str = "state";
 /// Harnesses' homes the project keeps (their logins): never committed.
 const HARNESS_DIR: &str = "harness";
 
-/// The project's folders only the server reads: its state and the
-/// harnesses' homes it keeps (their logins). Never served.
-pub fn private_dirs(repo_root: &Path) -> [PathBuf; 2] {
+/// What of the project only the server reads and writes: its state, the
+/// harnesses' homes it keeps (their logins), and what keeps those out of
+/// git. Never served, nor reached by an agent's file access.
+pub fn private_paths(repo_root: &Path) -> [PathBuf; 3] {
     let nah = repo_root.join(".nah");
-    [nah.join(STATE_DIR), nah.join(HARNESS_DIR)]
+    [nah.join(STATE_DIR), nah.join(HARNESS_DIR), nah.join(".gitignore")]
+}
+
+/// Where the project keeps `harness`'s home.
+pub fn kept_harness_home(repo_root: &Path, harness: &str) -> PathBuf {
+    repo_root.join(".nah").join(HARNESS_DIR).join(harness)
 }
 
 /// Ensures `.nah/.gitignore` lists what's kept out of version control (adding
@@ -510,14 +516,14 @@ mod tests {
     }
 
     #[test]
-    fn the_servers_state_is_kept_out_of_version_control() {
+    fn the_servers_state_and_the_kept_logins_are_kept_out_of_version_control() {
         let dir = tempfile::tempdir().unwrap();
         // An older .nah/.gitignore gets what it lacks, and keeps the rest.
         std::fs::create_dir_all(dir.path().join(".nah")).unwrap();
         std::fs::write(dir.path().join(".nah/.gitignore"), "# mine\ncache/").unwrap();
         assert_eq!(state_dir(dir.path()).unwrap(), dir.path().join(".nah/state"));
-        assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\ncache/\nstate/\n");
+        assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\ncache/\nstate/\nharness/\n");
         state_dir(dir.path()).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\ncache/\nstate/\n", "nothing added twice");
+        assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\ncache/\nstate/\nharness/\n", "nothing added twice");
     }
 }

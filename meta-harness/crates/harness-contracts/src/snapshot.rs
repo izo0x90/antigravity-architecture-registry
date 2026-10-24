@@ -44,7 +44,7 @@ impl ProviderSnapshot {
             driver,
             display_name: display_name.into(),
             status: ProviderStatus::Starting,
-            auth: AuthState { status: AuthStatus::Unknown, account: None, methods: Vec::new(), waiting: None },
+            auth: AuthState { status: AuthStatus::Unknown, account: None, methods: Vec::new(), waiting: None, ended: None },
             capabilities: Capabilities::default(),
             models: Vec::new(),
             commands: Vec::new(),
@@ -72,8 +72,10 @@ pub struct HarnessHome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SignInWaiting {
-    /// Which sign-in (a new one replaces it).
+    /// Which sign-in (a new one replaces it): what's pasted back or
+    /// cancelled names it.
     pub id: u64,
+    /// The page to open; none while it's starting.
     pub url: Option<String>,
     /// What to do, in words.
     pub instructions: String,
@@ -103,6 +105,30 @@ pub struct AuthState {
     /// A sign-in under way.
     #[serde(default)]
     pub waiting: Option<Box<SignInWaiting>>,
+    /// How the last sign-in ended, once it has (none while one is under way).
+    #[serde(default)]
+    pub ended: Option<Box<SignInEnded>>,
+}
+
+/// How a sign-in ended, as the server knows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignInEnded {
+    /// Which sign-in.
+    pub id: u64,
+    pub how: SignInEnd,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
+pub enum SignInEnd {
+    SignedIn,
+    /// It failed, saying why.
+    Failed { reason: String },
+    /// Its time ran out.
+    RanOut,
+    /// Cancelled, or a new one started in its place.
+    Stopped,
 }
 
 /// Who the harness is signed in as, as it reports it.

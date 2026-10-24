@@ -100,11 +100,12 @@ pub trait AuthController: Send + Sync {
     /// it's signed in at once.
     async fn begin(&self, method_id: &str) -> Result<Option<harness_contracts::SignInWaiting>>;
 
-    /// Completes the login under way, e.g. with a pasted callback URL or code.
-    async fn complete(&self, response: &str) -> Result<()>;
+    /// Completes sign-in `id` (the one under way), e.g. with a pasted
+    /// callback URL or code. Another one under way is left alone.
+    async fn complete(&self, id: u64, response: &str) -> Result<()>;
 
-    /// Stops the login under way.
-    async fn cancel(&self) -> Result<()>;
+    /// Stops sign-in `id`, if it's the one under way.
+    async fn cancel(&self, id: u64) -> Result<()>;
 
     async fn logout(&self) -> Result<()>;
 }
