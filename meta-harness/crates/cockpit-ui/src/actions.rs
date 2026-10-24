@@ -32,8 +32,11 @@ pub enum Param {
     /// its value is then the message (text and links) as JSON; else its text.
     Writing { hint: String, start: harness_contracts::Message, links: bool },
     /// Typed text looked up as it's typed: the provider gets each query
-    /// (`ActionProvider::search`) and lists what it found for it here.
-    Search { hint: String, found: Vec<Choice>, waiting: bool },
+    /// (`ActionProvider::search`) and lists what it found here, saying
+    /// which query its rows are of (`of`: as it was typed; none: none
+    /// answered yet). Rows of another query than what's typed are still
+    /// shown, until the new ones come; Enter waits for those.
+    Search { hint: String, found: Vec<Choice>, of: Option<String> },
 }
 
 impl Param {
@@ -660,6 +663,11 @@ pub fn choice_text(ui: &egui::Ui, label: &str, colour: Option<(egui::Color32, Ma
 /// Narrowest a picker gets before its text is truncated.
 const PICKER_MIN_WIDTH: f32 = 90.0;
 
+/// A setting's list of choices: how wide, and how many rows show before
+/// it scrolls.
+const SETTING_LIST_WIDTH: f32 = 260.0;
+const SETTING_LIST_ROWS: usize = 8;
+
 /// Draws a bound action's control; hovering it says what it does and its
 /// key, and the key shows beside its caption when there's room.
 fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
@@ -711,23 +719,31 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
             }
             ui.label(caption).on_hover_text(&tip);
             let mut picked = None;
-            egui::ComboBox::from_id_salt(("control", action.id.as_str()))
+            // The one list choices are picked from (as the action list's),
+            // sized to what it holds, its highlight starting on what's
+            // chosen and kept while it's open.
+            let list_id = ui.make_persistent_id(("control_list", action.id.as_str()));
+            let open = egui::ComboBox::from_id_salt(("control", action.id.as_str()))
                 .width(PICKER_MIN_WIDTH.min(ui.available_width()))
                 .truncate()
                 .selected_text(shown)
                 .show_ui(ui, |ui| {
-                    for choice in choices {
-                        let text = choice_text(ui, &choice.label, choice.colour, crate::theme::look().text_body, ui.visuals().text_color());
-                        let item = ui.selectable_label(choice.current, text);
-                        let item = match &choice.detail {
-                            Some(d) => item.on_hover_text(d),
-                            None => item,
-                        };
-                        if item.clicked() && !choice.current {
-                            picked = Some(choice.value.clone());
-                        }
+                    ui.set_min_width(SETTING_LIST_WIDTH);
+                    let current = choices.iter().position(|c| c.current).unwrap_or(0);
+                    let mut list = ui.data_mut(|d| d.get_temp(list_id)).unwrap_or_else(|| crate::pick_list::PickList::at(current));
+                    let details = choices.iter().any(|c| c.detail.is_some());
+                    let height = crate::pick_list::PickList::fitting(ui, choices.len(), details, SETTING_LIST_ROWS);
+                    let listing = crate::pick_list::Listing { id: action.id.as_str(), height, len: choices.len(), details, empty: "Nothing to choose" };
+                    if let Some(i) = list.show(ui, listing, None, false, |i| crate::pick_list::Row::of_choice(&choices[i])) {
+                        picked = (!choices[i].current).then(|| choices[i].value.clone());
                     }
-                });
+                    ui.data_mut(|d| d.insert_temp(list_id, list));
+                })
+                .inner
+                .is_some();
+            if !open {
+                ui.data_mut(|d| d.remove::<crate::pick_list::PickList>(list_id));
+            }
             picked.map(|v| ControlUse::Run(Some(v)))
         }
         (Param::None, Style::Choice) => {

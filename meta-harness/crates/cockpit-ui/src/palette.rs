@@ -43,10 +43,6 @@ pub struct Palette {
     /// the frame it changed, or before its answers came): it's taken once
     /// the rows are of what's typed.
     enter_waiting: bool,
-    /// A search's rows are of nothing typed (what's typed first, while it's
-    /// looked for, shows "Looking…"; after that, the rows and their note
-    /// stay those of what was typed before until the new ones come).
-    rows_of_nothing: bool,
     /// The tallest it's been while open: it never gets shorter (going
     /// from a list to a text field, say), so nothing under it jumps.
     tallest: f32,
@@ -123,7 +119,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions, filter: String::new(), list: Default::default(), ask: None, enter_waiting: false, rows_of_nothing: true, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None }
+        Self { open: false, stage: Stage::Actions, filter: String::new(), list: Default::default(), ask: None, enter_waiting: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None }
     }
 }
 
@@ -171,7 +167,6 @@ impl Palette {
         self.filter.clear();
         self.list.reset();
         self.enter_waiting = false;
-        self.rows_of_nothing = true;
         let action = Box::new(action);
         self.stage = match &action.action.param {
             Param::Text { start, .. } => {
@@ -329,7 +324,7 @@ impl Palette {
             **action = fresh.clone();
         }
         // Enter on rows of what was typed before waits for those of what's typed.
-        let waiting = matches!(&self.stage, Stage::Search { action, .. } if matches!(action.action.param, Param::Search { waiting: true, .. }));
+        let waiting = matches!(&self.stage, Stage::Search { action, .. } if matches!(&action.action.param, Param::Search { of, .. } if of.as_deref() != Some(self.filter.as_str())));
         let enter = if waiting {
             self.enter_waiting |= enter;
             false
@@ -431,9 +426,6 @@ impl Palette {
                                 let ranked: Vec<&Bound> = self.ranked.of(&self.filter, &fingerprint, haystacks).iter().map(|i| listed[*i]).collect();
                                 let first = usize::from(line.is_some());
                                 let len = ranked.len() + first;
-                                if let Some(by) = moved {
-                                    self.list.moved(by, len);
-                                }
                                 let line_label = line.map(|(n, _)| format!("Go to line {n}"));
                                 // `:N` first when typed, then the actions.
                                 let row = |i: usize| match (&line_label, i) {
@@ -443,10 +435,8 @@ impl Palette {
                                         crate::pick_list::Row { label: &bound.action.label, detail: Some(&bound.action.detail), keys: bound.key_hint().into(), ..Default::default() }
                                     }
                                 };
-                                if len == 0 {
-                                    ui.label(RichText::new("No matching actions").size(crate::theme::look().text_body).color(colors().muted));
-                                }
-                                if let Some(i) = self.list.show(ui, Listing { id: "palette_actions", height: list_height, len, details: true }, row, enter) {
+                                let listing = Listing { id: "palette_actions", height: list_height, len, details: true, empty: "No matching actions" };
+                                if let Some(i) = self.list.show(ui, listing, moved, enter, row) {
                                     match (line, i) {
                                         (Some((n, bound)), 0) => picked = Some(invocation(bound, Some(n.to_string()))),
                                         _ => {
@@ -464,47 +454,35 @@ impl Palette {
                                 let fingerprint: Vec<(&str, &str)> = choices.iter().map(|c| (c.label.as_str(), c.value.as_str())).collect();
                                 let haystacks = || fingerprint.iter().map(|(label, value)| format!("{label} {value}")).collect();
                                 let ranked: Vec<&Choice> = self.ranked.of(&self.filter, &fingerprint, haystacks).iter().map(|i| &choices[*i]).collect();
-                                if let Some(by) = moved {
-                                    self.list.moved(by, ranked.len());
-                                }
-                                if ranked.is_empty() {
-                                    ui.label(RichText::new("Nothing to choose").size(crate::theme::look().text_body).color(colors().muted));
-                                }
                                 let details = ranked.iter().any(|c| c.detail.is_some());
-                                let row = |i: usize| choice_row(ranked[i]);
-                                if let Some(i) = self.list.show(ui, Listing { id: "palette_choices", height: list_height, len: ranked.len(), details }, row, enter) {
+                                let row = |i: usize| crate::pick_list::Row::of_choice(ranked[i]);
+                                let listing = Listing { id: "palette_choices", height: list_height, len: ranked.len(), details, empty: "Nothing to choose" };
+                                if let Some(i) = self.list.show(ui, listing, moved, enter, row) {
                                     picked = Some(invocation(action, Some(ranked[i].value.clone())));
                                 }
                             }
                             Stage::Search { action, .. } => {
-                                let (found, waiting) = match &action.action.param {
-                                    Param::Search { found, waiting, .. } => (found.clone(), *waiting),
-                                    _ => (Vec::new(), false),
+                                let (found, of) = match &action.action.param {
+                                    Param::Search { found, of, .. } => (found.clone(), of.clone()),
+                                    _ => (Vec::new(), None),
                                 };
-                                if let Some(by) = moved {
-                                    self.list.moved(by, found.len());
-                                }
                                 // A space typed (no name a trigger picks has one): what's
                                 // typed is text, back where it's written.
                                 if self.gives_back && self.filter.ends_with(' ') {
                                     leave = true;
                                 }
-                                // The rows are of what's typed: nothing asked this
-                                // frame, and the answers to what was asked in.
-                                if !waiting && self.ask.is_none() {
-                                    self.rows_of_nothing = self.filter.trim().is_empty();
-                                }
-                                if found.is_empty() {
-                                    let note = match (waiting, self.rows_of_nothing) {
-                                        (true, true) => "Looking…",
-                                        (false, true) => "Type to search",
-                                        (_, false) => "Nothing found",
-                                    };
-                                    ui.label(RichText::new(note).size(crate::theme::look().text_body).color(colors().muted));
-                                }
+                                // No rows: said of the query they're of (rows of an
+                                // earlier one stay, said as they were, until the
+                                // new ones come).
+                                let empty = match of.as_deref().map(str::trim) {
+                                    Some(query) if !query.is_empty() => "Nothing found",
+                                    _ if self.filter.trim().is_empty() => "Type to search",
+                                    _ => "Looking…",
+                                };
                                 let details = found.iter().any(|c| c.detail.is_some());
-                                let row = |i: usize| choice_row(&found[i]);
-                                if let Some(i) = self.list.show(ui, Listing { id: "palette_found", height: list_height, len: found.len(), details }, row, enter) {
+                                let row = |i: usize| crate::pick_list::Row::of_choice(&found[i]);
+                                let listing = Listing { id: "palette_found", height: list_height, len: found.len(), details, empty };
+                                if let Some(i) = self.list.show(ui, listing, moved, enter, row) {
                                     picked = Some(invocation(action, Some(found[i].value.clone())));
                                 }
                             }
@@ -526,6 +504,11 @@ impl Palette {
                         .into_iter()
                         .map(|(key, does)| format!("{key} {does}"))
                         .collect();
+                        // Enter pressed on rows of what was typed before: it
+                        // waits for the new ones, and says so.
+                        if self.enter_waiting {
+                            keys.insert(0, "Looking…".to_owned());
+                        }
                         if let Some(bound) = cycle {
                             keys.insert(keys.len() - 1, format!("{}: {}", keymap.list.cycle_label(), bound.action.label));
                         }
@@ -554,9 +537,4 @@ impl Palette {
 
 fn invocation(bound: &Bound, value: Option<String>) -> Invocation {
     Invocation { action: bound.action.clone(), origin: bound.origin, value }
-}
-
-/// A choice as a row of the list.
-fn choice_row(choice: &Choice) -> crate::pick_list::Row<'_> {
-    crate::pick_list::Row { label: &choice.label, mark: choice.colour, current: choice.current, detail: choice.detail.as_deref(), ..Default::default() }
 }

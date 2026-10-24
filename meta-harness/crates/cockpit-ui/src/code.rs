@@ -1167,15 +1167,14 @@ impl Navigable for CodeViewerState {
         if self.lines.is_empty() {
             return;
         }
+        // No line yet: the first move lands on the first.
+        let go = if motion == Motion::Down && self.target_line.is_none() { Some(Go::First) } else { Go::of(motion, count) };
+        if let Some(go) = go {
+            self.go(go);
+            return;
+        }
         let sideways = |n: usize| i32::try_from(n).unwrap_or(i32::MAX);
         match motion {
-            Motion::Down if self.target_line.is_none() => self.go(Go::First),
-            Motion::Down => self.go(Go::Down(count)),
-            Motion::Up => self.go(Go::Up(count)),
-            Motion::HalfDown => self.go(Go::HalfDown(count)),
-            Motion::HalfUp => self.go(Go::HalfUp(count)),
-            Motion::First => self.go(Go::First),
-            Motion::Last => self.go(Go::Last),
             Motion::HalfLeft => self.go(Go::Sideways(-sideways(count))),
             Motion::HalfRight => self.go(Go::Sideways(sideways(count))),
             Motion::FewLeft => self.go(Go::Panels(-sideways(count) * FEW_COLUMNS)),
@@ -1184,7 +1183,7 @@ impl Navigable for CodeViewerState {
             Motion::NextSibling | Motion::PrevSibling => {
                 let _ = self.step_def(motion == Motion::NextSibling, count, true);
             }
-            Motion::Left | Motion::Right => {}
+            _ => {}
         }
     }
 

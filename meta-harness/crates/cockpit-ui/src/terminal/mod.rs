@@ -612,13 +612,11 @@ impl Navigable for TerminalBuffer {
     }
 
     fn motion(&mut self, motion: Motion, count: usize) {
+        if let Some(go) = Go::of(motion, count) {
+            self.go(go);
+            return;
+        }
         match motion {
-            Motion::Down => self.go(Go::Down(count)),
-            Motion::Up => self.go(Go::Up(count)),
-            Motion::HalfDown => self.go(Go::HalfDown(count)),
-            Motion::HalfUp => self.go(Go::HalfUp(count)),
-            Motion::First => self.go(Go::First),
-            Motion::Last => self.go(Go::Last),
             // Line number `n`, as lines are numbered for their life (the
             // nearest there is).
             Motion::Line(n) => {
@@ -634,7 +632,7 @@ impl Navigable for TerminalBuffer {
                     self.go(Go::To(at as usize, crate::viewport::Show::InView));
                 }
             }
-            Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
+            _ => {}
         }
     }
 

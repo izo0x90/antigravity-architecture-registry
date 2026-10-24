@@ -373,15 +373,12 @@ impl Navigable for QueueState {
         if n == 0 {
             return;
         }
-        match motion {
-            Motion::Down => self.go(Go::Down(count)),
-            Motion::Up => self.go(Go::Up(count)),
-            Motion::HalfDown => self.go(Go::HalfDown(count)),
-            Motion::HalfUp => self.go(Go::HalfUp(count)),
-            Motion::First => self.go(Go::First),
-            Motion::Last => self.go(Go::Last),
-            Motion::Line(i) => self.put_cursor(i.saturating_sub(1), Show::Middle),
-            Motion::NextSibling | Motion::PrevSibling | Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
+        if let Some(go) = Go::of(motion, count) {
+            self.go(go);
+            return;
+        }
+        if let Motion::Line(i) = motion {
+            self.put_cursor(i.saturating_sub(1), Show::Middle);
         }
     }
 

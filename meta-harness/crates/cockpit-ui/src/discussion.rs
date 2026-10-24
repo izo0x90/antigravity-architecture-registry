@@ -301,18 +301,13 @@ impl Navigable for DiscussionView {
     }
 
     fn motion(&mut self, motion: Motion, count: usize) {
-        match motion {
-            Motion::Down => self.go(Go::Down(count)),
-            Motion::Up => self.go(Go::Up(count)),
-            Motion::HalfDown => self.go(Go::HalfDown(count)),
-            Motion::HalfUp => self.go(Go::HalfUp(count)),
-            Motion::First => self.go(Go::First),
-            Motion::Last => self.go(Go::Last),
-            Motion::Line(i) => {
-                self.cursor = i.saturating_sub(1).min(self.stops().saturating_sub(1));
-                self.scrolling.show(self.cursor, Show::Middle);
-            }
-            _ => {}
+        if let Some(go) = Go::of(motion, count) {
+            self.go(go);
+            return;
+        }
+        if let Motion::Line(i) = motion {
+            self.cursor = i.saturating_sub(1).min(self.stops().saturating_sub(1));
+            self.scrolling.show(self.cursor, Show::Middle);
         }
     }
 

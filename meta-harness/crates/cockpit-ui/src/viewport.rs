@@ -48,6 +48,23 @@ pub enum Go {
     Panels(i32),
 }
 
+impl Go {
+    /// The move a list motion asks for, `count` times: down and up, half
+    /// a window, first and last. None for the others (a view's own).
+    pub fn of(motion: crate::nav::Motion, count: usize) -> Option<Self> {
+        use crate::nav::Motion;
+        Some(match motion {
+            Motion::Down => Self::Down(count),
+            Motion::Up => Self::Up(count),
+            Motion::HalfDown => Self::HalfDown(count),
+            Motion::HalfUp => Self::HalfUp(count),
+            Motion::First => Self::First,
+            Motion::Last => Self::Last,
+            _ => return None,
+        })
+    }
+}
+
 /// How a stop gone to is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Show {

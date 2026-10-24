@@ -387,17 +387,24 @@ impl GraphState {
         }
     }
 
-    /// Asks the server for each kind (symbols, files, lines) at once.
+    /// Asks the server for each kind (symbols, files, lines) at once, when
+    /// the search says a round is due.
     fn send_find(&mut self, net: &NetClient, ctx: &egui::Context) {
-        if !std::mem::take(&mut self.find.send) {
-            return;
+        let tended = self.find.search.tend(ctx.input(|i| i.time));
+        if let Some(note) = tended.note {
+            self.note = Some(note);
         }
-        let limits = &self.ui.find;
-        use arch_search::SearchKind;
-        for (kind, limit) in [(SearchKind::Symbols, limits.symbols), (SearchKind::Files, limits.files), (SearchKind::Text, limits.text)] {
-            let (inbox, asked) = (self.inbox.clone(), self.find.asked);
-            let changed = self.comparison.as_ref().filter(|_| self.nav.only_changed);
-            net.search(&self.find.query, kind, &self.nav.source, limit, changed, ctx.clone(), move |r| push(&inbox, Reply::Found(asked, kind, Box::new(r))));
+        if let Some((round, query)) = tended.ask {
+            let limits = &self.ui.find;
+            use arch_search::SearchKind;
+            for (kind, limit) in [(SearchKind::Symbols, limits.symbols), (SearchKind::Files, limits.files), (SearchKind::Text, limits.text)] {
+                let inbox = self.inbox.clone();
+                let changed = self.comparison.as_ref().filter(|_| self.nav.only_changed);
+                net.search(&query, kind, &self.nav.source, limit, changed, ctx.clone(), move |r| push(&inbox, Reply::Found(round, kind, Box::new(r))));
+            }
+        }
+        if self.find.search.is_out() {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(crate::code_search::ROUND_LIMIT_S));
         }
     }
 

@@ -217,14 +217,12 @@ impl Navigable for ChatStreamState {
         match motion {
             // Following the latest: the first move lands on the newest.
             Motion::Down | Motion::Up if fresh => self.put_cursor(n - 1, Show::InView),
-            Motion::Down => self.go(Go::Down(count)),
-            Motion::Up => self.go(Go::Up(count)),
-            Motion::HalfDown => self.go(Go::HalfDown(count)),
-            Motion::HalfUp => self.go(Go::HalfUp(count)),
-            Motion::First => self.go(Go::First),
-            Motion::Last => self.go(Go::Last),
             Motion::Line(i) => self.put_cursor(i.saturating_sub(1), Show::Middle),
-            Motion::NextSibling | Motion::PrevSibling | Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
+            _ => {
+                if let Some(go) = Go::of(motion, count) {
+                    self.go(go);
+                }
+            }
         }
     }
 

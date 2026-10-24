@@ -28,13 +28,9 @@ pub struct ListKeys {
     pub prev: Vec<Chord>,
     /// Half a page down and up, and to the first and last row: the moves
     /// every view has, here with keys a filter box doesn't type.
-    #[serde(default)]
     pub half_down: Vec<Chord>,
-    #[serde(default)]
     pub half_up: Vec<Chord>,
-    #[serde(default)]
     pub first: Vec<Chord>,
-    #[serde(default)]
     pub last: Vec<Chord>,
     pub pick: Vec<Chord>,
     /// While a value is picked: what it's for, the next of its kinds (what
@@ -51,10 +47,10 @@ impl Default for ListKeys {
 impl ListKeys {
     /// The move asked for, its key taken so a list's filter box doesn't act
     /// on it too (egui's text boxes use Ctrl+K and others themselves).
-    pub fn moved(&self, input: &mut egui::InputState) -> Option<crate::pick_list::Move> {
-        use crate::pick_list::Move;
+    pub fn moved(&self, input: &mut egui::InputState) -> Option<crate::nav::Motion> {
+        use crate::nav::Motion;
         let took = |chords: &[Chord], input: &mut egui::InputState| chords.iter().fold(false, |took, c| c.consume(input) || took);
-        [(&self.next, Move::Next), (&self.prev, Move::Prev), (&self.half_down, Move::HalfDown), (&self.half_up, Move::HalfUp), (&self.first, Move::First), (&self.last, Move::Last)]
+        [(&self.next, Motion::Down), (&self.prev, Motion::Up), (&self.half_down, Motion::HalfDown), (&self.half_up, Motion::HalfUp), (&self.first, Motion::First), (&self.last, Motion::Last)]
             .into_iter()
             .fold(None, |moved, (chords, m)| if took(chords, input) { Some(m) } else { moved })
     }
@@ -80,7 +76,14 @@ impl ListKeys {
     /// key with its words.
     pub fn keys(&self, back: &Chord, leave: &'static str) -> Vec<(String, &'static str)> {
         let first = |chords: &[Chord]| chords.first().map(Chord::label).unwrap_or_default();
-        vec![(self.pick_label(), "runs"), (format!("{}/{}", first(&self.next), first(&self.prev)), "choose"), (back.label(), leave)]
+        let pair = |a: &[Chord], b: &[Chord]| format!("{}/{}", first(a), first(b));
+        vec![
+            (self.pick_label(), "runs"),
+            (pair(&self.next, &self.prev), "choose"),
+            (pair(&self.half_down, &self.half_up), "half a page"),
+            (pair(&self.first, &self.last), "first, last"),
+            (back.label(), leave),
+        ]
     }
 }
 
@@ -274,13 +277,13 @@ mod tests {
     #[test]
     fn lists_and_boxes_take_their_keys_from_config() {
         let ctrl = egui::Modifiers { ctrl: true, ..Default::default() };
-        use crate::pick_list::Move;
+        use crate::nav::Motion;
         let list = ListKeys { next: chords(&["ctrl+j", "ArrowDown"]), prev: chords(&["ctrl+k"]), half_down: chords(&["ctrl+d"]), half_up: chords(&["ctrl+u"]), first: chords(&["ctrl+Home"]), last: chords(&["ctrl+End"]), pick: chords(&["Enter"]), cycle: chords(&["Tab"]) };
-        assert_eq!(list.moved(&mut pressed(egui::Key::J, ctrl)), Some(Move::Next));
-        assert_eq!(list.moved(&mut pressed(egui::Key::K, ctrl)), Some(Move::Prev));
-        assert_eq!(list.moved(&mut pressed(egui::Key::D, ctrl)), Some(Move::HalfDown));
-        assert_eq!(list.moved(&mut pressed(egui::Key::U, ctrl)), Some(Move::HalfUp));
-        assert_eq!(list.moved(&mut pressed(egui::Key::End, ctrl)), Some(Move::Last));
+        assert_eq!(list.moved(&mut pressed(egui::Key::J, ctrl)), Some(Motion::Down));
+        assert_eq!(list.moved(&mut pressed(egui::Key::K, ctrl)), Some(Motion::Up));
+        assert_eq!(list.moved(&mut pressed(egui::Key::D, ctrl)), Some(Motion::HalfDown));
+        assert_eq!(list.moved(&mut pressed(egui::Key::U, ctrl)), Some(Motion::HalfUp));
+        assert_eq!(list.moved(&mut pressed(egui::Key::End, ctrl)), Some(Motion::Last));
         assert_eq!(list.moved(&mut pressed(egui::Key::J, egui::Modifiers::default())), None, "a plain j is typed, not a move");
         let input = InputKeys::default();
         assert_eq!(input.sent(&pressed(egui::Key::Enter, egui::Modifiers::default())), Some(Sent::Send));

@@ -20,12 +20,14 @@ fn an_at_typed_in_a_prompt_links_a_file_found_and_the_prompt_sends_the_link() {
     };
     typed(&ctx, &mut app, "read @");
     assert_eq!(app.palette.picking(), Some("link.thing"), "the thing picker");
-    typed(&ctx, &mut app, "a.rs");
-    let asked: Vec<String> = sent(&app).into_iter().filter(|c| c.starts_with("GET /api/search?q=a.rs")).collect();
-    assert_eq!(asked.len(), 2, "files and symbols: {asked:?}");
+    // (Pasted at once: one query asked.)
+    frame(&ctx, &mut app, vec![egui::Event::Text("a.rs".into())]);
+    frame(&ctx, &mut app, vec![]);
+    let calls = sent(&app);
+    let asked = |kind: &str| calls.iter().find(|c| c.starts_with(&format!("GET /api/search?q=a.rs&kind={kind}&"))).cloned().unwrap_or_else(|| panic!("{kind} asked: {calls:?}"));
     let file = serde_json::json!({ "query": "a.rs", "kind": "files", "hits": [{ "kind": "files", "label": "src/a.rs", "detail": "", "file": "src/a.rs" }], "total": 1 });
-    assert!(app.desk.net.answer(&asked[0], 200, &file));
-    assert!(app.desk.net.answer(&asked[1], 200, &serde_json::json!({ "query": "a.rs", "kind": "symbols", "hits": [], "total": 0 })));
+    assert!(app.desk.net.answer(&asked("files"), 200, &file));
+    assert!(app.desk.net.answer(&asked("symbols"), 200, &serde_json::json!({ "query": "a.rs", "kind": "symbols", "hits": [], "total": 0 })));
     frame(&ctx, &mut app, vec![]);
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     frame(&ctx, &mut app, vec![]);
@@ -38,9 +40,9 @@ fn an_at_typed_in_a_prompt_links_a_file_found_and_the_prompt_sends_the_link() {
 }
 
 /// The `@` picker's rows stay as they are while what's typed next is
-/// looked for (the list doesn't empty and fill at each key), files before
-/// symbols whichever answer comes first; an Enter meanwhile waits for the
-/// rows of what's typed, and an answer to a query gone is dropped.
+/// looked for (the list doesn't empty and fill at each key), symbols
+/// before files whichever answer comes first; an Enter meanwhile waits for
+/// the rows of what's typed, and an answer to a query gone is dropped.
 #[test]
 fn the_at_picker_keeps_its_rows_until_the_next_are_all_in_and_enter_waits_for_them() {
     let (ctx, mut app) = full_app();
@@ -53,32 +55,38 @@ fn the_at_picker_keeps_its_rows_until_the_next_are_all_in_and_enter_waits_for_th
         }
         frame(ctx, app, vec![]);
     };
-    let asked = |app: &CockpitApp, q: &str| -> Vec<String> { sent(app).into_iter().filter(|c| c.starts_with(&format!("GET /api/search?q={q}&"))).collect() };
+    // The searches asked since last looked: (files, symbols) for `q`.
+    let asked = |app: &CockpitApp, q: &str| -> (Vec<String>, Vec<String>) {
+        let calls = sent(app);
+        let of = |kind: &str| calls.iter().filter(|c| c.starts_with(&format!("GET /api/search?q={q}&kind={kind}&"))).cloned().collect();
+        (of("files"), of("symbols"))
+    };
     let files = |q: &str, paths: &[&str]| serde_json::json!({ "query": q, "kind": "files", "hits": paths.iter().map(|p| serde_json::json!({ "kind": "files", "label": p, "detail": "", "file": p })).collect::<Vec<_>>(), "total": paths.len() });
     let symbols = |q: &str, names: &[&str]| serde_json::json!({ "query": q, "kind": "symbols", "hits": names.iter().map(|n| serde_json::json!({ "kind": "symbols", "label": n, "detail": "a function", "key": format!("rust:{n}") })).collect::<Vec<_>>(), "total": names.len() });
     typed(&ctx, &mut app, "read @a");
-    let first = asked(&app, "a");
-    assert_eq!(first.len(), 2, "files and symbols: {:?}", sent(&app));
-    // Symbols answer first: nothing shown until both are in, then files first.
-    assert!(app.desk.net.answer(&first[1], 200, &symbols("a", &["alpha"])));
+    let (first_files, first_symbols) = asked(&app, "a");
+    assert_eq!((first_files.len(), first_symbols.len()), (1, 1), "files and symbols");
+    // Files answer first: nothing shown until both are in, then symbols first.
+    assert!(app.desk.net.answer(&first_files[0], 200, &files("a", &["src/apple.rs"])));
     let shown = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(shown.contains("Looking…") && !shown.contains("alpha"), "half the answers: still looking: {shown}");
-    assert!(app.desk.net.answer(&first[0], 200, &files("a", &["src/a.rs"])));
+    assert!(shown.contains("Looking…") && !shown.contains("src/apple.rs"), "half the answers: still looking: {shown}");
+    assert!(app.desk.net.answer(&first_symbols[0], 200, &symbols("a", &["alpha"])));
     let shown = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(shown.find("src/a.rs").zip(shown.find("alpha")).is_some_and(|(f, s)| f < s), "files, then symbols: {shown}");
+    assert!(shown.find("alpha").zip(shown.find("src/apple.rs")).is_some_and(|(s, f)| s < f), "symbols, then files: {shown}");
 
     typed(&ctx, &mut app, "b");
     let shown = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(shown.contains("src/a.rs") && !shown.contains("Looking…"), "the rows of `a` stay while `ab` is looked for");
+    assert!(shown.contains("src/apple.rs") && !shown.contains("Looking…"), "the rows of `a` stay while `ab` is looked for");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    frame(&ctx, &mut app, vec![]);
+    let shown = texts(&frame(&ctx, &mut app, vec![]));
     assert_eq!(app.palette.picking(), Some("link.thing"), "Enter on the rows of `a` waits for those of `ab`");
+    assert!(shown.contains("Looking… · Enter runs"), "and the key line says it's waiting: {shown}");
     // An answer for `a` coming late changes nothing.
-    assert!(!app.desk.net.answer(&first[0], 200, &files("a", &["src/late.rs"])), "already answered");
-    let next = asked(&app, "ab");
-    assert_eq!(next.len(), 2);
-    assert!(app.desk.net.answer(&next[0], 200, &files("ab", &["src/ab.rs"])));
-    assert!(app.desk.net.answer(&next[1], 200, &symbols("ab", &[])));
+    assert!(!app.desk.net.answer(&first_files[0], 200, &files("a", &["src/late.rs"])), "already answered");
+    let (next_files, next_symbols) = asked(&app, "ab");
+    assert_eq!((next_files.len(), next_symbols.len()), (1, 1));
+    assert!(app.desk.net.answer(&next_files[0], 200, &files("ab", &["src/ab.rs"])));
+    assert!(app.desk.net.answer(&next_symbols[0], 200, &symbols("ab", &[])));
     frame(&ctx, &mut app, vec![]);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.desk.chat().ui.input.text, "read @src/ab.rs ", "the Enter, taken on the rows of what was typed");

@@ -326,13 +326,11 @@ impl Navigable for TagList {
     }
 
     fn motion(&mut self, motion: Motion, count: usize) {
+        if let Some(go) = Go::of(motion, count) {
+            self.go(go);
+            return;
+        }
         match motion {
-            Motion::Down => self.go(Go::Down(count)),
-            Motion::Up => self.go(Go::Up(count)),
-            Motion::HalfDown => self.go(Go::HalfDown(count)),
-            Motion::HalfUp => self.go(Go::HalfUp(count)),
-            Motion::First => self.go(Go::First),
-            Motion::Last => self.go(Go::Last),
             Motion::Line(i) => {
                 self.cursor = i.saturating_sub(1).min(self.rows.len().saturating_sub(1));
                 self.scrolling.show(self.cursor, Show::Middle);
@@ -347,7 +345,7 @@ impl Navigable for TagList {
                     self.scrolling.show(at, Show::InView);
                 }
             }
-            Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
+            _ => {}
         }
     }
 

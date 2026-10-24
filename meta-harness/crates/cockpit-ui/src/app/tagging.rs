@@ -113,7 +113,7 @@ impl CockpitApp {
         let next = (things.at.len() > 1).then(|| &things.at[(level + 1) % things.at.len()]);
         let mut out = vec![
             Action::new("tag.add", "Tag what you're on", "Pick a tag, or type a new one's name (what's tagged is said at the top)", S::Tag)
-                .param(Param::Search { hint: "a tag's name (a new one is made)".into(), found: if picking == Some("tag.add") { self.tag_found("tag.add") } else { Vec::new() }, waiting: false })
+                .param(Param::Search { hint: "a tag's name (a new one is made)".into(), found: if picking == Some("tag.add") { self.tag_found("tag.add") } else { Vec::new() }, of: self.desk.shell_searches.get("tag.add").cloned() })
                 .about(chosen.map(|t| format!("Tag {}", t.words)))
                 .cycle(next.map(|_| "tag.level"))
                 .group(Group::Act)
@@ -134,7 +134,7 @@ impl CockpitApp {
         let named: Vec<Choice> = if picking == Some("tag.insert") { self.tag_found("tag.insert").into_iter().filter(|c| tags.get(&TagId::new(&c.value)).is_some()).collect() } else { Vec::new() };
         out.push(
             Action::new("tag.insert", "Link a tag", "Where you're writing: the agent is handed what the tag is on", S::TagInsert)
-                .param(Param::Search { hint: if tags.list().is_empty() { format!("no tags yet ({}: the # stays as typed)", self.config.keymap.back.label()) } else { "a tag's name".into() }, found: named, waiting: false })
+                .param(Param::Search { hint: if tags.list().is_empty() { format!("no tags yet ({}: the # stays as typed)", self.config.keymap.back.label()) } else { "a tag's name".into() }, found: named, of: self.desk.shell_searches.get("tag.insert").cloned() })
                 .group(Group::Act)
                 .importance(MINOR)
                 .when(when(self.writing_here(here))),

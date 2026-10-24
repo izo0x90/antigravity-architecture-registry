@@ -107,7 +107,10 @@ fn find_in_the_code_asks_the_graph_as_its_typed() {
     app.open_palette(Some(&find));
     frame(&ctx, &mut app, vec![]);
     frame(&ctx, &mut app, vec![egui::Event::Text("run".into())]);
-    assert_eq!(app.desk.graph().find_choices(), (Vec::new(), true), "the query went to the graph, which waits for answers");
+    frame(&ctx, &mut app, vec![]);
+    let asked: Vec<String> = sent(&app).into_iter().filter(|c| c.starts_with("GET /api/search?q=run&")).collect();
+    assert_eq!(asked.len(), 3, "the query went to the graph, which asks for symbols, files and lines: {asked:?}");
+    assert_eq!(app.desk.graph().find_choices(), (Vec::new(), Some(String::new())), "its rows still those of nothing typed: it waits for the answers");
     // The palette's own list is matched the same way as everywhere.
     let ranked = arch_search::rank("grph fnd", &["Graph · Find in the code", "Code · Reveal"], arch_search::Matching::shared());
     assert_eq!(ranked.first().map(|r| r.index), Some(0));
@@ -255,4 +258,18 @@ fn g_x_on_a_message_compares_its_turns_changes() {
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"g x"}"#).unwrap();
     frame(&ctx, &mut app, Vec::new());
     assert_eq!((app.desk.panels.focused_kind(), app.desk.shared.changes.comparison().clone()), (BufferKind::Changes, turn));
+}
+
+/// A panel's setting picker lists its choices as every list of choices
+/// does (the one list): the one chosen ticked, each with its description;
+/// picking another runs it.
+#[test]
+fn a_settings_picker_lists_its_choices_as_the_action_list_does_and_picks_one() {
+    let (ctx, mut app) = app_with_graph();
+    click_on(&ctx, &mut app, "calls");
+    let shown = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(shown.contains(&format!("{} calls\n", egui_phosphor::regular::CHECK)), "the one chosen, ticked: {shown}");
+    assert!(shown.contains("Who calls whom"), "each with its description: {shown}");
+    click_on(&ctx, &mut app, "data flow");
+    assert_eq!(app.desk.graph().nav.view, arch_graph::tree::ViewKind::DataFlow);
 }

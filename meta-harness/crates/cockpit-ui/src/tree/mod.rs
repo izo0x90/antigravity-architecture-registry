@@ -611,15 +611,13 @@ impl Navigable for TreeBuffer {
         if rows.is_empty() {
             return;
         }
-        let at = self.cursor_index(&rows);
+        // No cursor yet: the first move lands on the first row.
+        let go = if motion == Motion::Down && self.cursor_index(&rows).is_none() { Some(Go::First) } else { Go::of(motion, count) };
+        if let Some(go) = go {
+            self.go(go);
+            return;
+        }
         match motion {
-            Motion::Down if at.is_none() => self.go(Go::First),
-            Motion::Down => self.go(Go::Down(count)),
-            Motion::Up => self.go(Go::Up(count)),
-            Motion::HalfDown => self.go(Go::HalfDown(count)),
-            Motion::HalfUp => self.go(Go::HalfUp(count)),
-            Motion::First => self.go(Go::First),
-            Motion::Last => self.go(Go::Last),
             Motion::Line(n) => self.put_cursor(n.saturating_sub(1), Show::Middle),
             // h: fold the row, or step out to what contains it.
             Motion::Left => {
@@ -652,7 +650,7 @@ impl Navigable for TreeBuffer {
                     self.reveal(&target, Show::InView);
                 }
             }
-            Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
+            _ => {}
         }
     }
 
