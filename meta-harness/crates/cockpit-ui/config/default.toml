@@ -751,10 +751,6 @@ property = "text"
 max = 12
 item_buttons = "floating"
 
-# The changes view (git): context lines around each change and how many
-# more "more context" adds; how many files (and changed lines in all) open
-# by themselves; how often the list is read again while shown; from what
-# panel width "auto" shows changes side by side.
 # The faces text is drawn in: font packs installed on the UI server
 # (`meta-harness pack install <name>`), by name; empty: egui's own. Shipped:
 # jetbrains-mono, iosevka-term, commit-mono, monaspace-neon,
@@ -763,6 +759,10 @@ item_buttons = "floating"
 mono = ""
 text = ""
 
+# The changes view (git): context lines around each change and how many
+# more "more context" adds; how many files (and changed lines in all) open
+# by themselves; how often the list is read again while shown; from what
+# panel width "auto" shows changes side by side.
 [changes]
 context = 3
 more_context = 10

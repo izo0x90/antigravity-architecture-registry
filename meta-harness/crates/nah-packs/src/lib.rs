@@ -14,7 +14,7 @@ mod steps;
 pub mod template;
 
 pub use catalog::{Catalog, Distribution, Pack, Places, Timeouts};
-pub use engine::{HarnessLaunch, ServerLaunch, State, harness_launch, install, server_launch, state, tool_version};
+pub use engine::{HarnessLaunch, ServerLaunch, State, font_face, harness_launch, install, server_launch, state, tool_version};
 pub use lock::{Installed, Lock};
 pub use manifest::{Kind, Manifest, Provides};
 pub use platform::{PlatformDef, Platforms};
@@ -29,6 +29,10 @@ pub enum PackError {
     NotFound(String),
     #[error("pack '{0}' isn't installed (meta-harness pack install {0})")]
     NotInstalled(String),
+    #[error("pack '{pack}' is installed at another version: {reason} (meta-harness pack update {pack})")]
+    Outdated { pack: String, reason: String },
+    #[error("pack '{pack}' is broken: {reason} (meta-harness pack install {pack})")]
+    Broken { pack: String, reason: String },
     #[error("installing {pack}: {reason}")]
     Install { pack: String, reason: String },
     #[error("pack lock: {0}")]

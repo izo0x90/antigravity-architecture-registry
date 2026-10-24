@@ -190,7 +190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let stopping = meta_harness::modules::Shutdown::default();
         let home = meta_harness::modules::HomeState { gate: gate.clone(), stopping: stopping.clone(), home: meta_harness::home::Home::start(state.clone(), here, notify, false)? };
         let server = meta_harness::modules::ServerState { gate: gate.clone(), shutdown: stopping.clone() };
-        let page = meta_harness::modules::CockpitState { gate, stopping, state, remote: Arc::default(), packs_at: std::env::current_dir()? };
+        let page = meta_harness::modules::CockpitState { gate, stopping, state, remote: Arc::default(), packs_at: meta_harness::startup::repo_root()? };
         info!("No project here: the cockpit and home. Open it: {base_url}{cockpit_path}");
         meta_harness::startup::serve(listener, create_router(&[&server, &page, &home]), None, server.shutdown.clone()).await?;
         info!("Meta-harness stopped.");

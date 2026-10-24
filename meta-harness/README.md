@@ -179,6 +179,7 @@ folder with a `pack.toml`.
 | `harness` | an agent harness: how it's started (program, arguments, environment, variables it doesn't get) and its settings (see [Harnesses](#harnesses)) | `antigravity-acp`, `claude-code` |
 | `language` | how to read a language (`syntax.toml`), its colours (`highlights.scm`), and its server | `rust`, `python`, `typescript` |
 | `server` | a language server: how to start it, what to send it, its time limits, where its caches go | `rust-analyzer`, `typescript-server`, `basedpyright` |
+| `font` | a face for the cockpit's text (its release, the one file kept) | `jetbrains-mono`, `iosevka-term`, `commit-mono`, `monaspace-neon`, `monaspace-krypton`, `geist-mono`, `maple-mono` |
 
 A manifest says:
 
@@ -223,13 +224,14 @@ knows kinds of steps, not tools. Every URL, version, path, checksum and
 platform name is in pack or config files. It installs into a staging
 folder, swaps it in, and records it in a lock file.
 
-Fonts are packs too (kind `font`): `meta-harness pack install
-jetbrains-mono` (or `iosevka-term`, `commit-mono`, `monaspace-neon`,
-`monaspace-krypton`, `geist-mono`, `maple-mono`) on the server the cockpit
-is opened from, then name it in the cockpit's config (`~/.config/nah/ui.toml`):
-`[fonts] mono = "jetbrains-mono"` (and `text` for the rest). Empty: egui's
-own faces. The server serves an installed face to the cockpit; one that
-can't be had is said, and egui's own is used.
+A font pack is installed on the server the cockpit is opened from
+(`meta-harness pack install jetbrains-mono`), then named in the cockpit's
+config (`~/.config/nah/ui.toml`): `[fonts] mono = "jetbrains-mono"` (and
+`text` for the rest). Empty: egui's own faces. The server serves the
+installed face (asked again, it isn't sent again unless reinstalled); one
+that can't be had (not installed, outdated, broken) is said with the
+command that fixes it, and egui's own is used. One face per pack: egui
+draws no bold or italic of its own.
 
 Packs come from `packs/index.toml`, in order: the ones shipped in the
 binary, then `<project>/.nah/packs/`, then `nah/packs/` in your config

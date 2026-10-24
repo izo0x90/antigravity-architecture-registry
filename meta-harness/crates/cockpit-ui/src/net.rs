@@ -282,8 +282,12 @@ impl NetClient {
         ctx: egui::Context,
         on_done: impl FnOnce(NetResult<T>) + Send + 'static,
     ) {
-        let at = format!("{}{path}", self.prefix);
-        self.call_at(method, &at, body, ctx, on_done);
+        self.call_at(method, &self.at(path), body, ctx, on_done);
+    }
+
+    /// `path` on this desk's server.
+    fn at(&self, path: &str) -> String {
+        format!("{}{path}", self.prefix)
     }
 
     /// The same, to `path` on home itself (whichever server the desk's is).
@@ -295,7 +299,7 @@ impl NetClient {
         ctx: egui::Context,
         on_done: impl FnOnce(NetResult<T>) + Send + 'static,
     ) {
-        self.call_bytes(method, path, body, ctx, move |r| {
+        self.call_bytes(method, path, body, "application/json", ctx, move |r| {
             on_done(r.and_then(|bytes| {
                 let bytes: &[u8] = if bytes.is_empty() { b"null" } else { &bytes };
                 serde_json::from_slice::<T>(bytes).map_err(|e| NetError::other(format!("Bad response: {e}")))
@@ -303,8 +307,9 @@ impl NetClient {
         });
     }
 
-    /// The same, the answer's bytes as they came (a font, say).
-    fn call_bytes(&self, method: &str, path: &str, body: Option<serde_json::Value>, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<u8>>) + Send + 'static) {
+    /// The same, the answer's bytes as they came (a font, say), `accept`
+    /// saying what's wanted.
+    fn call_bytes(&self, method: &str, path: &str, body: Option<serde_json::Value>, accept: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<u8>>) + Send + 'static) {
         #[cfg(test)]
         {
             self.sent.lock().unwrap().push(format!("{method} {path}"));
@@ -324,7 +329,7 @@ impl NetClient {
                 r
             }
         };
-        request.headers.insert("Accept", "application/json");
+        request.headers.insert("Accept", accept);
         self.fetch(request, move |result| {
             let outcome = match result {
                 Ok(resp) if resp.ok => Ok(resp.bytes),
@@ -575,11 +580,9 @@ impl NetClient {
         self.call::<UiConfigFile>("GET", "/api/ui/config", None, ctx, move |r| on_done(r.map(|f| f.text)));
     }
 
-    /// Font pack `name`'s face `style` (`regular`, `bold`), as the server
-    /// has it installed.
-    pub fn font_face(&self, name: &str, style: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<u8>>) + Send + 'static) {
-        let path = format!("{}/api/ui/fonts/{}/{}", self.prefix, urlencoding::encode(name), urlencoding::encode(style));
-        self.call_bytes("GET", &path, None, ctx, on_done);
+    /// Font pack `name`'s face, as the server has it installed.
+    pub fn font_face(&self, name: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<u8>>) + Send + 'static) {
+        self.call_bytes("GET", &self.at(&format!("/api/ui/fonts/{}", urlencoding::encode(name))), None, "font/ttf, font/otf", ctx, on_done);
     }
 
     /// The cockpit's state as it last saved it (none before it ever has).

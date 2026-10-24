@@ -355,11 +355,12 @@ pub struct Faces {
     pub text: Option<Face>,
 }
 
-/// One face: its pack's name and its file's bytes.
+/// One face: its pack's name and the face (shared with egui's fonts, not
+/// copied into them).
 #[derive(Clone, Debug)]
 pub struct Face {
     pub name: String,
-    pub bytes: std::sync::Arc<Vec<u8>>,
+    pub data: std::sync::Arc<egui::FontData>,
 }
 
 /// The cockpit's fonts: egui's defaults, led by `faces` where given, plus
@@ -370,7 +371,7 @@ pub fn font_definitions(faces: &Faces) -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
     for (face, family) in [(&faces.mono, egui::FontFamily::Monospace), (&faces.text, egui::FontFamily::Proportional)] {
         if let Some(face) = face {
-            fonts.font_data.insert(face.name.clone(), egui::FontData::from_owned(face.bytes.as_ref().clone()).into());
+            fonts.font_data.insert(face.name.clone(), face.data.clone());
             fonts.families.entry(family).or_default().insert(0, face.name.clone());
         }
     }

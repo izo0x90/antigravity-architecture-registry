@@ -31,7 +31,7 @@ pub struct Manifest {
     /// Languages: the files describing the language.
     #[serde(default)]
     pub language: Option<LanguageFiles>,
-    /// Fonts: the family and its faces' files.
+    /// Fonts: the face's file.
     #[serde(default)]
     pub font: Option<FontFiles>,
 }
@@ -337,27 +337,13 @@ pub struct LanguageFiles {
     pub server: Option<String>,
 }
 
-/// A font's faces: files the install keeps (its `holds`).
+/// A font: the face the cockpit draws in, a file its install keeps (in
+/// its `holds`). One face: egui draws no bold or italic of its own.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FontFiles {
-    /// Its name, in words.
-    pub family: String,
-    /// The regular face (TTF or OTF), a path in the install folder.
-    pub regular: String,
-    #[serde(default)]
-    pub bold: Option<String>,
-}
-
-impl FontFiles {
-    /// A face's file by its style (`regular`, `bold`).
-    pub fn face(&self, style: &str) -> Option<&str> {
-        match style {
-            "regular" => Some(&self.regular),
-            "bold" => self.bold.as_deref(),
-            _ => None,
-        }
-    }
+    /// The face (TTF or OTF), a path in the install folder.
+    pub face: String,
 }
 
 /// Placeholders a server contract may use.
@@ -405,13 +391,11 @@ impl Manifest {
         has(self.provides.is_some(), "provides", provides)?;
         has(self.language.is_some(), "language", language)?;
         has(self.font.is_some(), "font", font)?;
-        // A font's faces are what its install keeps, on every platform.
+        // A font's face is what its install keeps, on every platform.
         if let Some(font) = &self.font {
             for (i, install) in self.install.iter().enumerate() {
-                for face in std::iter::once(&font.regular).chain(&font.bold) {
-                    if !install.holds.contains(face) {
-                        return Err(fail(format!("install[{i}]: holds doesn't keep the face {face}")));
-                    }
+                if !install.holds.contains(&font.face) {
+                    return Err(fail(format!("install[{i}]: holds doesn't keep the face {}", font.face)));
                 }
             }
         }

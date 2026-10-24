@@ -517,6 +517,12 @@ impl eframe::App for CockpitApp {
 }
 
 impl CockpitApp {
+    /// Before the first frame: the fonts it draws in (egui's own and the
+    /// icons, until the config names font packs).
+    pub fn start_fonts(&mut self, ctx: &egui::Context) {
+        self.fonts.start(ctx);
+    }
+
     /// One UI frame.
     pub fn frame(&mut self, ctx: &egui::Context) {
         self.frame_actions.borrow_mut().take();

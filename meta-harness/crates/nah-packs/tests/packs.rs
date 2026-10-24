@@ -237,3 +237,72 @@ fn a_check_compares_the_tools_version_with_the_packs_range() {
     std::fs::remove_file(&tool).unwrap();
     assert_eq!(nah_packs::state(&ready, &lock, "fake-server").unwrap(), State::Missing);
 }
+
+fn font(version: &str, url: &Path, sum: &str) -> String {
+    format!(
+        r#"[pack]
+name = "fake-font"
+kind = "font"
+version = "{version}"
+description = "A font for tests."
+
+[tool]
+name = "Fake Mono"
+version = "1.0.0"
+supports = ">=1.0.0, <2.0.0"
+
+[[install]]
+platforms = ["linux-x86_64", "linux-arm64", "linux-arm64-16k", "macos-arm64", "macos-x86_64"]
+holds = ["ttf/Fake-Regular.ttf"]
+[[install.steps]]
+download = {{ url = "file://{url}", sha256 = "{sum}", unpack = "zip", extract = ["ttf/Fake-Regular.ttf"] }}
+
+[font]
+face = "ttf/Fake-Regular.ttf"
+"#,
+        url = url.display()
+    )
+}
+
+/// A font pack keeps the face it names; its face is had once it's
+/// installed at this version with its files there, and each other state
+/// says what fixes it.
+#[test]
+fn a_font_packs_face_is_its_installs_file_once_it_is_ready() {
+    let w = world();
+    let downloads = w.places.home.join("downloads");
+    std::fs::create_dir_all(&downloads).unwrap();
+    let archive = downloads.join("font.zip");
+    let sum = zip(&archive, &[("ttf/Fake-Regular.ttf", "a face"), ("ttf/Fake-Bold.ttf", "not kept")]);
+    let good = font("1.0.0", &archive, &sum);
+
+    let with = |from: &str, to: &str| good.replacen(from, to, 1);
+    assert!(bad(&w, &with("[font]\nface = \"ttf/Fake-Regular.ttf\"\n", "")).contains("font packs need [font]"));
+    assert!(bad(&w, &with("holds = [\"ttf/Fake-Regular.ttf\"]", "holds = []")).contains("holds doesn't keep the face ttf/Fake-Regular.ttf"));
+    assert!(bad(&w, &with("face = ", "family = \"Fake\"\nface = ")).contains("unknown field"));
+    let e = bad(&w, &harness("1.0.0", &archive, &sum).replace("[provides]", "[font]\nface = \"x\"\n\n[provides]"));
+    assert!(e.contains("harness packs have no [font]"), "{e}");
+
+    let catalog = load(&w, &[("font/fake/pack.toml", &good)]).unwrap();
+    let platform = catalog.platforms.current().unwrap().clone();
+    let lock = || Lock::read(&catalog.lock_path).unwrap();
+    let err = nah_packs::font_face(&catalog, &lock(), "fake-font").unwrap_err();
+    assert!(matches!(err, PackError::NotInstalled(_)) && err.to_string().contains("meta-harness pack install fake-font"), "{err}");
+
+    let installed = nah_packs::install(&catalog, "fake-font", &platform).unwrap();
+    let face = nah_packs::font_face(&catalog, &lock(), "fake-font").unwrap();
+    assert_eq!((std::fs::read_to_string(&face).unwrap(), face.clone()), ("a face".to_owned(), installed.dest.join("ttf/Fake-Regular.ttf")));
+    assert!(!installed.dest.join("ttf/Fake-Bold.ttf").exists(), "only what it names is kept");
+
+    // A newer pack not installed yet: outdated, not the old folder's file.
+    let newer = load(&w, &[("font/fake/pack.toml", &font("1.1.0", &archive, &sum))]).unwrap();
+    let err = nah_packs::font_face(&newer, &lock(), "fake-font").unwrap_err();
+    assert!(matches!(err, PackError::Outdated { .. }) && err.to_string().contains("meta-harness pack update fake-font"), "{err}");
+    // Its file gone: broken.
+    std::fs::remove_file(&face).unwrap();
+    let err = nah_packs::font_face(&catalog, &lock(), "fake-font").unwrap_err();
+    assert!(matches!(err, PackError::Broken { .. }) && err.to_string().contains("Fake-Regular.ttf is missing"), "{err}");
+    // Not a font.
+    let harnesses = load(&w, &[("harness/fake/pack.toml", &harness("1.0.0", &archive, &sum))]).unwrap();
+    assert!(nah_packs::font_face(&harnesses, &lock(), "fake-harness").unwrap_err().to_string().contains("it isn't a font pack"));
+}

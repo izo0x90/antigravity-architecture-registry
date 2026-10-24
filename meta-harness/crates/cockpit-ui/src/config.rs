@@ -54,7 +54,6 @@ pub struct UiConfig {
     pub panels: PanelsUi,
     pub changes: ChangesUi,
     /// The faces text is drawn in.
-    #[serde(default)]
     pub fonts: FontsUi,
     /// Every state's word, icon and colour.
     #[serde(default)]
@@ -90,7 +89,6 @@ impl Default for PanelsUi {
 /// The faces text is drawn in: font packs the UI server has installed, by
 /// name (`meta-harness pack install jetbrains-mono`); empty: egui's own.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
 pub struct FontsUi {
     /// Code, terminals, keys: the monospace face.
     pub mono: String,

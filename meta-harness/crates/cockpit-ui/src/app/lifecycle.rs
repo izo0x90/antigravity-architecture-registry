@@ -27,10 +27,11 @@ impl CockpitApp {
         }
         self.desk.shared.settings.set(crate::shared::Settings::of(&self.config));
         self.desk.shared.user.set(self.config.user.name.clone());
-        if let Some(note) = self.fonts.tend(&self.config.fonts, &self.home, ctx) {
+        if let Some(note) = self.fonts.tend(ctx) {
             self.note = Some(note);
         }
         if std::mem::take(&mut self.theme_dirty) {
+            self.fonts.want(&self.config.fonts, &self.home, ctx);
             crate::theme::set(self.config.theme.clone(), ctx);
             crate::graph_style::set(self.config.graph_style.clone());
             crate::status::set(self.config.status.clone());

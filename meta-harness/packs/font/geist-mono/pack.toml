@@ -10,15 +10,13 @@ name = "Geist Mono"
 version = "1.8.2"
 supports = ">=1.8.0, <2.0.0"
 
-# A font is the same on every platform: its release, two faces kept.
+# A font is the same on every platform: its release, its regular face kept.
 [[install]]
 platforms = ["linux-x86_64", "linux-arm64", "linux-arm64-16k", "macos-arm64", "macos-x86_64"]
-holds = ["geist-font/GeistMono/ttf/GeistMono-Regular.ttf", "geist-font/GeistMono/ttf/GeistMono-Bold.ttf"]
+holds = ["geist-font/GeistMono/ttf/GeistMono-Regular.ttf"]
 
 [[install.steps]]
-download = { url = "https://github.com/vercel/geist-font/releases/download/v1.8.2/geist-font-v1.8.2.zip", sha256 = "43ffb66912b1c49e40c371d96e86b3b3dab42db83eb2d0c8a17321210394c4c7", unpack = "zip", extract = ["geist-font/GeistMono/ttf/GeistMono-Regular.ttf", "geist-font/GeistMono/ttf/GeistMono-Bold.ttf"] }
+download = { url = "https://github.com/vercel/geist-font/releases/download/v1.8.2/geist-font-v1.8.2.zip", sha256 = "43ffb66912b1c49e40c371d96e86b3b3dab42db83eb2d0c8a17321210394c4c7", unpack = "zip", extract = ["geist-font/GeistMono/ttf/GeistMono-Regular.ttf"] }
 
 [font]
-family = "Geist Mono"
-regular = "geist-font/GeistMono/ttf/GeistMono-Regular.ttf"
-bold = "geist-font/GeistMono/ttf/GeistMono-Bold.ttf"
+face = "geist-font/GeistMono/ttf/GeistMono-Regular.ttf"

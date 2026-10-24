@@ -137,16 +137,6 @@ fn harness_instances(catalog: &Catalog) -> Vec<String> {
     catalog.of_kind(nah_packs::Kind::Harness).filter_map(|pack| pack.manifest.provides.as_ref().map(|p| instance_of(pack, p))).collect()
 }
 
-/// Font pack `name`'s face `style` (`regular`, `bold`), installed: its file.
-pub fn font_face(catalog: &Catalog, name: &str, style: &str) -> Result<PathBuf, String> {
-    let pack = catalog.get(name).map_err(|e| e.to_string())?;
-    let font = pack.manifest.font.as_ref().ok_or_else(|| format!("{name} isn't a font"))?;
-    let face = font.face(style).ok_or_else(|| format!("{name} has no {style} face"))?;
-    let lock = Lock::read(&catalog.lock_path).map_err(|e| e.to_string())?;
-    let installed = lock.packs.get(name).ok_or_else(|| format!("{name} isn't installed (meta-harness pack install {name})"))?;
-    Ok(installed.dest.join(face))
-}
-
 /// The instance a harness pack is (its own name for it, else the pack's).
 fn instance_of(pack: &nah_packs::Pack, provides: &nah_packs::Provides) -> String {
     provides.instance.clone().unwrap_or_else(|| pack.name().to_owned())

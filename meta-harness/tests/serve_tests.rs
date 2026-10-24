@@ -30,15 +30,9 @@ impl Server {
         std::fs::write(&build, b"").unwrap();
         std::fs::write(page.join("index.html"), "<title>NAH</title>").unwrap();
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let child = std::process::Command::new(env!("CARGO_BIN_EXE_meta-harness"))
+        let child = Self::command(home.path())
             .args(args)
             .args(["--listen", &format!("127.0.0.1:{port}")])
-            .current_dir(&place)
-            .env("HOME", home.path())
-            .env("XDG_DATA_HOME", home.path().join("data"))
-            .env("XDG_CONFIG_HOME", home.path().join("config"))
-            .env("NAH_REPO_ROOT", &place)
-            .env("NAH_COCKPIT_TOKEN", SECRET)
             .env("STATIC_DIR", &page)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -52,6 +46,33 @@ impl Server {
             std::thread::sleep(Duration::from_millis(100));
         }
         server
+    }
+
+    /// The program as the user runs it in `home`'s place.
+    fn command(home: &Path) -> std::process::Command {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_meta-harness"));
+        command
+            .current_dir(home.join("place"))
+            .env("HOME", home)
+            .env("XDG_DATA_HOME", home.join("data"))
+            .env("XDG_CONFIG_HOME", home.join("config"))
+            .env("NAH_REPO_ROOT", home.join("place"))
+            .env("NAH_COCKPIT_TOKEN", SECRET);
+        command
+    }
+
+    /// A GET from the cockpit (with its cookie and `headers`): the status,
+    /// the headers, the body.
+    fn get(&self, path: &str, headers: &str) -> (u16, String, Vec<u8>) {
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
+        write!(stream, "GET {path} HTTP/1.1\r\nHost: localhost\r\nCookie: nah_cockpit={SECRET}\r\n{headers}Connection: close\r\n\r\n").unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+        let mut answer = Vec::new();
+        let _ = stream.read_to_end(&mut answer);
+        let split = answer.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        let head = String::from_utf8_lossy(&answer[..split]).into_owned();
+        let status = head.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+        (status, head, answer[split + 4..].to_vec())
     }
 
     fn status(&self, path: &str) -> u16 {
@@ -132,4 +153,59 @@ fn the_servers_a_home_links_to_are_kept_from_the_command_line() {
     assert!(run(&["remove", "cloud"]).status.success());
     let again = run(&["remove", "cloud"]);
     assert!(!again.status.success() && String::from_utf8_lossy(&again.stderr).contains("no server named"));
+}
+
+/// A font pack's face, as the cockpit asks for it: before it's installed,
+/// what installs it; installed (here, as a project's own pack), its file;
+/// asked again unchanged, "not modified" (not sent again).
+#[test]
+fn a_font_packs_face_is_served_once_installed_and_not_sent_again_unchanged() {
+    use sha2::Digest;
+    let server = Server::start(false, &["--no-project"]);
+    let face = b"a face, standing in for a font's bytes".to_vec();
+    let file = server.home.path().join("Fake-Regular.ttf");
+    std::fs::write(&file, &face).unwrap();
+    let sum: String = sha2::Sha256::digest(&face).iter().map(|b| format!("{b:02x}")).collect();
+    let pack = server.place().join(".nah/packs/fake-font");
+    std::fs::create_dir_all(&pack).unwrap();
+    let manifest = format!(
+        r#"[pack]
+name = "fake-font"
+kind = "font"
+version = "1.0.0"
+description = "A font for tests."
+
+[tool]
+name = "Fake Mono"
+version = "1.0.0"
+supports = ">=1.0.0, <2.0.0"
+
+[[install]]
+platforms = ["linux-x86_64", "linux-arm64", "linux-arm64-16k", "macos-arm64", "macos-x86_64"]
+holds = ["Fake-Regular.ttf"]
+[[install.steps]]
+download = {{ url = "file://{}", sha256 = "{sum}", save_as = "Fake-Regular.ttf" }}
+
+[font]
+face = "Fake-Regular.ttf"
+"#,
+        file.display()
+    );
+    std::fs::write(pack.join("pack.toml"), manifest).unwrap();
+    let (status, _, body) = server.get("/api/ui/fonts/fake-font", "");
+    let said = String::from_utf8_lossy(&body);
+    assert_eq!(status, 404, "{said}");
+    assert!(said.contains("meta-harness pack install fake-font"), "{said}");
+
+    let installed = Server::command(server.home.path()).args(["pack", "install", "fake-font"]).output().unwrap();
+    assert!(installed.status.success(), "{}", String::from_utf8_lossy(&installed.stderr));
+    let (status, head, body) = server.get("/api/ui/fonts/fake-font", "");
+    assert_eq!((status, body), (200, face));
+    let header = |name: &str| head.lines().find_map(|l| l.split_once(':').filter(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v.trim().to_owned()));
+    assert_eq!(header("content-type").as_deref(), Some("font/ttf"));
+    assert_eq!(header("cache-control").as_deref(), Some("no-cache"), "asked again each time it's used");
+    let changed = header("last-modified").expect("when it last changed");
+    let (status, _, body) = server.get("/api/ui/fonts/fake-font", &format!("If-Modified-Since: {changed}\r\n"));
+    assert_eq!((status, body.len()), (304, 0), "unchanged: not sent again");
+    assert_eq!(server.get("/api/ui/fonts/rust", "").0, 400, "not a font");
 }

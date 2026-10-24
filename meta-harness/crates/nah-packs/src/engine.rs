@@ -461,6 +461,23 @@ pub fn harness_launch(catalog: &Catalog, lock: &Lock, name: &str) -> Result<Harn
     fill_launch(pack, launch, &installed.dest)
 }
 
+/// Font pack `name`'s face, installed: its file, once the pack is ready
+/// (installed at this version, what its install keeps all there).
+pub fn font_face(catalog: &Catalog, lock: &Lock, name: &str) -> Result<PathBuf, PackError> {
+    let pack = catalog.get(name)?;
+    let font = pack.manifest.font.as_ref().ok_or_else(|| PackError::Manifest { pack: name.to_owned(), reason: "it isn't a font pack".into() })?;
+    let outdated = |reason: String| PackError::Outdated { pack: name.to_owned(), reason };
+    match state(catalog, lock, name)? {
+        State::Ready { .. } => {}
+        State::Missing => return Err(PackError::NotInstalled(name.to_owned())),
+        State::Outdated { installed, available } => return Err(outdated(format!("{installed} installed, {available} available"))),
+        State::OutOfRange { found, supports } => return Err(outdated(format!("{found} isn't in {supports}"))),
+        State::Broken(reason) => return Err(PackError::Broken { pack: name.to_owned(), reason }),
+    }
+    let installed = lock.packs.get(name).ok_or_else(|| PackError::NotInstalled(name.to_owned()))?;
+    Ok(installed.dest.join(&font.face))
+}
+
 /// The name of the user this runs as.
 fn current_user() -> Result<String, String> {
     #[cfg(unix)]

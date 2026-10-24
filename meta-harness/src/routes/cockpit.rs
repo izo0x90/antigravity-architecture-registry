@@ -15,7 +15,7 @@ use crate::cockpit::{Needs, can};
 pub(crate) fn routes() -> Router<CockpitState> {
     Router::new()
         .route("/api/ui/config", get(ui_config_handler))
-        .route("/api/ui/fonts/{name}/{style}", get(font_face))
+        .route("/api/ui/fonts/{name}", get(font_face))
         .route("/api/ui/state", get(get_ui_state).put(put_ui_state))
         .route("/api/ui/drafts", get(get_drafts))
         .route("/api/ui/drafts/{slot}", put(put_draft))
@@ -80,17 +80,44 @@ async fn ui_config_handler(_: Needs<can::ViewRead>) -> Result<Json<serde_json::V
     }
 }
 
-/// An installed font pack's face, for the cockpit to draw its text in.
-async fn font_face(_: Needs<can::ViewRead>, State(state): State<CockpitState>, Path((name, style)): Path<(String, String)>) -> Result<impl axum::response::IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let said = |status: StatusCode, why: String| (status, Json(serde_json::json!({ "error": why })));
+/// A font face that can't be served: why, as the pack engine says.
+struct FaceFailed(nah_packs::PackError);
+
+impl axum::response::IntoResponse for FaceFailed {
+    fn into_response(self) -> axum::response::Response {
+        use nah_packs::PackError as E;
+        let status = match &self.0 {
+            E::NotFound(_) | E::NotInstalled(_) => StatusCode::NOT_FOUND,
+            // Asked of a pack that isn't a font.
+            E::Manifest { .. } => StatusCode::BAD_REQUEST,
+            // There, but not as this server's packs say it should be.
+            E::Outdated { .. } => StatusCode::CONFLICT,
+            E::Broken { .. } | E::Config(_) | E::Lock(_) | E::Install { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (status, Json(serde_json::json!({ "error": self.0.to_string() }))).into_response()
+    }
+}
+
+/// An installed font pack's face, for the cockpit to draw its text in. The
+/// file as `ServeFile` serves it (its type, its last change: asked again,
+/// it's "not modified" unless the pack was installed again since), checked
+/// with the browser each time it's asked.
+async fn font_face(_: Needs<can::ViewRead>, State(state): State<CockpitState>, Path(name): Path<String>, request: axum::extract::Request) -> Result<axum::response::Response, FaceFailed> {
+    use axum::response::IntoResponse;
+    use tower::ServiceExt;
     let at = state.packs_at.clone();
-    let file = tokio::task::spawn_blocking(move || crate::packs::catalog(&at).map_err(|e| e.to_string()).and_then(|catalog| crate::packs::font_face(&catalog, &name, &style)))
-        .await
-        .map_err(|e| said(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|why| said(StatusCode::NOT_FOUND, why))?;
-    let bytes = tokio::fs::read(&file).await.map_err(|e| said(StatusCode::NOT_FOUND, format!("{}: {e}", file.display())))?;
-    let kind = if file.extension().is_some_and(|e| e.eq_ignore_ascii_case("otf")) { "font/otf" } else { "font/ttf" };
-    Ok(([(axum::http::header::CONTENT_TYPE, kind)], bytes))
+    let file = tokio::task::spawn_blocking(move || {
+        let catalog = crate::packs::catalog(&at)?;
+        let lock = nah_packs::Lock::read(&catalog.lock_path)?;
+        nah_packs::font_face(&catalog, &lock, &name)
+    })
+    .await
+    .map_err(|e| FaceFailed(nah_packs::PackError::Config(e.to_string())))?
+    .map_err(FaceFailed)?;
+    let Ok(served) = tower_http::services::ServeFile::new(file).oneshot(request).await;
+    let mut served = served.map(axum::body::Body::new).into_response();
+    served.headers_mut().insert(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-cache"));
+    Ok(served)
 }
 
 /// A one-time ticket to open a socket with (`/ws/events`, `/ws/cockpit`).
