@@ -235,7 +235,7 @@ impl ActionProvider for QueueState {
             out.push(f("queue.start", "Start working through the plan", "Agents take the plan's components one job at a time, in order", Q::Start));
         }
         if let Some(job) = self.job() {
-            // Always listed (the key sheet shows them); they apply to some jobs.
+            // Always listed (`?` shows them); they apply to some jobs.
             let applies = |yes: bool| if yes { When::Always } else { When::Unavailable };
             out.push(f("queue.approve", "Approve this component's design", "Its job goes on from the design to building it", Q::Approve).importance(PRIMARY).when(applies(job.state == JobState::AwaitingApproval)).on_item(Style::Button, format!("Approve {:?}", job.kind.goal()), Some(egui_phosphor::regular::CHECK)));
             out.push(f("queue.retry", "Give this job another round", "It runs again, with what it found the last time", Q::Retry).importance(PRIMARY).when(applies(job.state == JobState::Failed)).on_item(Style::Button, "Retry", Some(egui_phosphor::regular::ARROW_CLOCKWISE)));

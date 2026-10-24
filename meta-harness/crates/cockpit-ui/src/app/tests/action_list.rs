@@ -66,7 +66,8 @@ fn everything_lists_the_keys_of_where_it_was_opened_from_and_nothing_left_over()
     frame(&ctx, &mut app, key("i"));
     assert!(matches!(app.input_mode, InputMode::Insert { .. }));
     // The top bar's button for the action list.
-    let button = drawn_containing(&frame(&ctx, &mut app, vec![]), "Actions  :")[0].center();
+    let button = *drawn_containing(&frame(&ctx, &mut app, vec![]), "Action list  :").first().expect("the top bar's button");
+    let button = button.center();
     let tap = |pressed| egui::Event::PointerButton { pos: button, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
     frame(&ctx, &mut app, vec![egui::Event::PointerMoved(button)]);
     frame(&ctx, &mut app, vec![tap(true)]);

@@ -756,9 +756,8 @@ impl NetClient {
         self.call("GET", &format!("/api/graph/details/{}?source={}", urlencoding::encode(key), source_param(source)), None, ctx, on_done);
     }
 
-    /// Symbols, files or lines matching `query` (in the code, or with a plan).
-    /// Symbols, files or lines matching `query`; only in the files
-    /// `changed` changed, when given.
+    /// Symbols, files or lines matching `query` (in the code, or with a
+    /// plan); only in the files `changed` changed, when given.
     #[allow(clippy::too_many_arguments)]
     pub fn search(
         &self,
@@ -774,7 +773,6 @@ impl NetClient {
         self.call("GET", &format!("/api/search?q={}&kind={}&limit={limit}&source={}{changed}", urlencoding::encode(query), kind.name(), source_param(source)), None, ctx, on_done);
     }
 
-    /// A file's text and its analysis, in one answer.
     /// The files `comparison` changes (a page), with their counts.
     pub fn changes(&self, comparison: &harness_contracts::changes::Comparison, offset: usize, limit: usize, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::changes::ChangeList>) + Send + 'static) {
         let path = format!("/api/changes?from={}&to={}&offset={offset}&limit={limit}", urlencoding::encode(&comparison.from.to_string()), urlencoding::encode(&comparison.to.to_string()));

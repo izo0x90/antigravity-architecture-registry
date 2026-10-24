@@ -42,7 +42,7 @@ impl CockpitApp {
             .map(|(key, ..)| {
                 let name = self.group_name(&[key], here.kind);
                 let keys = crate::keymap::local().leader_hint(&[key]);
-                crate::hosted::GroupButton { key, tip: format!("{name}: its actions ({keys})"), keys, name, asks: (MENU.to_owned(), Some(key.to_string())) }
+                crate::hosted::GroupButton { key, tip: format!("{name} ({keys})\nIts menu: what it holds about where it is"), keys, name, asks: (MENU.to_owned(), Some(key.to_string())) }
             })
             .collect()
     }
@@ -59,7 +59,7 @@ impl CockpitApp {
     /// The top bar's button for every menu: the leader's own (its root).
     pub(in crate::app) fn every_menu(&self) -> crate::hosted::GroupButton {
         let keys = self.config.keymap.leader.label();
-        crate::hosted::GroupButton { key: ' ', name: "Menus".into(), tip: format!("Every menu, as the leader opens them ({keys})"), keys, asks: (MENU.to_owned(), None) }
+        crate::hosted::GroupButton { key: ' ', name: "Menus".into(), tip: format!("Menus ({keys})\nEvery menu, as the leader opens them"), keys, asks: (MENU.to_owned(), None) }
     }
 
     /// The which-key menu, opened (the leader's key, or a group's button):
@@ -95,7 +95,9 @@ impl CockpitApp {
         let mut back_to: Option<usize> = None;
 
         egui::Area::new(egui::Id::new("which_key_floating_hud")).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0)).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
-            ui.set_max_width(hud_w);
+            // Its width from its first pass (its measuring one): anchored by
+            // its middle, it's where it stays from the first frame shown.
+            ui.set_width(hud_w);
             Frame::NONE.fill(colors().overlay).stroke(Stroke::new(crate::theme::look().line_thin, colors().focus)).corner_radius(crate::theme::look().radius_xl).inner_margin(crate::theme::margin2(crate::theme::look().space_xl, crate::theme::look().space_sm)).show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     for (depth, part) in &path {
@@ -139,7 +141,11 @@ impl CockpitApp {
                             };
                             // What it does and its keys (hover, or a finger held on it).
                             let tip = format!("{label} ({})\n{detail}", crate::keymap::local().leader_hint(&path));
-                            ui.allocate_ui(egui::vec2(200.0, 22.0), |ui| {
+                            // Each entry's cell its whole size in every pass (its
+                            // measuring one too: the menu doesn't move once shown).
+                            let cell = egui::vec2(200.0, 22.0);
+                            ui.allocate_ui(cell, |ui| {
+                                ui.set_min_size(cell);
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 4.0;
                                     // A bright pill takes the text meant for bright fills.

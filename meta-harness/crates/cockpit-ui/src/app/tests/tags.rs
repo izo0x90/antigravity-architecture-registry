@@ -420,9 +420,10 @@ fn the_palette_keeps_its_place_and_size_while_typing_and_whatever_its_rows_say()
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag: long });
     frame(&ctx, &mut app, vec![]);
     let rect = |ctx: &egui::Context| crate::palette::Palette::drawn(ctx).expect("the palette is drawn");
-    // Every picker: all actions, a search (tags), a choice whose rows say a lot.
-    // From a list to a text field (go to line), it stays as tall.
-    for (open, typed) in [(":", "tagwhat"), ("M", "fl"), ("gT", "fl\n"), (":", "go to line or\n")] {
+    // Every picker: all actions, everything (its titles; switched with
+    // Tab), a search (tags), a choice whose rows say a lot. From a list to
+    // a text field (go to line), it stays as tall.
+    for (open, typed) in [(":", "tagwhat"), ("?", "sign\t"), (":", "\tsign"), ("M", "fl"), ("gT", "fl\n"), (":", "go to line or\n")] {
         for _ in 0..2 {
             frame(&ctx, &mut app, press(egui::Key::Escape, false));
         }
@@ -430,7 +431,12 @@ fn the_palette_keeps_its_place_and_size_while_typing_and_whatever_its_rows_say()
         frame(&ctx, &mut app, vec![]);
         let first = rect(&ctx);
         for c in typed.chars() {
-            frame(&ctx, &mut app, if c == '\n' { press(egui::Key::Enter, false) } else { key(&c.to_string()) });
+            let pressed = match c {
+                '\n' => press(egui::Key::Enter, false),
+                '\t' => press(egui::Key::Tab, false),
+                _ => key(&c.to_string()),
+            };
+            frame(&ctx, &mut app, pressed);
             frame(&ctx, &mut app, vec![]);
             assert_eq!(rect(&ctx), first, "{open} then {typed:?} ({c:?}, palette open: {}): the same place and size", app.palette.is_open());
         }

@@ -205,11 +205,11 @@ impl PickList {
         picked
     }
 
-    /// A key's move over `len` rows, by the views' rules; the list's own:
-    /// one down from the last goes round to the first, one up from the
-    /// first to the last (unless scrolled by hand since: then from what
-    /// shows, as every view moves).
-    /// The rows it stops on are `rows` (all but the headings).
+    /// A key's move over the rows it stops on (`rows`: all but the
+    /// headings), by the views' rules; the list's own: one down from the
+    /// last goes round to the first, one up from the first to the last
+    /// (unless scrolled by hand since: then from what shows, as every view
+    /// moves).
     fn go(&mut self, motion: Motion, rows: &[usize], stride: f32, now: f64) {
         let Some(last) = rows.len().checked_sub(1) else { return };
         let at = rows.iter().position(|r| *r >= self.highlight).unwrap_or(last);
@@ -263,12 +263,14 @@ impl PickList {
 mod tests {
     use super::*;
 
-    /// A list of `len` rows ("row 0" …), 120 tall, in a window of its own.
+    /// A list of `len` rows ("row 0" …), 120 tall, in a window of its own;
+    /// one may only inform, others be headings.
     struct Shown {
         ctx: egui::Context,
         list: PickList,
         len: usize,
         inform: Option<usize>,
+        headings: Vec<usize>,
         time: f64,
     }
 
@@ -282,7 +284,7 @@ mod tests {
 
     impl Shown {
         fn new(len: usize, inform: Option<usize>) -> Self {
-            Self { ctx: egui::Context::default(), list: PickList::default(), len, inform, time: 0.0 }
+            Self { ctx: egui::Context::default(), list: PickList::default(), len, inform, headings: Vec::new(), time: 0.0 }
         }
 
         /// A frame a second after the last (a glide is over by then).
@@ -291,10 +293,10 @@ mod tests {
             let labels: Vec<String> = (0..self.len).map(|i| format!("row {i}")).collect();
             let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))), time: Some(self.time), events, ..Default::default() };
             let (mut picked, mut height) = (None, 0.0);
-            let (list, len, inform) = (&mut self.list, self.len, self.inform);
+            let (list, len, inform, headings) = (&mut self.list, self.len, self.inform, &self.headings);
             let output = self.ctx.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let kind = |i: usize| if inform == Some(i) { RowKind::Inform } else { RowKind::Pick };
+                    let kind = |i: usize| if headings.contains(&i) { RowKind::Heading } else if inform == Some(i) { RowKind::Inform } else { RowKind::Pick };
                     let row = |i: usize| Row { label: &labels[i], ..Row::default() };
                     let top = ui.cursor().top();
                     picked = list.show(ui, Listing { id: "test_list", height: 120.0, len, details: false, empty: "Nothing here" }, moved, enter, kind, row);
@@ -323,24 +325,95 @@ mod tests {
     }
 
     /// The moves every view has, by the views' rules: one up from the first
-    /// goes round to the last and back; half a window moves the list and
-    /// the highlight together; first and last; the highlight is always in
-    /// sight, and only the rows in sight are drawn.
+    /// goes round to the last and back; first and last; the highlight is
+    /// always in sight, and only the rows in sight are drawn.
     #[test]
     fn the_keys_move_the_highlight_as_in_every_view_and_round_at_the_ends() {
         let mut shown = Shown::new(50, None);
         let first = shown.frame(vec![], None, false);
         assert!(at(&first, "row 0").is_some() && at(&first, "row 49").is_none(), "only the rows in sight are drawn");
         let mut went = Vec::new();
-        for moved in [Motion::Up, Motion::Down, Motion::HalfDown, Motion::HalfDown, Motion::Last, Motion::HalfUp, Motion::First] {
+        for moved in [Motion::Up, Motion::Down, Motion::Last, Motion::First] {
             shown.frame(vec![], Some(moved), false);
             let frame = shown.frame(vec![], None, false);
             let highlight = shown.list.highlight();
             assert!(at(&frame, &format!("row {highlight}")).is_some(), "{moved:?}: row {highlight} is in sight");
             went.push(highlight);
         }
-        assert_eq!((went[0], went[1], went[4], went[6]), (49, 0, 49, 0), "round at the ends; last and first: {went:?}");
-        assert!(went[2] > 0 && went[3] > went[2] && went[5] < 49, "half a window down twice, then up: {went:?}");
+        assert_eq!(went, [49, 0, 49, 0], "round at the ends; last and first");
+    }
+
+    /// Half a window moves the list by exactly that, and the highlight with
+    /// it, by the rows that come to (it keeps its place on the screen, to a
+    /// row: rows don't divide the window); at the end it stops on the last.
+    #[test]
+    fn half_a_window_moves_the_list_and_the_highlight_together() {
+        let mut shown = Shown::new(50, None);
+        shown.frame(vec![], None, false);
+        let mut at = Vec::new();
+        for _ in 0..3 {
+            shown.frame(vec![], Some(Motion::HalfDown), false);
+            shown.frame(vec![], None, false);
+            at.push((shown.list.highlight(), shown.list.viewport.offset.y));
+        }
+        let (stride, half) = (shown.list.viewport.margin, shown.list.viewport.window.y / 2.0);
+        for pair in at.windows(2) {
+            let ((was, from), (now, to)) = (pair[0], pair[1]);
+            assert_eq!(to - from, half, "the list: half a window: {at:?}");
+            assert!(((now - was) as f32 - half / stride).abs() <= 1.0, "the highlight, as far, to a row: {at:?} ({stride} a row)");
+        }
+        shown.frame(vec![], Some(Motion::Last), false);
+        shown.frame(vec![], Some(Motion::HalfDown), false);
+        shown.frame(vec![], None, false);
+        assert_eq!(shown.list.highlight(), 49, "half down at the end stays on the last");
+    }
+
+    /// A heading is never where the highlight is: it starts past one,
+    /// moves cross one, the pointer passing over one leaves it be.
+    #[test]
+    fn a_heading_is_passed_by() {
+        let mut shown = Shown::new(6, None);
+        shown.headings = vec![0, 3];
+        shown.frame(vec![], None, false);
+        assert_eq!(shown.list.highlight(), 1, "past the heading it starts on");
+        shown.frame(vec![], Some(Motion::Down), false);
+        shown.frame(vec![], Some(Motion::Down), false);
+        assert_eq!(shown.list.highlight(), 4, "Down crosses a heading");
+        shown.frame(vec![], Some(Motion::Up), false);
+        assert_eq!(shown.list.highlight(), 2, "and Up");
+        // (A heading's title sits at the foot of its row: above it is its row.)
+        let frame = shown.frame(vec![], None, false);
+        shown.point(at(&frame, "row 3").unwrap() - egui::vec2(0.0, 8.0));
+        assert_eq!(shown.list.highlight(), 2, "the pointer on a heading moves nothing");
+        assert_eq!(shown.frame(vec![], None, true).picked, Some(2));
+    }
+
+    /// Scrolled by hand from the last row, Down goes on from what shows,
+    /// not round to the first; a key's move in the frame the pointer
+    /// twitched wins.
+    #[test]
+    fn a_scroll_by_hand_and_a_key_over_a_twitching_pointer() {
+        let mut shown = Shown::new(50, None);
+        let frame = shown.frame(vec![], None, false);
+        let over = at(&frame, "row 2").unwrap();
+        shown.frame(vec![], Some(Motion::Last), false);
+        shown.frame(vec![], None, false);
+        let wheel = egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 200.0), modifiers: egui::Modifiers::NONE };
+        shown.frame(vec![egui::Event::PointerMoved(over), wheel], None, false);
+        shown.frame(vec![egui::Event::PointerGone], None, false);
+        assert!(shown.list.viewport.by_hand, "scrolled by hand");
+        shown.frame(vec![], Some(Motion::Down), false);
+        let frame = shown.frame(vec![], None, false);
+        let highlight = shown.list.highlight();
+        assert!(highlight != 0 && at(&frame, &format!("row {highlight}")).is_some(), "from what shows: row {highlight}");
+
+        let mut shown = Shown::new(5, None);
+        let frame = shown.frame(vec![], None, false);
+        let (one, three) = (at(&frame, "row 1").unwrap(), at(&frame, "row 3").unwrap());
+        shown.point(one);
+        assert_eq!(shown.list.highlight(), 1);
+        shown.frame(vec![egui::Event::PointerMoved(three)], Some(Motion::Down), false);
+        assert_eq!(shown.list.highlight(), 2, "the key's move, not where the pointer twitched to");
     }
 
     /// A list starting on a row far down (what's chosen now) shows it from

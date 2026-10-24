@@ -173,8 +173,8 @@ impl CockpitApp {
         let here = self.here();
         let offered: Vec<Offered> = bound.into_iter().map(|bound| Offered { applies: self.applies(&bound, here), bound }).collect();
         let host = match here.at {
-            crate::keymap::Host::Look => "Quick look".to_owned(),
-            crate::keymap::Host::Panel(panel) => format!("Panel {}", panel + 1),
+            crate::keymap::Host::Look => "The quick look".to_owned(),
+            crate::keymap::Host::Panel(panel) => format!("This panel ({})", panel + 1),
         };
         let inform = |keys: String, does: &str| Inform { keys, does: does.to_owned() };
         let mut informs = Vec::new();
@@ -185,13 +185,15 @@ impl CockpitApp {
         let pointer = [
             ("click / tap".to_owned(), "put the cursor on an item"),
             ("double click / tap".to_owned(), "open it"),
-            ("long press".to_owned(), "on an item, what can be done with it (the action list); on a button, what it does"),
+            ("long press".to_owned(), "on an item, what can be done with it (the action list)"),
+            ("long press / hover".to_owned(), "on a button, what it does and its keys"),
+            ("tap a menu".to_owned(), "a panel's top line, or Menus: its actions, as the leader opens them"),
             (go_to, "go to the name under it (code)"),
         ];
         informs.push(Informs { title: "Pointer and touch".to_owned(), keys: pointer.into_iter().map(|(k, does)| inform(k, does)).collect() });
         let groups = self.menu_keys().into_iter().map(|key| (key, self.group_name(&[key], here.kind))).collect();
         let line = offered.iter().find(|o| o.bound.action.command::<ShellCommand>() == Some(&ShellCommand::Line)).map(|o| o.bound.clone());
-        let sheet = Sheet { view: self.desk.view(here.kind).title().text, host, informs, groups, line };
+        let sheet = Sheet { view: format!("This view ({})", here.kind.words()), host, informs, groups, line };
         (offered, sheet)
     }
 }

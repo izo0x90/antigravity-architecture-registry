@@ -107,7 +107,7 @@ impl CockpitApp {
             left.push(("attention.updates".to_owned(), button(updates.to_string(), Some(icon::TRAY)).tone(Tone::Muted).hover(format!("{updates} update(s)"))));
         }
         let (count, max) = (self.desk.panels.len(), self.config.panels.max);
-        left.push(("palette.open".to_owned(), end("Actions".to_owned(), Some(icon::COMMAND))));
+        left.push(("palette.open".to_owned(), end("Action list".to_owned(), Some(icon::COMMAND))));
         let hidden = self.desk.panels.hidden();
         if hidden > 0 {
             left.push(("buffer.list".to_owned(), end(format!("{hidden} hidden"), None).tone(Tone::Info)));

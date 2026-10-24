@@ -97,7 +97,7 @@ impl CockpitApp {
             nav("nav.mark_jump", "Jump to a mark", "Back to where a letter was set, in whichever buffer", S::MarkJump).importance(MINOR).when(When::Marked),
             nav("nav.back", "Back (jump list)", "Where you were before the last jump, in any buffer or panel", S::Back).importance(SECONDARY).when(When::Back).icon(egui_phosphor::regular::ARROW_LEFT),
             nav("nav.forward", "Forward (jump list)", "Where you went back from", S::Forward).importance(MINOR).when(When::Forward).icon(egui_phosphor::regular::ARROW_RIGHT),
-            Action::new("nav.keys", "Keys for this buffer", "Every key here and what it does, on one sheet", S::Keys).group(Group::View).importance(MINOR),
+            Action::new("nav.keys", "Action list: everything", "Every action, faded where it doesn't apply, and the keys that run nothing themselves", S::Keys).group(Group::View).importance(MINOR),
             Action::new("talk.open", "Talk to the agent from here", "The lead's chat over what's on screen, ready to type and send", S::Talk).group(Group::Act).importance(SECONDARY),
             Action::new(
                 "terminal.popup",

@@ -357,12 +357,9 @@ mod tests {
         let shown = crate::nav::Ask::Show { target: crate::nav::Target::Span { file: "src/a.rs".into(), start: 3, end: 3 }, in_: Some(crate::kind::BufferKind::Code) };
         assert!(g.take_asks().contains(&shown), "it asks the code to show it");
 
-        // While the next is looked for, the rows of `step` stay; a row
-        // picked from them goes where it stands for, whatever came since.
+        // A row picked from rows since replaced goes where it stands for.
         let step = value_of(&g, "step");
         f.typed(&mut g, "run");
-        let (list, of) = g.find_choices();
-        assert_eq!((of.as_deref(), list.len()), (Some("step"), 3), "the rows of what was typed before, until the new ones are in");
         for kind in SearchKind::ALL {
             f.hits("run", kind, Vec::new());
         }

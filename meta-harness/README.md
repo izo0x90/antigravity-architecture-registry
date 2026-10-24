@@ -465,7 +465,7 @@ all of them:
   guessed apart). Kept in the state database, let go after
   `.nah/changes.toml`'s days. Staging is yours alone (no agent role has
   `changes.stage`): on the uncommitted changes, a file's or a change's
-  Stage / Unstage button (or the palette) writes the index, and only the
+  Stage / Unstage button (or the action list) writes the index, and only the
   index (`POST /api/changes/stage`, `/unstage`). The server reads git (`GET
   /api/changes?from=&to=`, `GET /api/changes/file`, `GET
   /api/changes/components`, `GET /api/changes/timeline`; `GET
@@ -546,8 +546,8 @@ all of them:
     who tagged it and when). Its rows carry the same edits as buttons,
     and delete (`Space t d`); Enter on a thing goes to it. Search finds
     things under folded tags.
-  - **Linking into a message** (the chat, a discussion, the palette's
-    writing): typing `#` where a word starts opens the tag picker, `@` the
+  - **Linking into a message** (the chat, a discussion, what's written
+    in the action list): typing `#` where a word starts opens the tag picker, `@` the
     code's files and symbols (`path:10-20`: those lines). What's picked is
     a link, drawn in its colour: the agent is handed what it is, as it is
     now, after your message (the chat shows what it got). Small things go
@@ -669,8 +669,9 @@ fuzzy-matched as you type (`:42` goes to line 42). `?` opens the same
 list on everything: every action, faded where it doesn't apply (saying
 what it needs; picked there, one that asks for a value says why not, as
 its key does), each with every way to run it (keys, leader path,
-gesture), under a title for where it acts (what you're on, this buffer,
-what holds it, everywhere), then the keys of the mode you were in and
+gesture), under a title for where it acts (what you're on, this view,
+this panel or the quick look, everywhere), each in the order of the
+menus that hold them, then the keys of the mode you were in and
 the pointer and touch grammar. Tab switches between the two. The list
 and its pickers move as every view does: `Ctrl+J`/`Ctrl+K` (or
 `Ctrl+N`/`Ctrl+P`, or the arrows) one at a time, going round at the
@@ -699,7 +700,7 @@ menu opens, as `Space` and its keys would. The groups that act on the
 whole screen are under the top bar's Menus button, the leader's own
 menu. Then a place for its busy mark, its name and what it says about
 itself, which grow and wrap after the menus and never move them, then
-its settings. The which-key menu shows one key per entry under a path
+its settings. The leader menu shows one key per entry under a path
 ("Space › Account"), the same path the top bar's mode says; a tap on an
 entry runs it or goes into it, a tap on a part of the path goes back
 there. A long press on any button, a finger held still, says what it
@@ -847,7 +848,8 @@ Views also have their own keys:
 
 All keys are configurable in `crates/cockpit-ui/config/default.toml`,
 including those outside a view's bindings: `[keymap.list]` (moving in the
-palette and pickers), `[keymap.input]` (`send`, `add` into a running
+action list, its pickers and a setting's choices; Tab there switches
+between what applies and everything), `[keymap.input]` (`send`, `add` into a running
 turn, and `newline`, in every typing box) and `[keymap.pointer]` (`go_to`,
 held while clicking a name). A test fails the build when the cockpit
 reads a key anywhere else, or writes a key's name into text instead of
@@ -939,7 +941,7 @@ stopped expires at the next start: that agent session is gone.
 ### Driving the cockpit
 
 The cockpit can be driven from outside the way you drive it: list what can
-be run now (the actions the Space menu, keys and palette offer), run one by
+be run now (the actions the leader menu, keys and action list offer), run one by
 id, read what's on screen (the mode, each panel's buffer, and every piece of
 text drawn, with where), click drawn text, type, and press keys. It's one
 set of calls with two ways in:

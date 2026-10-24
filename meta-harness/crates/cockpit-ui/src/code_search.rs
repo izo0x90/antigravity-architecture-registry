@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(first.1, "a");
         search.typed("ab");
         assert_eq!(search.tend(0.1).ask, None, "one round out at a time");
-        assert_eq!(search.answer(first.0, SearchKind::Files, found(&["a.rs"])), None);
+        search.answer(first.0, SearchKind::Files, found(&["a.rs"]));
         assert_eq!(search.tend(0.2).ask, None, "half a round: still out");
         assert_eq!(search.rows_of(), Some(""), "the rows shown are still the last round's");
         search.answer(first.0, SearchKind::Symbols, found(&["alpha"]));
@@ -240,8 +240,9 @@ mod tests {
         assert_eq!((search.rows_of(), labels(&search)), (Some("a"), vec!["alpha".to_owned(), "a.rs".to_owned()]), "whole, symbols then files");
         assert_eq!(next.1, "ab", "what was typed meanwhile, asked once it's back");
 
-        // An answer for a round gone is dropped; a failure is said, as nothing found.
-        assert_eq!(search.answer(first.0, SearchKind::Files, found(&["late.rs"])), None);
+        // An answer for a round gone is dropped (never shown); a failure is
+        // said, as nothing found.
+        search.answer(first.0, SearchKind::Files, found(&["late.rs"]));
         search.answer(next.0, SearchKind::Files, found(&["ab.rs"]));
         assert!(search.answer(next.0, SearchKind::Symbols, Err(crate::net::NetError::other("down"))).unwrap().contains("down"));
         search.tend(0.4);
@@ -255,7 +256,9 @@ mod tests {
         let (abc, _) = search.tend(0.6).ask.unwrap();
         search.typed("ab");
         assert_eq!((search.tend(0.7), search.rows_of(), search.is_out()), (Tended::default(), Some("ab"), false));
-        assert_eq!(search.answer(abc, SearchKind::Files, found(&["abc.rs"])), None, "its answers dropped");
+        search.answer(abc, SearchKind::Files, found(&["abc.rs"]));
+        search.tend(0.75);
+        assert_eq!(labels(&search), vec!["ab.rs".to_owned()], "its answers dropped");
         search.typed("abc");
         search.tend(0.8);
         search.typed("");
@@ -298,5 +301,20 @@ mod tests {
         sent.drain(..).for_each(|(_, _, reply)| reply(found(&["late.rs"])));
         search.drive("", &ctx, |_, _, _| panic!("nothing typed: nothing asked"));
         assert_eq!((search.rows_of(), labels(&search).len()), (Some(""), 0), "what came for the round cleared is dropped");
+    }
+
+    /// The last row listed of a kind says what wasn't listed, even when a
+    /// row was left out; a file's detail is the word "file" once.
+    #[test]
+    fn rows_say_what_wasnt_listed_on_the_last_one_shown() {
+        let mut search = CodeSearch::new(&[SearchKind::Files]);
+        search.typed("a");
+        let (round, _) = search.tend(0.0).ask.unwrap();
+        let hit = |label: &str| Hit { kind: SearchKind::Files, key: None, label: label.into(), detail: "file".into(), file: None, line: None, callable: false, data: None };
+        search.answer(round, SearchKind::Files, Ok(Found { hits: vec![hit("a.rs"), hit("b.rs"), hit("left out")], total: 9, ..Found::default() }));
+        search.tend(0.1);
+        let rows = search.rows(|_, hit| (hit.label != "left out").then(|| hit.label.clone()));
+        let details: Vec<&str> = rows.iter().map(|c| c.detail.as_deref().unwrap_or_default()).collect();
+        assert_eq!(details, ["file", "file · 3 of 9 files"], "{details:?}");
     }
 }

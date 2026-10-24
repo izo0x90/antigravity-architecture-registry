@@ -1,9 +1,11 @@
 //! What the action list lists: what applies where you are (`:`), or
-//! everything (`?`): every action, faded where it doesn't apply (and what
-//! it needs, when that's known), then keys that run nothing themselves (a
-//! mode's, the pointer's), each under its section's title. `:42` lists
-//! going to line 42 first. Matched by the shared fuzzy matcher; each
-//! section keeps its rows in the order they matched.
+//! everything (`?`): every action under where it acts (what you're on,
+//! this view, this panel, everywhere), in the order of the menus that hold
+//! them, faded where it doesn't apply (and what it needs, when that's
+//! known); then keys that run nothing themselves (a mode's, the
+//! pointer's), each under its section's title. `:42` lists going to line
+//! 42 first. Matched by the shared fuzzy matcher; each section keeps its
+//! rows in the order they matched.
 
 use std::borrow::Cow;
 
@@ -62,8 +64,8 @@ pub struct Informs {
 
 /// What the list needs to know of where you are, beyond the actions: the
 /// titles of what holds you (the panel's view, its host), the keys that
-/// run nothing themselves, the leader's groups' names (what its actions
-/// are found by too), and going to a line, when the view has lines.
+/// run nothing themselves, the leader's groups' names in the menus' order
+/// (what its actions are found by too), and going to a line.
 pub struct Sheet {
     pub view: String,
     pub host: String,
@@ -140,17 +142,18 @@ impl<'a> Listed<'a> {
                 listed.entries.extend(here.into_iter().map(|o| (0, Item::Action(o))));
             }
             Reach::Everything => {
+                // In a section, as the menus hold them (a menu's in its
+                // order, then those in none), then by what they do.
+                let menu = |o: &Offered| o.bound.leader.as_ref().and_then(|l| sheet.groups.iter().position(|(k, _)| Some(k) == l.first())).unwrap_or(usize::MAX);
                 for layer in Layer::ALL {
-                    for group in Group::ALL {
-                        let mut these: Vec<&Offered> = offered.iter().filter(|o| o.bound.layer == layer && o.bound.action.group == group).collect();
-                        if these.is_empty() {
-                            continue;
-                        }
-                        these.sort_by_key(|o| o.bound.action.importance);
-                        listed.sections.push(Section { title: Some(format!("{} · {}", sheet.title(layer), group.title())), every_way: true });
-                        let section = listed.sections.len() - 1;
-                        listed.entries.extend(these.into_iter().map(|o| (section, Item::Action(o))));
+                    let mut these: Vec<&Offered> = offered.iter().filter(|o| o.bound.layer == layer).collect();
+                    if these.is_empty() {
+                        continue;
                     }
+                    these.sort_by_key(|o| (menu(o), Group::ALL.iter().position(|g| *g == o.bound.action.group), o.bound.action.importance));
+                    listed.sections.push(Section { title: Some(sheet.title(layer).to_owned()), every_way: true });
+                    let section = listed.sections.len() - 1;
+                    listed.entries.extend(these.into_iter().map(|o| (section, Item::Action(o))));
                 }
                 for informs in sheet.informs.iter().filter(|i| !i.keys.is_empty()) {
                     listed.sections.push(Section { title: Some(informs.title.clone()), every_way: false });
@@ -263,5 +266,98 @@ impl<'a> Listed<'a> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::actions::{Action, Origin, PRIMARY, MINOR, When};
+
+    /// An action offered: its id (its label too), layer, leader path,
+    /// whether it applies, and what it takes.
+    fn offered(id: &str, layer: Layer, leader: &str, applies: bool, param: Param) -> Offered {
+        let action = Action::new(id, id, format!("does {id}"), ()).param(param).when(When::Target).importance(if id.ends_with('!') { PRIMARY } else { MINOR });
+        let leader = (!leader.is_empty()).then(|| leader.chars().collect());
+        Offered { bound: Bound { action, origin: Origin::Shell, leader, keys: Vec::new(), gestures: Vec::new(), layer }, applies }
+    }
+
+    fn sheet(line: Option<Bound>) -> Sheet {
+        let informs = vec![Informs { title: "Pointer".into(), keys: vec![Inform { keys: "tap".into(), does: "put the cursor there".into() }] }];
+        Sheet { view: "This view (Graph)".into(), host: "This panel (1)".into(), informs, groups: vec![(',', "Graph actions".into()), ('b', "Buffer".into())], line }
+    }
+
+    /// The labels of `lines`, a title as `# title`.
+    fn said(listed: &Listed<'_>, lines: &[Line]) -> Vec<String> {
+        lines.iter().map(|l| match l {
+            Line::Title(_) => format!("# {}", listed.row(*l).label),
+            Line::Entry(_) => listed.row(*l).label.to_owned(),
+        }).collect()
+    }
+
+    fn all(listed: &Listed<'_>) -> Vec<usize> {
+        (0..listed.len()).collect()
+    }
+
+    /// Here: what applies, closest first then by name, with no titles; a
+    /// number typed lists going to that line first.
+    #[test]
+    fn here_lists_what_applies_closest_first_and_a_number_its_line_first() {
+        let actions = [offered("zoom", Layer::On, "", true, Param::None), offered("away", Layer::Everywhere, "", true, Param::None), offered("idle", Layer::On, "", false, Param::None), offered("apply", Layer::On, "", true, Param::None)];
+        let line = offered("nav.line", Layer::Everywhere, "", true, Param::Text { hint: String::new(), start: String::new() }).bound;
+        let sheet = sheet(Some(line));
+        let listed = Listed::of(&actions, &sheet, Reach::Here, "");
+        assert_eq!(said(&listed, &listed.lines(&all(&listed))), ["apply", "zoom", "away"]);
+        let listed = Listed::of(&actions, &sheet, Reach::Here, " 7 ");
+        let lines = listed.lines(&[1, 0, 2, 3]);
+        assert_eq!(said(&listed, &lines)[0], "Go to line 7", "first, whatever matched best");
+        assert!(matches!(listed.item(0), Item::Line { number: 7, .. }));
+        assert_eq!(listed.row(lines[0]).keys, ":N");
+    }
+
+    /// Everything: under the four places it acts (titled), each in the
+    /// menus' order then by what it does, then the keys that only inform;
+    /// the sections in the order of their best match.
+    #[test]
+    fn everything_is_under_where_it_acts_in_the_menus_order() {
+        let actions = [
+            offered("in buffer", Layer::Panel, "bx", true, Param::None),
+            offered("in graph", Layer::Panel, ",x", true, Param::None),
+            offered("in none", Layer::Panel, "", true, Param::None),
+            offered("on it", Layer::On, "", true, Param::None),
+            offered("everywhere", Layer::Everywhere, "", true, Param::None),
+        ];
+        let sheet = sheet(None);
+        let listed = Listed::of(&actions, &sheet, Reach::Everything, "");
+        let order = all(&listed);
+        assert_eq!(said(&listed, &listed.lines(&order)), ["# On what you're on", "on it", "# This view (Graph)", "in graph", "in buffer", "in none", "# Everywhere", "everywhere", "# Pointer", "put the cursor there"]);
+        // Matched: the sections ordered by their best, each under its title.
+        let everywhere = (0..listed.len()).find(|e| listed.haystack(*e).starts_with("everywhere")).unwrap();
+        let lines = listed.lines(&[everywhere, 0]);
+        assert_eq!(said(&listed, &lines), ["# Everywhere", "everywhere", "# On what you're on", "on it"]);
+        assert_eq!((listed.kind(lines[0]), listed.kind(lines[1])), (RowKind::Heading, RowKind::Pick));
+        let pointer = listed.lines(&[listed.len() - 1]);
+        assert_eq!(listed.kind(pointer[1]), RowKind::Inform, "a key that runs nothing is read, not picked");
+        // An action is found by its menu's name.
+        let in_graph = (0..listed.len()).find(|e| listed.haystack(*e).starts_with("in graph")).unwrap();
+        assert!(listed.haystack(in_graph).contains("Graph actions"), "{}", listed.haystack(in_graph));
+    }
+
+    /// One that doesn't apply: listed faded, saying what it needs, picked
+    /// like any (what then happens is the one rule's): one that asks for a
+    /// value is refused, saying why; one that doesn't isn't.
+    #[test]
+    fn one_that_doesnt_apply_is_faded_and_refused_only_when_it_asks_for_a_value() {
+        let choice = Param::Choice(vec![crate::actions::Choice::new("a", "A")]);
+        let actions = [offered("asks", Layer::On, "", false, choice), offered("runs", Layer::On, "", false, Param::None), offered("fine", Layer::On, "", true, Param::None)];
+        let sheet = sheet(None);
+        let listed = Listed::of(&actions, &sheet, Reach::Everything, "");
+        let lines = listed.lines(&all(&listed));
+        let row = listed.row(lines[1]);
+        assert!(row.faint && row.detail.as_deref().is_some_and(|d| d.starts_with("Needs something under the cursor")), "{row:?}");
+        assert_eq!(listed.kind(lines[1]), RowKind::Pick);
+        assert_eq!(actions[0].refused().as_deref(), Some("asks: it needs something under the cursor."));
+        assert_eq!((actions[1].refused(), actions[2].refused()), (None, None));
+        assert!(!listed.row(lines[3]).faint);
     }
 }

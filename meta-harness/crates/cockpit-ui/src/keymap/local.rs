@@ -285,6 +285,7 @@ mod tests {
         assert_eq!(list.moved(&mut pressed(egui::Key::D, ctrl)), Some(Motion::HalfDown));
         assert_eq!(list.moved(&mut pressed(egui::Key::U, ctrl)), Some(Motion::HalfUp));
         assert_eq!(list.moved(&mut pressed(egui::Key::End, ctrl)), Some(Motion::Last));
+        assert_eq!(list.moved(&mut pressed(egui::Key::Home, ctrl)), Some(Motion::First));
         assert_eq!(list.moved(&mut pressed(egui::Key::J, egui::Modifiers::default())), None, "a plain j is typed, not a move");
         let input = InputKeys::default();
         assert_eq!(input.sent(&pressed(egui::Key::Enter, egui::Modifiers::default())), Some(Sent::Send));

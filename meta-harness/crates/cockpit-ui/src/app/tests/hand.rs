@@ -115,15 +115,17 @@ fn on_the_graph_fingers_tap_select_double_tap_go_in_drag_and_two_pinch_and_pan()
         events
     };
     let (a, b) = (middle - egui::vec2(50.0, 0.0), middle + egui::vec2(50.0, 0.0));
-    let (z, before) = (zoom(&app), pan(&app));
+    let z = zoom(&app);
     feed(&mut app, two(egui::TouchPhase::Start, a, b));
     feed(&mut app, two(egui::TouchPhase::Move, a, b));
     feed(&mut app, two(egui::TouchPhase::Move, a - egui::vec2(25.0, 0.0), b + egui::vec2(25.0, 0.0)));
     assert!((zoom(&app) - z * 1.5).abs() < 1e-3, "spread by half: {} from {z}", zoom(&app));
-    let z = zoom(&app);
-    feed(&mut app, two(egui::TouchPhase::Move, a + egui::vec2(-25.0, 40.0), b + egui::vec2(25.0, 40.0)));
-    assert!((zoom(&app) - z).abs() < 1e-4 && pan(&app).y > before.y + 5.0, "moved together: it pans (as far as the tree's edge lets it): {:?} from {before:?}", pan(&app));
-    feed(&mut app, two(egui::TouchPhase::End, a + egui::vec2(-25.0, 40.0), b + egui::vec2(25.0, 40.0)));
+    // Moved together (up, where the tree has room): it pans as far as the
+    // fingers went.
+    let (z, before) = (zoom(&app), pan(&app));
+    feed(&mut app, two(egui::TouchPhase::Move, a + egui::vec2(-25.0, -40.0), b + egui::vec2(25.0, -40.0)));
+    assert!((zoom(&app) - z).abs() < 1e-4 && (pan(&app).y - (before.y - 40.0)).abs() < 0.5, "moved together: it pans with them: {:?} from {before:?}", pan(&app));
+    feed(&mut app, two(egui::TouchPhase::End, a + egui::vec2(-25.0, -40.0), b + egui::vec2(25.0, -40.0)));
     let lifted = pan(&app);
     feed(&mut app, vec![]);
     feed(&mut app, vec![]);

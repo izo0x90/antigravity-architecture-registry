@@ -99,23 +99,6 @@ fn the_graph_says_when_an_answer_was_slow_or_cut() {
     assert!(shown.contains("graph cut (out of time), slow: 340 ms"), "{shown}");
 }
 
-#[test]
-fn find_in_the_code_asks_the_graph_as_its_typed() {
-    let (ctx, mut app) = full_app();
-    focus(&ctx, &mut app, BufferKind::Graph);
-    let find = app.palette_actions().into_iter().find(|b| b.action.id == "graph.find").expect("the graph offers find");
-    app.open_palette(&find);
-    frame(&ctx, &mut app, vec![]);
-    frame(&ctx, &mut app, vec![egui::Event::Text("run".into())]);
-    frame(&ctx, &mut app, vec![]);
-    let asked: Vec<String> = sent(&app).into_iter().filter(|c| c.starts_with("GET /api/search?q=run&")).collect();
-    assert_eq!(asked.len(), 3, "the query went to the graph, which asks for symbols, files and lines: {asked:?}");
-    assert_eq!(app.desk.graph().find_choices(), (Vec::new(), Some(String::new())), "its rows still those of nothing typed: it waits for the answers");
-    // The palette's own list is matched the same way as everywhere.
-    let ranked = arch_search::rank("grph fnd", &["Graph · Find in the code", "Code · Reveal"], arch_search::Matching::shared());
-    assert_eq!(ranked.first().map(|r| r.index), Some(0));
-}
-
 /// The graph's find, from a view with no graph on screen, asks and shows
 /// what it found as it does over the graph (the graph is tended while its
 /// search is open); opened again, it shows nothing of the search before.

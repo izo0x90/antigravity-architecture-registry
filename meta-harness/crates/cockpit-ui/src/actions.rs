@@ -1,9 +1,9 @@
 //! Action registry. Every user-invokable operation is an `Action`: a stable id, a
 //! label, the parameter it needs, a typed command for the provider that made
 //! it, and how it ranks (group, importance, when it applies). Actions carry no
-//! keys; the keymap binds ids to keys. The leader menu, which-key HUD, key bar,
-//! prefix popup, key sheet, palette, toolbars and touch entry are all generated
-//! from the same list, and invoking any of them takes the same path.
+//! keys; the keymap binds ids to keys. The leader menu, key bar, prefix
+//! popup, action list (`:` and `?`), every control and touch entry are all
+//! generated from the same list, and invoking any of them takes the same path.
 
 use std::any::Any;
 use std::rc::Rc;
@@ -216,7 +216,7 @@ impl Control {
     }
 }
 
-/// What kind of thing an action does (how the key sheet groups them).
+/// What kind of thing an action does (how `?` orders them in a section).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
     /// Moves the cursor within the view.
@@ -231,15 +231,6 @@ pub enum Group {
 
 impl Group {
     pub const ALL: [Group; 4] = [Group::Navigate, Group::GoTo, Group::Act, Group::View];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Navigate => "Navigate",
-            Self::GoTo => "Go to",
-            Self::Act => "Act",
-            Self::View => "View",
-        }
-    }
 }
 
 /// When an action applies, given the cursor's target and what the shell knows.
@@ -325,7 +316,7 @@ impl When {
     }
 }
 
-/// Importance: shown first in the key bar, listed first in the key sheet.
+/// Importance: shown first in the key bar, listed first in `?`.
 pub const PRIMARY: u8 = 1;
 pub const SECONDARY: u8 = 2;
 pub const MINOR: u8 = 3;
@@ -805,11 +796,10 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound, mode: &mut InputMode) -> Optio
             let was = *mode;
             if open && *mode != InputMode::Palette {
                 *mode = choosing;
-            } else if !open {
+            } else if !open && *mode == choosing {
+                // Closed: where its list was is let go (once, not each frame).
                 ui.data_mut(|d| d.remove::<crate::pick_list::PickList>(list_id));
-                if *mode == choosing {
-                    *mode = InputMode::Normal;
-                }
+                *mode = InputMode::Normal;
             }
             if *mode != was {
                 ui.ctx().request_repaint();

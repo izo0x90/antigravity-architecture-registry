@@ -56,8 +56,8 @@ fn the_quick_look_key_is_shown_wherever_keys_are_listed() {
     assert!(bar.iter().any(|k| k.starts_with("q ") && k.ends_with(" quicklook.toggle")), "the key bar offers it on a card: {bar:?}");
     let text = everything(&ctx, &mut app, "quick look");
     assert!(text.contains("Quick look: the full card"), "the ? list has it: {text}");
-    app.palette.close();
-    app.input_mode = InputMode::Normal;
+    frame(&ctx, &mut app, press(egui::Key::Escape, false));
+    assert_eq!(app.input_mode, InputMode::Normal);
     let menu = leader_entries(&bound, &['q']);
     assert!(menu.iter().any(|e| matches!(e, LeaderEntry::Action { key: 'q', index } if bound[*index].action.id == "quicklook.toggle")), "Space q q opens it");
     // On nothing, it isn't offered.

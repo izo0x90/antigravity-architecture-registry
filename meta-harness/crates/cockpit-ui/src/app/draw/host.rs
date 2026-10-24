@@ -1,16 +1,16 @@
 //! Hosts: a panel and the quick look hold a view and draw it the same
-//! way: the view's top line (its title and status, from `Panel`), then its
+//! way: its top line (the panel's number, the menus about where it is,
+//! its title and status, from `Hosted`; its settings under it), then its
 //! content. A view draws no controls. Every control comes from the one
-//! bound list of where it is (`shown_at`): the panel's layer on its top
-//! line, what you're on under it, the host's own (tabs, closing, sending
-//! the quick look's card to a panel) on the host's line. A control shows
-//! the key its binding has, and used, asks for its action: the app runs it
-//! once the frame is drawn, the way its key runs it.
+//! bound list of where it is (`shown_at`): its settings on the top line,
+//! what you're on's under it (or in its row). A control shows the key its
+//! binding has, and used, asks for its action: the app runs it once the
+//! frame is drawn, the way its key runs it.
 //!
 //! Pointer and touch, the same in every view: a click or tap on an item
 //! moves the cursor there (the panel is focused by it); a double click or
-//! tap opens it (Enter); a long press lists what can be done (the palette,
-//! with the cursor on it). The view only says where its items are.
+//! tap opens it (Enter); a long press lists what can be done (the action
+//! list, with the cursor on it). The view only says where its items are.
 
 use super::super::*;
 use crate::keymap::Host;

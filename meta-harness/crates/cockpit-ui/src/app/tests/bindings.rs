@@ -178,12 +178,17 @@ fn a_frame_gathers_the_actions_once_and_again_only_after_one_runs() {
 #[test]
 fn keys_are_given_out_again_only_when_the_actions_change() {
     let (ctx, mut app) = app_with_graph();
+    // Two kinds on screen: each host's keys are kept apart, so drawing the
+    // other doesn't give these out again.
+    app.desk.panels = panels_of(&[BufferKind::Graph, BufferKind::Chat], 0);
     frame(&ctx, &mut app, vec![]);
     let first = app.bound_actions();
     let kept = kept_keys(&app);
+    frame(&ctx, &mut app, vec![]);
+    frame(&ctx, &mut app, vec![]);
     // Nothing changed: the same keys, not given out again.
     let again = app.bound_actions();
-    assert_eq!(kept_keys(&app), kept);
+    assert_eq!(kept_keys(&app), kept, "frames with the chat drawn too");
     assert!(first.iter().zip(&again).all(|(a, b)| a.action.id == b.action.id && a.leader == b.leader && a.keys == b.keys));
     // A selection changes what can run: given out again, current labels.
     app.desk.graph_mut().select(Some("rust:a::step".into()));
@@ -193,42 +198,35 @@ fn keys_are_given_out_again_only_when_the_actions_change() {
     assert!(selected.iter().any(|b| b.action.id == "goto.code" && !b.keys.is_empty()), "the new go-to has its keys");
 }
 
-/// `?` is the action list on everything: every action, by where it acts
-/// (titled), every way to run each, faded where it doesn't apply and saying
-/// what it needs, then the pointer's and fingers' ways; searchable; its
-/// cycle key narrows it to what applies here.
+/// `?` is the action list on everything, as the user opens it: under the
+/// four places an action acts (what you're on, this view, this panel,
+/// everywhere), then the pointer's and fingers' ways; found by what each
+/// says; one that doesn't apply, faded and saying what it needs, and gone
+/// once Tab narrows it to what applies here; Escape closes it and nothing
+/// else. (How it orders and titles is `sheet`'s own tests.)
 #[test]
-fn question_mark_lists_everything_by_section_faded_where_it_doesnt_apply() {
+fn question_mark_lists_everything_under_where_it_acts() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Spec);
     frame(&ctx, &mut app, key("?"));
     assert!(app.palette.is_open(), "the action list");
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("Every action and key") && text.contains("Tab: what applies here"), "{text}");
-    // Each found by what it says, under the title of where it acts (#39).
-    let text = everything(&ctx, &mut app, "on one sheet");
-    assert!(text.contains("Keys for this buffer") && text.contains("Every key here and what it does, on one sheet"), "the description: {text}");
-    let text = everything(&ctx, &mut app, "next");
-    for expected in ["Next discussion not settled", "J", "Next section"] {
-        assert!(text.contains(expected), "{expected}: {text}");
+    for title in ["On what you're on", "This view (Spec)"] {
+        assert!(text.lines().any(|l| l == title), "{title}: {text}");
     }
     let text = everything(&ctx, &mut app, "close this panel");
-    assert!(text.contains("Panel 2 · ") && text.contains("Close this panel"), "{text}");
-    let text = everything(&ctx, &mut app, "focus panel");
-    assert!(text.contains("Everywhere · ") && text.contains("Focus panel 1"), "{text}");
+    assert!(text.lines().any(|l| l == "This panel (2)") && text.contains("Close this panel"), "{text}");
     let text = everything(&ctx, &mut app, "fold");
     assert!(text.contains("Fold the Overview section") && text.contains("z a"), "the spec's fold, in its words: {text}");
     let text = everything(&ctx, &mut app, "long press");
-    assert!(text.contains("Pointer and touch") && text.contains("what can be done with it"), "{text}");
-    // One that doesn't apply here: listed, saying what it needs; not in
-    // what applies here.
+    assert!(text.contains("Pointer and touch") && text.contains("what it does and its keys"), "{text}");
     let (offered, _) = app.sheet_of(app.palette_actions());
     let idle = offered.iter().find(|o| !o.applies && o.bound.action.when.needs().is_some()).map(|o| o.bound.action.label.clone()).expect("something that doesn't apply here");
     let text = everything(&ctx, &mut app, &idle);
     assert!(text.contains(&idle) && text.contains("Needs "), "{idle}: {text}");
     frame(&ctx, &mut app, press(egui::Key::Tab, false));
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("What can be done here") && !text.contains("Needs "), "what applies here: {text}");
+    assert!(!text.contains("Needs "), "what applies here: {text}");
     let selection = app.desk.graph_mut().selection.clone();
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert!(!app.palette.is_open());

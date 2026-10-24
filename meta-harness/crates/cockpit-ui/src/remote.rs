@@ -40,7 +40,7 @@ pub enum Call {
     },
     /// Types text into whatever has the keyboard.
     Type { text: String },
-    /// Presses keys in order, as named in the key sheet: `space p a`,
+    /// Presses keys in order, as `?` names them: `space p a`,
     /// `ctrl+enter`, `escape`, `j`.
     Keys { keys: String },
 }
@@ -463,7 +463,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keys_are_named_as_in_the_key_sheet() {
+    fn keys_are_named_as_the_action_list_names_them() {
         // The press a key name makes: its key with its modifiers, the text it types.
         let press = |name: &str| {
             let (mods, down, _) = key_press(name).unwrap().press();

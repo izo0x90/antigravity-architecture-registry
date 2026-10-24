@@ -1,4 +1,5 @@
-//! Each panel's frame, and the palette.
+//! Each panel's frame, and the palette (the action list and the pickers
+//! for an action's value).
 
 use super::super::*;
 use crate::keymap::Host;

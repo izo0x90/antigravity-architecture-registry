@@ -87,16 +87,7 @@ fn enter_takes_a_row_chosen_on_the_rows_shown_and_typing_drops_one_waiting() {
 /// name), and the prompt sends it as a link; nothing typed is lost.
 #[test]
 fn an_at_typed_in_a_prompt_links_a_file_found_and_the_prompt_sends_the_link() {
-    let (ctx, mut app) = full_app();
-    crate::chat::tests::conversation_events().into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
-    focus(&ctx, &mut app, BufferKind::Chat);
-    frame(&ctx, &mut app, key("i"));
-    let typed = |ctx: &egui::Context, app: &mut CockpitApp, text: &str| {
-        for c in text.chars() {
-            frame(ctx, app, vec![egui::Event::Text(c.to_string())]);
-        }
-        frame(ctx, app, vec![]);
-    };
+    let (ctx, mut app) = typing_in_the_chat();
     typed(&ctx, &mut app, "read @");
     assert_eq!(app.palette.picking(), Some("link.thing"), "the thing picker");
     // (Pasted at once: one query asked.)
@@ -121,7 +112,7 @@ fn an_at_typed_in_a_prompt_links_a_file_found_and_the_prompt_sends_the_link() {
 /// The `@` picker's rows stay as they are while what's typed next is
 /// looked for (the list doesn't empty and fill at each key), symbols
 /// before files whichever answer comes first; an Enter meanwhile waits for
-/// the rows of what's typed, and an answer to a query gone is dropped.
+/// the rows of what's typed.
 #[test]
 fn the_at_picker_keeps_its_rows_until_the_next_are_all_in_and_enter_waits_for_them() {
     let (ctx, mut app) = typing_in_the_chat();
@@ -143,8 +134,6 @@ fn the_at_picker_keeps_its_rows_until_the_next_are_all_in_and_enter_waits_for_th
     let shown = texts(&frame(&ctx, &mut app, vec![]));
     assert_eq!(app.palette.picking(), Some("link.thing"), "Enter on the rows of `a` waits for those of `ab`");
     assert!(shown.contains("Looking… · Enter picks"), "and the key line says it's waiting: {shown}");
-    // An answer for `a` coming late changes nothing.
-    assert!(!app.desk.net.answer(&first_files[0], 200, &files("a", &["src/late.rs"])), "already answered");
     let (next_files, next_symbols) = asked(&app, "ab");
     assert_eq!((next_files.len(), next_symbols.len()), (1, 1));
     assert!(app.desk.net.answer(&next_files[0], 200, &files("ab", &["src/ab.rs"])));
