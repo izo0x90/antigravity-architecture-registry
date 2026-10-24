@@ -87,16 +87,13 @@ impl AcpLauncher for ProcessLauncher {
             .envs(["TMPDIR", "TMP", "TEMP"].map(|k| (k, temp.path())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        // Its own process group: what it starts (a harness, an emulator's
-        // guest) goes with it.
-        #[cfg(unix)]
-        command.process_group(0);
+            .stderr(Stdio::piped());
         if let Some(cwd) = &config.policy.cwd {
             command.current_dir(cwd);
         }
-        let mut child = command.spawn()?;
+        // What it starts (a harness, an emulator's guest) goes with it.
+        let mut group = Group::spawn(&mut command)?;
+        let child = &mut group.child;
         let (Some(stdin), Some(stdout), Some(stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take()) else {
             return Err(HarnessError::Provider { reason: "agent process has no stdio pipes".into() });
         };
@@ -112,7 +109,7 @@ impl AcpLauncher for ProcessLauncher {
         Ok(AcpTransport {
             reader: Box::new(stdout.compat()),
             writer: Box::new(stdin.compat_write()),
-            guard: Box::new(ProcessTree { child, _temp: temp }),
+            guard: Box::new(ProcessTree { _group: group, _temp: temp }),
             said,
         })
     }
@@ -121,11 +118,26 @@ impl AcpLauncher for ProcessLauncher {
 /// The agent's process and everything it started: all stopped when the
 /// session lets go of it, then its temp folder removed.
 struct ProcessTree {
-    child: tokio::process::Child,
+    _group: Group,
     _temp: tempfile::TempDir,
 }
 
-impl Drop for ProcessTree {
+/// A process in a group of its own, and everything it starts: all stopped
+/// when it's let go (a wrapper's own child too: a login command's).
+pub(crate) struct Group {
+    pub(crate) child: tokio::process::Child,
+}
+
+impl Group {
+    pub(crate) fn spawn(command: &mut tokio::process::Command) -> std::io::Result<Self> {
+        command.kill_on_drop(true);
+        #[cfg(unix)]
+        command.process_group(0);
+        Ok(Self { child: command.spawn()? })
+    }
+}
+
+impl Drop for Group {
     fn drop(&mut self) {
         #[cfg(unix)]
         if let Some(pid) = self.child.id().and_then(|id| rustix::process::Pid::from_raw(id as i32)) {

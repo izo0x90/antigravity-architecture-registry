@@ -11,7 +11,7 @@ use harness_contracts::Launch;
 use harness_core::{HarnessError, Result};
 use regex::Regex;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-use tokio::process::{Child, ChildStdin};
+use tokio::process::ChildStdin;
 
 use crate::control::CommandLogin;
 
@@ -22,7 +22,8 @@ const READ_OUT_WAIT: Duration = Duration::from_secs(2);
 
 /// A login command waiting for what the page gave back.
 pub struct LoginRun {
-    child: Child,
+    /// The command and what it starts (it may be a wrapper of the real one).
+    group: crate::launch::Group,
     stdin: Option<ChildStdin>,
     /// What it printed, both streams, and the tasks reading them.
     output: Arc<Mutex<String>>,
@@ -51,9 +52,9 @@ impl LoginRun {
             .envs(launch.env.iter().chain(&login.env).map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let mut child = command.spawn()?;
+            .stderr(Stdio::piped());
+        let mut group = crate::launch::Group::spawn(&mut command)?;
+        let child = &mut group.child;
         let output = Arc::new(Mutex::new(String::new()));
         // What it prints, both streams, line by line: its link is looked
         // for there as an agent's is in its error output.
@@ -75,15 +76,15 @@ impl LoginRun {
         }
         drop(says_to);
         let stdin = child.stdin.take();
-        let mut run = Self { child, stdin, output, readers };
+        let mut run = Self { group, stdin, output, readers };
         // The link it printed, or how it ended (it finished by itself).
         let first = tokio::select! {
             found = tokio::time::timeout(wait, crate::launch::says(said, pattern)) => Ok(found.ok().flatten()),
-            status = run.child.wait() => Err(status.is_ok_and(|s| s.success())),
+            status = run.group.child.wait() => Err(status.is_ok_and(|s| s.success())),
         };
         // Its output closed with no link: as it exits.
         let first = match first {
-            Ok(None) => match tokio::time::timeout(READ_OUT_WAIT, run.child.wait()).await {
+            Ok(None) => match tokio::time::timeout(READ_OUT_WAIT, run.group.child.wait()).await {
                 Ok(status) => Err(status.is_ok_and(|s| s.success())),
                 Err(_) => Ok(None),
             },
@@ -103,7 +104,7 @@ impl LoginRun {
         let mut stdin = self.stdin.take().ok_or_else(|| HarnessError::Provider { reason: "the sign-in no longer takes input".into() })?;
         stdin.write_all(format!("{}\n", response.trim()).as_bytes()).await?;
         stdin.flush().await?;
-        let status = tokio::time::timeout(FINISH_WAIT, self.child.wait())
+        let status = tokio::time::timeout(FINISH_WAIT, self.group.child.wait())
             .await
             .map_err(|_| HarnessError::Provider { reason: "the sign-in didn't finish".into() })??;
         self.read_out().await;
@@ -159,6 +160,22 @@ mod tests {
         let started = LoginRun::start(&launch, &login, Path::new("."), None, WAIT).await.unwrap();
         let err = started.run.finish("nope").await.unwrap_err().to_string();
         assert!(err.contains("Invalid code"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn what_a_login_command_started_goes_with_it() {
+        // A wrapper starting the real login (as claude-agent-acp starts claude).
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let (launch, login) = sh(&format!("sleep 60 & echo $! > {}; echo 'visit https://x.example/a'; read code", pid_file.display()));
+        let started = LoginRun::start(&launch, &login, dir.path(), None, WAIT).await.unwrap();
+        assert!(started.link.is_some());
+        let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        let alive = |pid: i32| std::path::Path::new(&format!("/proc/{pid}")).exists() && !std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default().contains(") Z ");
+        assert!(alive(pid));
+        drop(started);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!alive(pid), "the login's own child was stopped with it");
     }
 
     #[tokio::test]
