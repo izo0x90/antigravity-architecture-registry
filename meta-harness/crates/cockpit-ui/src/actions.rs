@@ -719,23 +719,28 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
             }
             ui.label(caption).on_hover_text(&tip);
             let mut picked = None;
-            // The one list choices are picked from (as the action list's),
-            // sized to what it holds, its highlight starting on what's
-            // chosen and kept while it's open.
+            // The one list choices are picked from (as the action list's):
+            // sized to what it holds (the popup's own scrolling never needed),
+            // its highlight starting on what's chosen, the list keys and
+            // Enter taken while it's open.
             let list_id = ui.make_persistent_id(("control_list", action.id.as_str()));
+            let details = choices.iter().any(|c| c.detail.is_some());
+            let height = crate::pick_list::PickList::fitting(ui, choices.len(), details, SETTING_LIST_ROWS);
             let open = egui::ComboBox::from_id_salt(("control", action.id.as_str()))
                 .width(PICKER_MIN_WIDTH.min(ui.available_width()))
+                .height(height + 2.0 * ui.spacing().item_spacing.y)
                 .truncate()
                 .selected_text(shown)
                 .show_ui(ui, |ui| {
                     ui.set_min_width(SETTING_LIST_WIDTH);
                     let current = choices.iter().position(|c| c.current).unwrap_or(0);
                     let mut list = ui.data_mut(|d| d.get_temp(list_id)).unwrap_or_else(|| crate::pick_list::PickList::at(current));
-                    let details = choices.iter().any(|c| c.detail.is_some());
-                    let height = crate::pick_list::PickList::fitting(ui, choices.len(), details, SETTING_LIST_ROWS);
+                    let keys = &crate::keymap::local().list;
+                    let (moved, enter) = ui.input_mut(|i| (keys.moved(i), keys.picked(i)));
                     let listing = crate::pick_list::Listing { id: action.id.as_str(), height, len: choices.len(), details, empty: "Nothing to choose" };
-                    if let Some(i) = list.show(ui, listing, None, false, |i| crate::pick_list::Row::of_choice(&choices[i])) {
+                    if let Some(i) = list.show(ui, listing, moved, enter, |i| crate::pick_list::Row::of_choice(&choices[i])) {
                         picked = (!choices[i].current).then(|| choices[i].value.clone());
+                        ui.close();
                     }
                     ui.data_mut(|d| d.insert_temp(list_id, list));
                 })

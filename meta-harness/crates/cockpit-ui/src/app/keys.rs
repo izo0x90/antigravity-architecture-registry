@@ -80,6 +80,9 @@ impl CockpitApp {
             // The palette reads its own keys while open.
             InputMode::Palette => {}
 
+            // So does a setting's list of choices, open over a panel.
+            InputMode::Normal if egui::Popup::is_any_open(ctx) => {}
+
             // The shell reads typed keys (search, hint labels, marks).
             InputMode::Capture { .. } => {
                 // Text as typed, its own erasing ('\u{8}'), then the send key

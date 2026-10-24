@@ -397,7 +397,12 @@ impl GraphState {
         if let Some((round, query)) = tended.ask {
             let limits = &self.ui.find;
             use arch_search::SearchKind;
-            for (kind, limit) in [(SearchKind::Symbols, limits.symbols), (SearchKind::Files, limits.files), (SearchKind::Text, limits.text)] {
+            for &kind in self.find.search.kinds() {
+                let limit = match kind {
+                    SearchKind::Symbols => limits.symbols,
+                    SearchKind::Files => limits.files,
+                    SearchKind::Text => limits.text,
+                };
                 let inbox = self.inbox.clone();
                 let changed = self.comparison.as_ref().filter(|_| self.nav.only_changed);
                 net.search(&query, kind, &self.nav.source, limit, changed, ctx.clone(), move |r| push(&inbox, Reply::Found(round, kind, Box::new(r))));

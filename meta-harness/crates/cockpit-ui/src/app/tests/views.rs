@@ -116,6 +116,40 @@ fn find_in_the_code_asks_the_graph_as_its_typed() {
     assert_eq!(ranked.first().map(|r| r.index), Some(0));
 }
 
+/// The graph's find, from a view with no graph on screen, asks and shows
+/// what it found as it does over the graph (the graph is tended while its
+/// search is open); opened again, it shows nothing of the search before.
+#[test]
+fn find_in_the_code_works_from_anywhere_and_starts_afresh() {
+    let (ctx, mut app) = full_app();
+    app.desk.panels = panels_of(&[BufferKind::Code], 0);
+    frame(&ctx, &mut app, vec![]);
+    let open_find = |ctx: &egui::Context, app: &mut CockpitApp| {
+        let find = app.palette_actions().into_iter().find(|b| b.action.id == "graph.find").expect("offered from anywhere");
+        app.open_palette(Some(&find));
+        frame(ctx, app, vec![]);
+    };
+    open_find(&ctx, &mut app);
+    frame(&ctx, &mut app, vec![egui::Event::Text("run".into())]);
+    frame(&ctx, &mut app, vec![]);
+    let asked: Vec<String> = sent(&app).into_iter().filter(|c| c.starts_with("GET /api/search?q=run&")).collect();
+    assert_eq!(asked.len(), 3, "asked with no graph drawn: {asked:?}");
+    let found = |kind: &str, labels: &[&str]| serde_json::json!({ "query": "run", "kind": kind, "hits": labels.iter().map(|l| serde_json::json!({ "kind": kind, "label": l, "detail": "", "key": format!("rust:{l}") })).collect::<Vec<_>>(), "total": labels.len() });
+    for call in &asked {
+        let kind = ["symbols", "files", "text"].into_iter().find(|k| call.contains(&format!("kind={k}&"))).unwrap();
+        assert!(app.desk.net.answer(call, 200, &found(kind, if kind == "symbols" { &["runner_fn"] } else { &[] })));
+    }
+    frame(&ctx, &mut app, vec![]);
+    assert!(texts(&frame(&ctx, &mut app, vec![])).contains("runner_fn"), "what it found, listed");
+    frame(&ctx, &mut app, press(egui::Key::Escape, false));
+    assert!(!app.palette.is_open());
+    let find = app.palette_actions().into_iter().find(|b| b.action.id == "graph.find").unwrap();
+    app.open_palette(Some(&find));
+    for _ in 0..3 {
+        assert!(!texts(&frame(&ctx, &mut app, vec![])).contains("runner_fn"), "opened again: nothing of the search before, from its first frame");
+    }
+}
+
 #[test]
 fn the_code_view_scrolls_with_a_chat_beside_it() {
     let (ctx, mut app) = full_app();
@@ -272,4 +306,12 @@ fn a_settings_picker_lists_its_choices_as_the_action_list_does_and_picks_one() {
     assert!(shown.contains("Who calls whom"), "each with its description: {shown}");
     click_on(&ctx, &mut app, "data flow");
     assert_eq!(app.desk.graph().nav.view, arch_graph::tree::ViewKind::DataFlow);
+    // By keys: it opens on what's chosen; up one and Enter picks it, and
+    // the panel's own keys are left alone meanwhile.
+    click_on(&ctx, &mut app, "data flow");
+    let selected = app.desk.graph().selection.clone();
+    frame(&ctx, &mut app, press(egui::Key::ArrowUp, false));
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!((app.desk.graph().nav.view, app.desk.graph().selection.clone()), (arch_graph::tree::ViewKind::Calls, selected));
 }

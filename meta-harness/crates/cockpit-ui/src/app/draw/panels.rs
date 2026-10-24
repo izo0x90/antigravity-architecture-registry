@@ -76,6 +76,14 @@ impl CockpitApp {
                 }
             }
         }
+        // A view searched from here is tended while its search is open,
+        // shown or not: what it asks and what comes back go in its tick.
+        if let Some(Origin::View(kind)) = self.palette.searching()
+            && !self.desk.shown_now(kind)
+        {
+            let (buffer, net) = self.desk.view_with_net(kind);
+            buffer.tick(net, ctx);
+        }
         if let Some(invocation) = picked {
             // Still open: the picker changed what it acts on (the cycle key).
             if !self.palette.is_open() {

@@ -48,11 +48,14 @@ pub struct CodeSearch {
     out: Option<Round>,
     rounds: u64,
     shown: Answered,
+    /// The round shown before (a pick made from its rows in the frame the
+    /// next came still finds its hit).
+    before: Answered,
 }
 
 impl CodeSearch {
     pub fn new(kinds: &'static [SearchKind]) -> Self {
-        Self { kinds, typed: String::new(), out: None, rounds: 0, shown: Answered::default() }
+        Self { kinds, typed: String::new(), out: None, rounds: 0, shown: Answered::default(), before: Answered::default() }
     }
 
     /// What's asked of each round, in the order shown.
@@ -70,10 +73,23 @@ impl CodeSearch {
     /// Once a frame: a round answered (every kind, or its time up) becomes
     /// what's shown; then, when none is out and the rows aren't of what's
     /// typed, the round to ask. Nothing typed (or only spaces) is answered
-    /// at once, with nothing; the same query with other spaces at its ends
-    /// keeps its rows.
+    /// at once, with nothing, and the query the rows are of again (with
+    /// other spaces at its ends) keeps them: either drops a round out.
     pub fn tend(&mut self, now: f64) -> Tended {
         let mut tended = Tended::default();
+        let query = self.typed.trim();
+        if query.is_empty() || self.shown.typed.as_deref().map(str::trim) == Some(query) {
+            self.out = None;
+            if self.shown.typed.as_deref() != Some(self.typed.as_str()) {
+                if query.is_empty() {
+                    self.rounds += 1;
+                    self.show(Answered { number: self.rounds, typed: Some(self.typed.clone()), found: Vec::new() });
+                } else {
+                    self.shown.typed = Some(self.typed.clone());
+                }
+            }
+            return tended;
+        }
         if let Some(out) = &self.out {
             let whole = self.kinds.iter().all(|k| out.came.contains_key(k));
             if whole || now - out.since >= ROUND_LIMIT_S {
@@ -82,24 +98,21 @@ impl CodeSearch {
                 }
                 let Round { number, typed, mut came, .. } = self.out.take().expect("a round is out");
                 let found = self.kinds.iter().filter_map(|k| came.remove(k).map(|f| (*k, f))).collect();
-                self.shown = Answered { number, typed: Some(typed), found };
+                self.show(Answered { number, typed: Some(typed), found });
             }
         }
-        if self.out.is_some() || self.shown.typed.as_deref() == Some(self.typed.as_str()) {
+        if self.out.is_some() || self.shown.typed.as_deref().map(str::trim) == Some(self.typed.trim()) {
             return tended;
         }
-        let query = self.typed.trim();
-        if self.shown.typed.as_deref().map(str::trim) == Some(query) {
-            self.shown.typed = Some(self.typed.clone());
-        } else if query.is_empty() {
-            self.rounds += 1;
-            self.shown = Answered { number: self.rounds, typed: Some(self.typed.clone()), found: Vec::new() };
-        } else {
-            self.rounds += 1;
-            tended.ask = Some((self.rounds, query.to_owned()));
-            self.out = Some(Round { number: self.rounds, typed: self.typed.clone(), since: now, came: BTreeMap::new() });
-        }
+        self.rounds += 1;
+        tended.ask = Some((self.rounds, self.typed.trim().to_owned()));
+        self.out = Some(Round { number: self.rounds, typed: self.typed.clone(), since: now, came: BTreeMap::new() });
         tended
+    }
+
+    /// `answered` is what's shown now; what was, the round before.
+    fn show(&mut self, answered: Answered) {
+        self.before = std::mem::replace(&mut self.shown, answered);
     }
 
     /// A kind's answer for round `number`: kept when that round is out (a
@@ -128,9 +141,11 @@ impl CodeSearch {
         self.out.is_some()
     }
 
-    /// A hit shown: the round's number, its kind and its place among them.
+    /// A hit shown (or shown the round before): the round's number, its
+    /// kind and its place among them.
     pub fn hit(&self, number: u64, kind: SearchKind, index: usize) -> Option<&Hit> {
-        (number == self.shown.number).then(|| self.shown.found.iter().find(|(k, _)| *k == kind)?.1.hits.get(index))?
+        let round = [&self.shown, &self.before].into_iter().find(|r| r.number == number && r.typed.is_some())?;
+        round.found.iter().find(|(k, _)| *k == kind)?.1.hits.get(index)
     }
 
     /// The rows shown, named the same in every picker: what each is (a
@@ -145,20 +160,23 @@ impl CodeSearch {
                 SearchKind::Files => ("file", egui_phosphor::regular::FILE),
                 SearchKind::Text => ("line", egui_phosphor::regular::TEXT_ALIGN_LEFT),
             };
+            let first = out.len();
             for (i, hit) in found.hits.iter().enumerate() {
                 let Some(value) = value(self.shown.number, *kind, i, hit) else { continue };
-                let mut detail = if hit.detail.is_empty() { what.to_owned() } else { format!("{what} · {}", hit.detail) };
-                // The last of a kind says what wasn't listed: more matches
-                // than shown, or a search cut at its time limit.
-                if i + 1 == found.hits.len() {
-                    if found.total > found.hits.len() {
-                        detail.push_str(&format!(" · {} of {} {what}s", found.hits.len(), found.total));
-                    }
-                    if found.partial {
-                        detail.push_str(" · stopped at its time limit: there may be more");
-                    }
-                }
+                // (The server's word for a file nothing stands for is "file".)
+                let detail = if hit.detail.is_empty() || hit.detail == what { what.to_owned() } else { format!("{what} · {}", hit.detail) };
                 out.push(Choice::new(value, hit.label.clone()).detail(Some(detail)).glyph(icon, crate::theme::colors().accent));
+            }
+            // The last listed of a kind says what wasn't: more matches than
+            // shown, or a search cut at its time limit.
+            if let Some(last) = out[first..].last_mut() {
+                let detail = last.detail.get_or_insert_with(String::new);
+                if found.total > found.hits.len() {
+                    detail.push_str(&format!(" · {} of {} {what}s", found.hits.len(), found.total));
+                }
+                if found.partial {
+                    detail.push_str(" · stopped at its time limit: there may be more");
+                }
             }
         }
         out
@@ -167,7 +185,7 @@ impl CodeSearch {
     /// Nothing asked or shown (a pick was made: what comes for the round
     /// out is dropped).
     pub fn clear(&mut self) {
-        (self.typed, self.out, self.shown) = (String::new(), None, Answered::default());
+        (self.typed, self.out, self.shown, self.before) = (String::new(), None, Answered::default(), Answered::default());
     }
 }
 
@@ -219,6 +237,17 @@ mod tests {
         // The same query with a space after it keeps its rows.
         search.typed("ab ");
         assert_eq!((search.tend(0.5).ask, search.rows_of()), (None, Some("ab ")));
+        // A round out, then the field cleared, or back to what's shown:
+        // answered at once, the round dropped.
+        search.typed("abc");
+        let (abc, _) = search.tend(0.6).ask.unwrap();
+        search.typed("ab");
+        assert_eq!((search.tend(0.7), search.rows_of(), search.is_out()), (Tended::default(), Some("ab"), false));
+        assert_eq!(search.answer(abc, SearchKind::Files, found(&["abc.rs"])), None, "its answers dropped");
+        search.typed("abc");
+        search.tend(0.8);
+        search.typed("");
+        assert_eq!((search.tend(0.9).ask, search.rows_of(), labels(&search).len()), (None, Some(""), 0));
     }
 
     #[test]

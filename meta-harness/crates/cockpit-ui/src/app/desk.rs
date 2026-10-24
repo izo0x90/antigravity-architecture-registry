@@ -215,6 +215,11 @@ impl Desk {
         self.on_screen.clear();
     }
 
+    /// The buffer of `kind` in use was drawn this frame.
+    pub fn shown_now(&self, kind: BufferKind) -> bool {
+        self.on_screen.contains(&self.in_use(kind))
+    }
+
     /// `id` was drawn this frame.
     pub fn on_screen(&mut self, id: BufferId) {
         self.on_screen.insert(id);

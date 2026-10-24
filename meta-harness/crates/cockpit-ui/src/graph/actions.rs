@@ -248,6 +248,8 @@ impl GraphState {
         let (Some(round), Some(kind), Some(index)) = (parts.next(), parts.next(), parts.next()) else { return };
         let (Ok(round), Some(kind), Ok(index)) = (round.parse(), SearchKind::from_name(kind), index.parse()) else { return };
         let Some(hit) = self.find.search.hit(round, kind, index).cloned() else { return };
+        // Picked: what it looked for is done with.
+        self.find.search.clear();
         self.go_to_hit(&hit);
     }
 
@@ -294,6 +296,17 @@ mod tests {
         g.found(round, kind, Ok(Found { total: hits.len(), hits, ..Found::default() }));
     }
 
+    /// "step" searched and answered (a symbol, a file, a line): its round.
+    fn search_step(g: &mut GraphState) -> u64 {
+        g.find_query("step");
+        let (round, _) = g.find.search.tend(0.0).ask.expect("the query goes out");
+        g.found(round, SearchKind::Text, Ok(Found { hits: vec![hit(SearchKind::Text, None, "// step by step", false, None)], total: 40, partial: true, ..Found::default() }));
+        answer(g, round, SearchKind::Files, vec![hit(SearchKind::Files, Some("rust:a"), "src/a.rs", false, None)]);
+        answer(g, round, SearchKind::Symbols, vec![hit(SearchKind::Symbols, Some("rust:a::step"), "step", true, None)]);
+        g.find.search.tend(0.1);
+        round
+    }
+
     fn value_of(g: &GraphState, label: &str) -> String {
         g.find_choices().0.into_iter().find(|c| c.label == label).unwrap().value
     }
@@ -317,22 +330,27 @@ mod tests {
         let said = line.detail.unwrap_or_default();
         assert!(said.contains("1 of 40 lines") && said.contains("time limit"), "{said}");
 
-        // A function, in the calls view: the root there.
+        // A function, in the calls view: the root there; the search is
+        // done with.
         g.command(crate::graph::actions::GraphCommand::Find, Some(value_of(&g, "step")));
         assert_eq!((g.nav.view, g.nav.root.as_deref()), (ViewKind::Calls, Some("rust:a::step")));
+        assert_eq!(g.find_choices(), (Vec::new(), None), "picked: nothing kept for the next find");
 
         // A file's module: the calls view can't show it, so the boxes do.
+        search_step(&mut g);
         let file = value_of(&g, "src/a.rs");
         g.command(crate::graph::actions::GraphCommand::Find, Some(file));
         assert_eq!((g.nav.view, g.nav.root.as_deref()), (ViewKind::Contains, Some("rust:a")));
 
         // A line nothing in the graph stands for opens in the code.
+        search_step(&mut g);
         g.command(crate::graph::actions::GraphCommand::Find, Some(value_of(&g, "// step by step")));
         let shown = crate::nav::Ask::Show { target: crate::nav::Target::Span { file: "src/a.rs".into(), start: 3, end: 3 }, in_: Some(crate::kind::BufferKind::Code) };
         assert!(g.take_asks().contains(&shown), "it asks the code to show it");
 
         // While the next is looked for, the rows of `step` stay; answers
         // to it, late, are dropped.
+        let round = search_step(&mut g);
         g.find_query("run");
         let (next, _) = g.find.search.tend(0.2).ask.expect("the next query goes out");
         answer(&mut g, round, SearchKind::Symbols, vec![hit(SearchKind::Symbols, Some("rust:a::late"), "late", true, None)]);
@@ -344,8 +362,13 @@ mod tests {
         }
         g.find.search.tend(0.4);
         assert_eq!(g.find_choices(), (Vec::new(), Some("run".to_owned())));
-        // A pick from an older list does nothing.
-        g.command(crate::graph::actions::GraphCommand::Find, Some(format!("{round}:symbols:0")));
+        // A pick from the rows shown a moment ago (the frame the next came)
+        // still goes; one from a search done with since does nothing.
+        let earlier = format!("{round}:symbols:0");
+        g.command(crate::graph::actions::GraphCommand::Find, Some(earlier.clone()));
+        assert_eq!(g.nav.root.as_deref(), Some("rust:a::step"));
+        g.navigate(NavChange::GoIn("rust:a".into()));
+        g.command(crate::graph::actions::GraphCommand::Find, Some(earlier));
         assert_eq!(g.nav.root.as_deref(), Some("rust:a"));
     }
 

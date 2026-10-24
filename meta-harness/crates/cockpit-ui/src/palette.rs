@@ -43,6 +43,12 @@ pub struct Palette {
     /// the frame it changed, or before its answers came): it's taken once
     /// the rows are of what's typed.
     enter_waiting: bool,
+    /// The query a search's rows were of last frame (they changed: the
+    /// highlight starts again), and whether rows of what's typed have come
+    /// since this search opened (until then none are shown: rows of a query
+    /// from before it opened aren't this search's).
+    rows_of: Option<String>,
+    answered: bool,
     /// The tallest it's been while open: it never gets shorter (going
     /// from a list to a text field, say), so nothing under it jumps.
     tallest: f32,
@@ -119,7 +125,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions, filter: String::new(), list: Default::default(), ask: None, enter_waiting: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None }
+        Self { open: false, stage: Stage::Actions, filter: String::new(), list: Default::default(), ask: None, enter_waiting: false, rows_of: None, answered: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None }
     }
 }
 
@@ -136,6 +142,14 @@ impl Palette {
     /// is run just after it closes.
     pub fn opening(&self) -> u64 {
         self.opened
+    }
+
+    /// What a search open now asks (its action's origin).
+    pub fn searching(&self) -> Option<Origin> {
+        match &self.stage {
+            Stage::Search { action, .. } if self.open => Some(action.origin),
+            _ => None,
+        }
     }
 
     /// The action whose value it's picking now (none: it's closed, or
@@ -166,7 +180,7 @@ impl Palette {
     fn enter(&mut self, action: Bound, from_list: bool) {
         self.filter.clear();
         self.list.reset();
-        self.enter_waiting = false;
+        (self.enter_waiting, self.rows_of, self.answered) = (false, None, false);
         let action = Box::new(action);
         self.stage = match &action.action.param {
             Param::Text { start, .. } => {
@@ -183,7 +197,11 @@ impl Palette {
                 self.ask = Some(SearchAsk { origin: action.origin, action: action.action.id.clone(), query: String::new() });
                 Stage::Search { action, from_list }
             }
-            _ => Stage::Choose { action, from_list },
+            _ => {
+                // Starting on what's chosen now, as a setting's list does.
+                self.list = crate::pick_list::PickList::at(action.action.param.choices().iter().position(|c| c.current).unwrap_or(0));
+                Stage::Choose { action, from_list }
+            }
         };
     }
 
@@ -323,8 +341,11 @@ impl Palette {
         {
             **action = fresh.clone();
         }
-        // Enter on rows of what was typed before waits for those of what's typed.
-        let waiting = matches!(&self.stage, Stage::Search { action, .. } if matches!(&action.action.param, Param::Search { of, .. } if of.as_deref() != Some(self.filter.as_str())));
+        // Enter on rows of what was typed before waits for those of what's
+        // typed, unless a row was chosen on them (a key, the pointer): then
+        // that row.
+        let stale = matches!(&self.stage, Stage::Search { action, .. } if matches!(&action.action.param, Param::Search { of, .. } if of.as_deref() != Some(self.filter.as_str())));
+        let waiting = stale && !self.list.chosen();
         let enter = if waiting {
             self.enter_waiting |= enter;
             false
@@ -406,7 +427,9 @@ impl Palette {
                             if let Stage::Search { action, .. } = &stage {
                                 self.ask = Some(SearchAsk { origin: action.origin, action: action.action.id.clone(), query: self.filter.clone() });
                                 // Results of what was typed before: Enter waits for these.
-                                self.enter_waiting |= enter;
+                                // (An Enter before this typing is dropped: it
+                                // was for what's typed no more.)
+                                self.enter_waiting = enter;
                                 enter = false;
                                 ctx.request_repaint();
                             }
@@ -471,11 +494,17 @@ impl Palette {
                                 if self.gives_back && self.filter.ends_with(' ') {
                                     leave = true;
                                 }
+                                if of != self.rows_of {
+                                    self.rows_of.clone_from(&of);
+                                    self.list.reset();
+                                }
+                                self.answered |= of.as_deref() == Some(self.filter.as_str());
+                                let found = if self.answered { found } else { Vec::new() };
                                 // No rows: said of the query they're of (rows of an
                                 // earlier one stay, said as they were, until the
                                 // new ones come).
                                 let empty = match of.as_deref().map(str::trim) {
-                                    Some(query) if !query.is_empty() => "Nothing found",
+                                    Some(query) if self.answered && !query.is_empty() => "Nothing found",
                                     _ if self.filter.trim().is_empty() => "Type to search",
                                     _ => "Looking…",
                                 };

@@ -176,13 +176,16 @@ impl CockpitApp {
     /// code search does: `CodeSearch`); takes the answers.
     pub(super) fn find_links(&mut self, ctx: &egui::Context) {
         let answers: Vec<_> = std::mem::take(&mut *self.desk.finding.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        // Closed: what it looked for is done with (what comes for it is
+        // dropped, unsaid).
+        if self.palette.picking() != Some("link.thing") {
+            self.desk.finding.search.clear();
+            return;
+        }
         for (round, kind, answer) in answers {
             if let Some(note) = self.desk.finding.search.answer(round, kind, answer) {
                 self.note = Some(note);
             }
-        }
-        if self.palette.picking() != Some("link.thing") {
-            return;
         }
         let query = self.desk.shell_searches.get("link.thing").map_or("", String::as_str);
         self.desk.finding.search.typed(query);
@@ -267,7 +270,6 @@ impl CockpitApp {
         let Some(subject) = value.and_then(|v| serde_json::from_str::<Subject>(&v).ok()) else { return };
         let label = self.desk.finding.rows().iter().find(|c| serde_json::from_str::<Subject>(&c.value).ok().as_ref() == Some(&subject)).map_or_else(|| "something".to_owned(), |c| c.label.clone());
         self.desk.shell_searches.remove("link.thing");
-        self.desk.finding.search.clear();
         self.put_link(here, &format!("@{label}"), Linked::Thing { subject });
     }
 }

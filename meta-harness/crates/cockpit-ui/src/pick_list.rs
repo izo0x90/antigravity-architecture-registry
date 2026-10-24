@@ -54,27 +54,44 @@ pub struct Listing<'s> {
     pub empty: &'s str,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct PickList {
     highlight: usize,
+    /// The highlight was put where it is by a key or the pointer since the
+    /// rows last changed (not where it started).
+    chosen: bool,
     viewport: Viewport,
-    /// The rows changed: back to the top when next drawn.
-    to_top: bool,
+    /// The row to show when next drawn (its list starts or changed): the
+    /// top for the first, else in the middle.
+    show_row: Option<usize>,
+}
+
+impl Default for PickList {
+    fn default() -> Self {
+        Self::at(0)
+    }
 }
 
 impl PickList {
-    /// A list whose highlight starts on row `index` (what's chosen now).
+    /// A list whose highlight starts on row `index` (what's chosen now),
+    /// shown.
     pub fn at(index: usize) -> Self {
-        Self { highlight: index, ..Self::default() }
+        Self { highlight: index, chosen: false, viewport: Viewport::default(), show_row: Some(index) }
     }
 
     pub fn highlight(&self) -> usize {
         self.highlight
     }
 
-    /// Back to the first row (the rows changed).
+    /// The highlight was moved there (a key, the pointer) since the rows
+    /// last changed.
+    pub fn chosen(&self) -> bool {
+        self.chosen
+    }
+
+    /// Back to the first row, shown (the rows changed).
     pub fn reset(&mut self) {
-        (self.highlight, self.to_top) = (0, true);
+        *self = Self { viewport: self.viewport, ..Self::at(0) };
     }
 
     /// The height of a row: its label line, and a line of description when
@@ -101,17 +118,26 @@ impl PickList {
         let now = ui.input(|i| i.time);
         let row_h = Self::row_height(ui, details);
         let stride = row_h + ui.spacing().item_spacing.y;
-        self.viewport.margin = stride;
         self.highlight = self.highlight.min(len.saturating_sub(1));
-        if std::mem::take(&mut self.to_top) {
-            self.viewport.take(&Moved { cursor: 0, offset: egui::Vec2::ZERO }, now, false);
-        }
+        // This frame's window and rows, before any move (not the last
+        // frame's: a list just opened, or rows just come).
+        self.viewport.margin = stride;
+        self.viewport.window = egui::vec2(ui.available_width(), height);
+        self.viewport.content = egui::vec2(ui.available_width(), len as f32 * stride);
+        // A list started or changed shows its row, whatever this scroll
+        // area was left at (each keeps its own).
+        let shown_at = self.show_row.take().map(|row| {
+            let row = row.min(len.saturating_sub(1));
+            let y = if row == 0 { 0.0 } else { self.viewport.clamp(egui::vec2(0.0, row as f32 * stride + stride / 2.0 - height / 2.0)).y };
+            self.viewport.take(&Moved { cursor: row, offset: egui::vec2(0.0, y) }, now, false);
+            y
+        });
         if let Some(motion) = moved.filter(|_| len > 0) {
             self.go(motion, len, stride, now);
         }
         let mut area = egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]).max_height(height).min_scrolled_height(height);
-        if let Some(offset) = self.viewport.wanted(now) {
-            area = area.vertical_scroll_offset(offset.y);
+        if let Some(y) = self.viewport.wanted(now).map(|o| o.y).or(shown_at) {
+            area = area.vertical_scroll_offset(y);
         }
         if len == 0 {
             let output = area.show(ui, |ui| ui.label(egui::RichText::new(empty).size(crate::theme::look().text_body).color(colors().muted)));
@@ -129,8 +155,13 @@ impl PickList {
                     (i, rect, response)
                 })
                 .collect();
-            if pointer_moved && let Some((i, ..)) = laid.iter().find(|(_, _, r)| r.hovered()) {
-                self.highlight = *i;
+            // (A key's move this frame wins over a pointer that twitched.)
+            if pointer_moved
+                && moved.is_none()
+                && let Some((i, ..)) = laid.iter().find(|(_, _, r)| r.hovered())
+                && *i != self.highlight
+            {
+                (self.highlight, self.chosen) = (*i, true);
             }
             for (i, rect, response) in laid {
                 let row = row(i);
@@ -152,11 +183,13 @@ impl PickList {
 
     /// A key's move over `len` rows, by the views' rules; the list's own:
     /// one down from the last goes round to the first, one up from the
-    /// first to the last.
+    /// first to the last (unless scrolled by hand since: then from what
+    /// shows, as every view moves).
     fn go(&mut self, motion: Motion, len: usize, stride: f32, now: f64) {
+        let by_hand = self.viewport.by_hand;
         let go = match motion {
-            Motion::Down if self.highlight + 1 == len => Go::First,
-            Motion::Up if self.highlight == 0 => Go::Last,
+            Motion::Down if self.highlight + 1 == len && !by_hand => Go::First,
+            Motion::Up if self.highlight == 0 && !by_hand => Go::Last,
             _ => match Go::of(motion, 1) {
                 Some(go) => go,
                 None => return,
@@ -164,7 +197,7 @@ impl PickList {
         };
         let stops: Vec<Stop> = (0..len).map(|i| Stop::new(i as f32 * stride, stride)).collect();
         if let Some(moved) = self.viewport.go(&stops, Some(self.highlight), go) {
-            self.highlight = moved.cursor;
+            (self.highlight, self.chosen) = (moved.cursor, true);
             self.viewport.take(&moved, now, true);
         }
     }
@@ -274,6 +307,25 @@ mod tests {
         }
         assert_eq!((went[0], went[1], went[4], went[6]), (49, 0, 49, 0), "round at the ends; last and first: {went:?}");
         assert!(went[2] > 0 && went[3] > went[2] && went[5] < 49, "half a window down twice, then up: {went:?}");
+    }
+
+    /// A list starting on a row far down (what's chosen now) shows it from
+    /// its first frame; a key's move before the list was ever drawn lands
+    /// as it would after.
+    #[test]
+    fn a_list_shows_the_row_it_starts_on_and_moves_right_from_its_first_frame() {
+        let mut shown = Shown::new(50, None);
+        shown.list = PickList::at(40);
+        let first = shown.frame(vec![], None, false);
+        assert!(at(&first, "row 40").is_some() && at(&first, "row 0").is_none(), "the row it starts on, in sight");
+        let mut fresh = Shown::new(50, None);
+        fresh.frame(vec![], Some(Motion::Last), false);
+        let frame = fresh.frame(vec![], None, false);
+        assert_eq!(fresh.list.highlight(), 49);
+        assert!(at(&frame, "row 49").is_some(), "the last, in sight");
+        fresh.list.reset();
+        let frame = fresh.frame(vec![], None, false);
+        assert!(at(&frame, "row 0").is_some(), "reset: back at the top");
     }
 
     /// The pointer moving over a row moves the highlight; Enter and a tap

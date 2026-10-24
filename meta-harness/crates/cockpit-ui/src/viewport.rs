@@ -50,7 +50,8 @@ pub enum Go {
 
 impl Go {
     /// The move a list motion asks for, `count` times: down and up, half
-    /// a window, first and last. None for the others (a view's own).
+    /// a window, first and last. None for the others (a view's own). Every
+    /// motion is named: a new one is decided here, for every view.
     pub fn of(motion: crate::nav::Motion, count: usize) -> Option<Self> {
         use crate::nav::Motion;
         Some(match motion {
@@ -60,7 +61,7 @@ impl Go {
             Motion::HalfUp => Self::HalfUp(count),
             Motion::First => Self::First,
             Motion::Last => Self::Last,
-            _ => return None,
+            Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight | Motion::NextSibling | Motion::PrevSibling | Motion::Line(_) => return None,
         })
     }
 }
