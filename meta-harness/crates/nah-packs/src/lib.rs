@@ -1,7 +1,7 @@
 //! Packs: everything the tool installs or reads per language, as versioned
 //! data. A pack is a folder with a `pack.toml` (see `manifest`) and its
-//! files. Kinds: harnesses, languages and language servers. Where packs come from,
-//! the platform names, and where installs go are config (`index.toml`,
+//! files. Kinds: harnesses, languages, language servers and fonts. Where
+//! packs come from, the platform names, and where installs go are config (`index.toml`,
 //! `platforms.toml`); the installer (`engine`) only knows kinds of steps.
 
 mod acp;
@@ -29,10 +29,14 @@ pub enum PackError {
     NotFound(String),
     #[error("pack '{0}' isn't installed (meta-harness pack install {0})")]
     NotInstalled(String),
-    #[error("pack '{pack}' is installed at another version: {reason} (meta-harness pack update {pack})")]
-    Outdated { pack: String, reason: String },
-    #[error("pack '{pack}' is broken: {reason} (meta-harness pack install {pack})")]
-    Broken { pack: String, reason: String },
+    #[error("pack '{pack}' isn't a {} pack", kind.name())]
+    NotA { pack: String, kind: Kind },
+    /// Installed at another version, or its tool out of its range: its
+    /// state (`State`'s words) and the command that fixes it.
+    #[error("pack '{pack}' needs updating: {state} (meta-harness pack update {pack})")]
+    Outdated { pack: String, state: String },
+    #[error("pack '{pack}' is {state} (meta-harness pack install {pack})")]
+    Broken { pack: String, state: String },
     #[error("installing {pack}: {reason}")]
     Install { pack: String, reason: String },
     #[error("pack lock: {0}")]

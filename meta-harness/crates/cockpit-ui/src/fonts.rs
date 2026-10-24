@@ -20,11 +20,12 @@ type Leads = (Option<String>, Option<String>);
 pub struct Fonts {
     /// What the config names, as last applied.
     wanted: FontsUi,
-    /// The faces fetched, by pack: only those named now, each once
-    /// whichever families it leads.
-    have: BTreeMap<String, Arc<egui::FontData>>,
-    /// Asked for, not answered yet.
-    waiting: BTreeSet<String>,
+    /// Every face fetched, by pack, kept for the page's life and handed to
+    /// egui borrowed: held once (egui copies a face it doesn't borrow), and
+    /// never fetched twice. At most one per font pack.
+    have: BTreeMap<String, &'static [u8]>,
+    /// Asked of the server, not answered yet.
+    asked: BTreeSet<String>,
     /// What the context's fonts were last built from (none: never).
     built: Option<Leads>,
     inbox: Inbox,
@@ -36,15 +37,12 @@ impl Fonts {
         self.settle(ctx);
     }
 
-    /// The config's choice, when the config changed: what it names and
-    /// isn't had is fetched; what's had is kept.
+    /// The config's choice, when the config changed: what it names that
+    /// isn't had or asked for already is fetched.
     pub fn want(&mut self, wanted: &FontsUi, net: &NetClient, ctx: &egui::Context) {
         self.wanted = wanted.clone();
-        let named: BTreeSet<String> = [&wanted.mono, &wanted.text].into_iter().filter(|n| !n.is_empty()).cloned().collect();
-        self.have.retain(|name, _| named.contains(name));
-        self.waiting.retain(|name| named.contains(name));
-        for name in named {
-            if self.have.contains_key(&name) || !self.waiting.insert(name.clone()) {
+        for name in self.named() {
+            if self.have.contains_key(&name) || !self.asked.insert(name.clone()) {
                 continue;
             }
             let inbox = self.inbox.clone();
@@ -58,7 +56,7 @@ impl Fonts {
     }
 
     /// Takes the faces that came. Returns what to tell the user (a face
-    /// not to be had).
+    /// named that can't be had).
     pub fn tend(&mut self, ctx: &egui::Context) -> Option<String> {
         let arrived = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         if arrived.is_empty() {
@@ -66,29 +64,32 @@ impl Fonts {
         }
         let mut note = None;
         for (name, result) in arrived {
-            // Not named any more (or answered already): passed over.
-            if !self.waiting.remove(&name) {
-                continue;
-            }
+            self.asked.remove(&name);
             match result {
                 Ok(bytes) => {
-                    self.have.insert(name, Arc::new(egui::FontData::from_owned(bytes)));
+                    self.have.entry(name).or_insert_with(|| Box::leak(bytes.into_boxed_slice()));
                 }
-                Err(e) => note = Some(format!("The font {name} can't be had, so egui's own is used: {}", String::from(e))),
+                Err(e) if self.named().contains(&name) => note = Some(format!("The font {name} can't be had, so egui's own is used: {}", String::from(e))),
+                Err(_) => {}
             }
         }
         self.settle(ctx);
         note
     }
 
-    /// Once nothing named is still coming: the fonts built from what's
+    /// The packs the config names.
+    fn named(&self) -> BTreeSet<String> {
+        [&self.wanted.mono, &self.wanted.text].into_iter().filter(|n| !n.is_empty()).cloned().collect()
+    }
+
+    /// Once no face named is still coming: the fonts built from what's
     /// had, if that's not what they're built from already (one rebuild
     /// for all the faces, none when nothing changed).
     fn settle(&mut self, ctx: &egui::Context) {
-        if !self.waiting.is_empty() {
+        if self.named().iter().any(|n| self.asked.contains(n)) {
             return;
         }
-        let lead = |name: &String| self.have.get(name).map(|data| Face { name: name.clone(), data: data.clone() });
+        let lead = |name: &String| self.have.get(name).map(|bytes| Face { name: name.clone(), data: Arc::new(egui::FontData::from_static(bytes)) });
         let faces = Faces { mono: lead(&self.wanted.mono), text: lead(&self.wanted.text) };
         let leads = (faces.mono.as_ref().map(|f| f.name.clone()), faces.text.as_ref().map(|f| f.name.clone()));
         if self.built.as_ref() != Some(&leads) {
@@ -138,6 +139,15 @@ mod tests {
         net.answer_bytes("GET /api/ui/fonts/geist-mono", 200, hack);
         fonts.tend(&ctx);
         assert_eq!(leading(&ctx), ("jetbrains-mono".into(), "geist-mono".into()));
+
+        // Away and back while a face is on its way: asked once.
+        let third = FontsUi { mono: "jetbrains-mono".into(), text: "commit-mono".into() };
+        fonts.want(&third, &net, &ctx);
+        fonts.want(&other, &net, &ctx);
+        fonts.want(&third, &net, &ctx);
+        assert_eq!(sent().iter().filter(|c| c.ends_with("/commit-mono")).count(), 1, "{:?}", sent());
+        fonts.want(&other, &net, &ctx);
+        assert_eq!(leading(&ctx), ("jetbrains-mono".into(), "geist-mono".into()), "a face had is kept: back at once");
 
         // One not installed: said, and egui's own leads where it was named.
         let missing = FontsUi { mono: "maple-mono".into(), text: String::new() };

@@ -89,10 +89,11 @@ impl axum::response::IntoResponse for FaceFailed {
         let status = match &self.0 {
             E::NotFound(_) | E::NotInstalled(_) => StatusCode::NOT_FOUND,
             // Asked of a pack that isn't a font.
-            E::Manifest { .. } => StatusCode::BAD_REQUEST,
+            E::NotA { .. } => StatusCode::BAD_REQUEST,
             // There, but not as this server's packs say it should be.
             E::Outdated { .. } => StatusCode::CONFLICT,
-            E::Broken { .. } | E::Config(_) | E::Lock(_) | E::Install { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            // The server's own packs (a manifest, the lock, an install).
+            E::Broken { .. } | E::Manifest { .. } | E::Config(_) | E::Lock(_) | E::Install { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, Json(serde_json::json!({ "error": self.0.to_string() }))).into_response()
     }

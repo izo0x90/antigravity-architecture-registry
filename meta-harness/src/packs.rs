@@ -192,7 +192,7 @@ fn pack_launch(catalog: &Catalog, lock: &Lock, name: &str) -> Result<HarnessLaun
         }
         State::Missing => HarnessLaunch::Unavailable { reason: format!("{name} isn't installed"), fix: install },
         State::Broken(why) => HarnessLaunch::Unavailable { reason: format!("{name} fails its check: {why}"), fix: install },
-        state @ (State::OutOfRange { .. } | State::Outdated { .. }) => HarnessLaunch::Unavailable { reason: format!("{name}: {}", describe(&state)), fix: update },
+        state @ (State::OutOfRange { .. } | State::Outdated { .. }) => HarnessLaunch::Unavailable { reason: format!("{name}: {}", state), fix: update },
     })
 }
 
@@ -211,16 +211,6 @@ pub enum Command {
     Which(String),
 }
 
-fn describe(state: &State) -> String {
-    match state {
-        State::Missing => "not installed".into(),
-        State::Ready { tool_version: Some(v) } => format!("ready ({v})"),
-        State::Ready { tool_version: None } => "ready".into(),
-        State::OutOfRange { found, supports } => format!("{found} isn't in {supports}"),
-        State::Outdated { installed, available } => format!("pack {installed} installed, {available} available"),
-        State::Broken(why) => format!("broken: {why}"),
-    }
-}
 
 /// What the lock records of `pack`, without running anything.
 fn recorded(lock: &Lock, pack: &nah_packs::Pack) -> String {
@@ -246,7 +236,7 @@ pub fn run(command: &Command, catalog: &Catalog) -> Result<String, PackError> {
                 // checking runs each tool's check.
                 let state = match command {
                     Command::List => recorded(&lock, pack),
-                    _ => describe(&nah_packs::state(catalog, &lock, pack.name())?),
+                    _ => nah_packs::state(catalog, &lock, pack.name())?.to_string(),
                 };
                 let _ = writeln!(out, "{:<20} {:<9} {:<8} {:<34} {}", pack.name(), pack.kind().name(), m.pack.version, tool, state);
             }
@@ -271,9 +261,9 @@ pub fn run(command: &Command, catalog: &Catalog) -> Result<String, PackError> {
         }
         Command::Check(Some(name)) => {
             let state = nah_packs::state(catalog, &lock, name)?;
-            let _ = writeln!(out, "{name}: {}", describe(&state));
+            let _ = writeln!(out, "{name}: {}", state);
             if !state.is_ready() {
-                return Err(PackError::Install { pack: name.clone(), reason: describe(&state) });
+                return Err(PackError::Install { pack: name.clone(), reason: state.to_string() });
             }
         }
         Command::Install(name) => {
@@ -305,7 +295,7 @@ pub fn run(command: &Command, catalog: &Catalog) -> Result<String, PackError> {
                 match nah_packs::state(catalog, &lock, &name)? {
                     state @ (State::Outdated { .. } | State::OutOfRange { .. } | State::Broken(_) | State::Missing) => {
                         let installed = nah_packs::install(catalog, &name, &platform)?;
-                        let _ = writeln!(out, "{name}{found}: {}; pack {} installed", describe(&state), installed.pack_version);
+                        let _ = writeln!(out, "{name}{found}: {}; pack {} installed", state, installed.pack_version);
                     }
                     State::Ready { .. } => {
                         let _ = writeln!(out, "{name}{found} is up to date");

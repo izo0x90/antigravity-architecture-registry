@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::catalog::{Catalog, Pack};
 use crate::lock::{Installed, Lock};
-use crate::manifest::{Check, Install, Launch, Step, Unpack};
+use crate::manifest::{Check, Install, Kind, Launch, Step, Unpack};
 use crate::platform::PlatformDef;
 use crate::{PackError, acp, steps, template};
 
@@ -35,6 +35,21 @@ pub enum State {
 impl State {
     pub fn is_ready(&self) -> bool {
         matches!(self, State::Ready { .. })
+    }
+}
+
+/// A state in words, the same wherever it's said (`pack check`, a pack
+/// that can't be used).
+impl std::fmt::Display for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            State::Missing => write!(f, "not installed"),
+            State::Ready { tool_version: Some(v) } => write!(f, "ready ({v})"),
+            State::Ready { tool_version: None } => write!(f, "ready"),
+            State::OutOfRange { found, supports } => write!(f, "{found} isn't in {supports}"),
+            State::Outdated { installed, available } => write!(f, "pack {installed} installed, {available} available"),
+            State::Broken(why) => write!(f, "broken: {why}"),
+        }
     }
 }
 
@@ -465,14 +480,12 @@ pub fn harness_launch(catalog: &Catalog, lock: &Lock, name: &str) -> Result<Harn
 /// (installed at this version, what its install keeps all there).
 pub fn font_face(catalog: &Catalog, lock: &Lock, name: &str) -> Result<PathBuf, PackError> {
     let pack = catalog.get(name)?;
-    let font = pack.manifest.font.as_ref().ok_or_else(|| PackError::Manifest { pack: name.to_owned(), reason: "it isn't a font pack".into() })?;
-    let outdated = |reason: String| PackError::Outdated { pack: name.to_owned(), reason };
+    let font = pack.manifest.font.as_ref().ok_or_else(|| PackError::NotA { pack: name.to_owned(), kind: Kind::Font })?;
     match state(catalog, lock, name)? {
         State::Ready { .. } => {}
         State::Missing => return Err(PackError::NotInstalled(name.to_owned())),
-        State::Outdated { installed, available } => return Err(outdated(format!("{installed} installed, {available} available"))),
-        State::OutOfRange { found, supports } => return Err(outdated(format!("{found} isn't in {supports}"))),
-        State::Broken(reason) => return Err(PackError::Broken { pack: name.to_owned(), reason }),
+        state @ (State::Outdated { .. } | State::OutOfRange { .. }) => return Err(PackError::Outdated { pack: name.to_owned(), state: state.to_string() }),
+        state @ State::Broken(_) => return Err(PackError::Broken { pack: name.to_owned(), state: state.to_string() }),
     }
     let installed = lock.packs.get(name).ok_or_else(|| PackError::NotInstalled(name.to_owned()))?;
     Ok(installed.dest.join(&font.face))
@@ -555,7 +568,7 @@ impl ServerLaunch {
 pub fn server_launch(catalog: &Catalog, lock: &Lock, name: &str, project: &Path) -> Result<ServerLaunch, PackError> {
     use sha2::Digest;
     let pack = catalog.get(name)?;
-    let server = pack.manifest.server.as_ref().ok_or_else(|| PackError::Manifest { pack: name.to_owned(), reason: "it isn't a server pack".into() })?;
+    let server = pack.manifest.server.as_ref().ok_or_else(|| PackError::NotA { pack: name.to_owned(), kind: Kind::Server })?;
     let dest = lock.packs.get(name).map(|i| i.dest.clone());
     let project_key: String = sha2::Sha256::digest(project.to_string_lossy().as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect();
     let cache = catalog.root.parent().unwrap_or(&catalog.root).join("cache").join(name).join(project_key);

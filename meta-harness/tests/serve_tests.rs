@@ -17,6 +17,12 @@ struct Server {
 
 impl Server {
     fn start(project: bool, args: &[&str]) -> Self {
+        Self::start_in(project, args, "place")
+    }
+
+    /// The same, started from `cwd` (in its home; the project is still
+    /// `place`, as `NAH_REPO_ROOT` says).
+    fn start_in(project: bool, args: &[&str], cwd: &str) -> Self {
         let home = tempfile::tempdir().unwrap();
         let place = home.path().join("place");
         std::fs::create_dir_all(place.join("src")).unwrap();
@@ -31,6 +37,7 @@ impl Server {
         std::fs::write(page.join("index.html"), "<title>NAH</title>").unwrap();
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let child = Self::command(home.path())
+            .current_dir(home.path().join(cwd))
             .args(args)
             .args(["--listen", &format!("127.0.0.1:{port}")])
             .env("STATIC_DIR", &page)
@@ -156,12 +163,14 @@ fn the_servers_a_home_links_to_are_kept_from_the_command_line() {
 }
 
 /// A font pack's face, as the cockpit asks for it: before it's installed,
-/// what installs it; installed (here, as a project's own pack), its file;
-/// asked again unchanged, "not modified" (not sent again).
+/// what installs it; installed (here, as a project's own pack, found from
+/// the project as `pack install` finds it, wherever the server started),
+/// its file; asked again unchanged, "not modified" (not sent again);
+/// outdated or with its lock unreadable, said as such.
 #[test]
 fn a_font_packs_face_is_served_once_installed_and_not_sent_again_unchanged() {
     use sha2::Digest;
-    let server = Server::start(false, &["--no-project"]);
+    let server = Server::start_in(false, &["--no-project"], "");
     let face = b"a face, standing in for a font's bytes".to_vec();
     let file = server.home.path().join("Fake-Regular.ttf");
     std::fs::write(&file, &face).unwrap();
@@ -208,4 +217,17 @@ face = "Fake-Regular.ttf"
     let (status, _, body) = server.get("/api/ui/fonts/fake-font", &format!("If-Modified-Since: {changed}\r\n"));
     assert_eq!((status, body.len()), (304, 0), "unchanged: not sent again");
     assert_eq!(server.get("/api/ui/fonts/rust", "").0, 400, "not a font");
+
+    // A newer pack, not installed yet: outdated, and how to update.
+    std::fs::write(pack.join("pack.toml"), std::fs::read_to_string(pack.join("pack.toml")).unwrap().replacen("version = \"1.0.0\"", "version = \"1.1.0\"", 1)).unwrap();
+    let (status, _, body) = server.get("/api/ui/fonts/fake-font", "");
+    assert_eq!(status, 409, "{}", String::from_utf8_lossy(&body));
+    assert!(String::from_utf8_lossy(&body).contains("meta-harness pack update fake-font"));
+    // The server's own lock unreadable: its fault, not the cockpit's.
+    // (The user's data folder: XDG's here, or macOS's own under its home.)
+    let data = if cfg!(target_os = "macos") { server.home.path().join("Library/Application Support") } else { server.home.path().join("data") };
+    let lock = data.join("nah/packs.lock");
+    assert!(lock.is_file(), "the lock is where the server's packs are");
+    std::fs::write(&lock, "not a lock").unwrap();
+    assert_eq!(server.get("/api/ui/fonts/fake-font", "").0, 500);
 }

@@ -292,7 +292,6 @@ fn a_font_packs_face_is_its_installs_file_once_it_is_ready() {
     let installed = nah_packs::install(&catalog, "fake-font", &platform).unwrap();
     let face = nah_packs::font_face(&catalog, &lock(), "fake-font").unwrap();
     assert_eq!((std::fs::read_to_string(&face).unwrap(), face.clone()), ("a face".to_owned(), installed.dest.join("ttf/Fake-Regular.ttf")));
-    assert!(!installed.dest.join("ttf/Fake-Bold.ttf").exists(), "only what it names is kept");
 
     // A newer pack not installed yet: outdated, not the old folder's file.
     let newer = load(&w, &[("font/fake/pack.toml", &font("1.1.0", &archive, &sum))]).unwrap();
@@ -304,5 +303,6 @@ fn a_font_packs_face_is_its_installs_file_once_it_is_ready() {
     assert!(matches!(err, PackError::Broken { .. }) && err.to_string().contains("Fake-Regular.ttf is missing"), "{err}");
     // Not a font.
     let harnesses = load(&w, &[("harness/fake/pack.toml", &harness("1.0.0", &archive, &sum))]).unwrap();
-    assert!(nah_packs::font_face(&harnesses, &lock(), "fake-harness").unwrap_err().to_string().contains("it isn't a font pack"));
+    let err = nah_packs::font_face(&harnesses, &lock(), "fake-harness").unwrap_err();
+    assert!(matches!(err, PackError::NotA { kind: Kind::Font, .. }) && err.to_string().contains("isn't a font pack"), "{err}");
 }
