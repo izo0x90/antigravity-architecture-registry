@@ -9,6 +9,7 @@ mod hand;
 mod bindings;
 mod keys_snapshot;
 mod layout;
+mod links;
 mod look;
 mod offers;
 mod moves;

@@ -27,6 +27,7 @@ pub mod kind;
 #[cfg(test)]
 mod lint;
 pub mod nav;
+pub mod pick_list;
 pub mod viewport;
 pub mod net;
 pub mod palette;

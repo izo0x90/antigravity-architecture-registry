@@ -44,6 +44,10 @@ swipe_max_ms = 450.0
 [keymap.list]
 next = ["ctrl+j", "ctrl+n", "ArrowDown"]
 prev = ["ctrl+k", "ctrl+p", "ArrowUp"]
+half_down = ["ctrl+d", "PageDown"]
+half_up = ["ctrl+u", "PageUp"]
+first = ["ctrl+Home"]
+last = ["ctrl+End"]
 pick = ["Enter"]
 # While a value is picked: what it's for, the next of its kinds (tagging:
 # the line, or the command it's in).

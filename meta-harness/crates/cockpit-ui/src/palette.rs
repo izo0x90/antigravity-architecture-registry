@@ -4,10 +4,11 @@
 //! focused, so it works for typing, dictation and touch alike. Matching is the
 //! same everywhere (`arch_search::rank`).
 
-use egui::{Color32, Frame, RichText, Stroke};
+use egui::{Frame, RichText, Stroke};
 
 use crate::actions::{Bound, Choice, Invocation, Origin, Param};
 use crate::keymap::KeymapConfig;
+use crate::pick_list::Listing;
 use crate::theme::colors;
 
 #[derive(Clone, Debug)]
@@ -34,14 +35,18 @@ pub struct Palette {
     open: bool,
     stage: Stage,
     filter: String,
-    selected: usize,
-    /// Scroll the selected row into view (only after keyboard moves).
-    scroll: bool,
+    /// The rows of whatever it lists, and the one the keys are on.
+    list: crate::pick_list::PickList,
     /// A search query to hand to its view (taken by the app each frame).
     ask: Option<SearchAsk>,
-    /// Enter came in the frame the search changed: its results are of what
-    /// was typed before, so it's taken the next frame, on the new ones.
+    /// Enter came while a search's rows were of what was typed before (in
+    /// the frame it changed, or before its answers came): it's taken once
+    /// the rows are of what's typed.
     enter_waiting: bool,
+    /// A search's rows are of nothing typed (what's typed first, while it's
+    /// looked for, shows "Looking…"; after that, the rows and their note
+    /// stay those of what was typed before until the new ones come).
+    rows_of_nothing: bool,
     /// The tallest it's been while open: it never gets shorter (going
     /// from a list to a text field, say), so nothing under it jumps.
     tallest: f32,
@@ -106,7 +111,7 @@ impl Palette {
     /// The row the keys are on.
     #[cfg(test)]
     pub fn selected(&self) -> usize {
-        self.selected
+        self.list.highlight()
     }
 
     /// What's typed in its field.
@@ -118,7 +123,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None }
+        Self { open: false, stage: Stage::Actions, filter: String::new(), list: Default::default(), ask: None, enter_waiting: false, rows_of_nothing: true, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None }
     }
 }
 
@@ -164,7 +169,9 @@ impl Palette {
 
     fn enter(&mut self, action: Bound, from_list: bool) {
         self.filter.clear();
-        self.selected = 0;
+        self.list.reset();
+        self.enter_waiting = false;
+        self.rows_of_nothing = true;
         let action = Box::new(action);
         self.stage = match &action.action.param {
             Param::Text { start, .. } => {
@@ -273,7 +280,8 @@ impl Palette {
             Stage::Choose { from_list: true, .. } | Stage::Text { from_list: true, .. } | Stage::Writing { from_list: true, .. } | Stage::Search { from_list: true, .. } => {
                 self.stage = Stage::Actions;
                 self.filter.clear();
-                self.selected = 0;
+                self.list.reset();
+                self.enter_waiting = false;
             }
             _ => self.close(),
         }
@@ -297,11 +305,9 @@ impl Palette {
         // Its keys are its own: egui moves the keyboard on Tab and the
         // arrows unless the field has had it a pass already; not here.
         ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
-        let step = ctx.input_mut(|i| keymap.list.step(i));
+        let moved = ctx.input_mut(|i| keymap.list.moved(i));
         let cycled = ctx.input_mut(|i| keymap.list.cycled(i));
         let (enter, escape) = ctx.input(|i| (keymap.list.picked(i), keymap.back.pressed(i)));
-        let enter = enter || std::mem::take(&mut self.enter_waiting);
-        let (up, down) = (step < 0, step > 0);
         if escape {
             self.back();
             return None;
@@ -322,6 +328,14 @@ impl Palette {
         {
             **action = fresh.clone();
         }
+        // Enter on rows of what was typed before waits for those of what's typed.
+        let waiting = matches!(&self.stage, Stage::Search { action, .. } if matches!(action.action.param, Param::Search { waiting: true, .. }));
+        let enter = if waiting {
+            self.enter_waiting |= enter;
+            false
+        } else {
+            enter || std::mem::take(&mut self.enter_waiting)
+        };
         let stage = self.stage.clone();
         // While a value is picked: what the cycle key changes it to act on.
         let cycle = match &stage {
@@ -336,6 +350,8 @@ impl Palette {
 
         egui::Area::new(Self::area())
             .fixed_pos(pos)
+            // Whole from its first frame: no fading in.
+            .fade_in(false)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 Frame::NONE
@@ -391,11 +407,12 @@ impl Palette {
                         };
                         let mut enter = enter;
                         if edit.as_ref().is_some_and(egui::Response::changed) {
-                            self.selected = 0;
+                            self.list.reset();
                             if let Stage::Search { action, .. } = &stage {
                                 self.ask = Some(SearchAsk { origin: action.origin, action: action.action.id.clone(), query: self.filter.clone() });
                                 // Results of what was typed before: Enter waits for these.
-                                (self.enter_waiting, enter) = (enter, false);
+                                self.enter_waiting |= enter;
+                                enter = false;
                                 ctx.request_repaint();
                             }
                         }
@@ -413,87 +430,83 @@ impl Palette {
                                 let haystacks = || fingerprint.iter().map(|(id, label, detail, group)| format!("{label} {id} {group} {detail}")).collect();
                                 let ranked: Vec<&Bound> = self.ranked.of(&self.filter, &fingerprint, haystacks).iter().map(|i| listed[*i]).collect();
                                 let first = usize::from(line.is_some());
-                                self.move_selection(up, down, ranked.len() + first);
-                                egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
-                                    if let Some((n, bound)) = line {
-                                        let selected = self.selected == 0;
-                                        if palette_row(ui, selected, self.scroll, &format!("Go to line {n}"), None, None, ":N") || (selected && enter) {
-                                            picked = Some(invocation(bound, Some(n.to_string())));
-                                        }
+                                let len = ranked.len() + first;
+                                if let Some(by) = moved {
+                                    self.list.moved(by, len);
+                                }
+                                let line_label = line.map(|(n, _)| format!("Go to line {n}"));
+                                // `:N` first when typed, then the actions.
+                                let row = |i: usize| match (&line_label, i) {
+                                    (Some(label), 0) => crate::pick_list::Row { label, keys: ":N".into(), ..Default::default() },
+                                    _ => {
+                                        let bound = ranked[i - first];
+                                        crate::pick_list::Row { label: &bound.action.label, detail: Some(&bound.action.detail), keys: bound.key_hint().into(), ..Default::default() }
                                     }
-                                    for (row, bound) in ranked.iter().enumerate() {
-                                        let row = row + first;
-                                        let selected = row == self.selected;
-                                        let clicked = palette_row(ui, selected, self.scroll, &bound.action.label, None, Some(&bound.action.detail), &bound.key_hint());
-                                        if clicked || (selected && enter) {
+                                };
+                                if len == 0 {
+                                    ui.label(RichText::new("No matching actions").size(crate::theme::look().text_body).color(colors().muted));
+                                }
+                                if let Some(i) = self.list.show(ui, Listing { id: "palette_actions", height: list_height, len, details: true }, row, enter) {
+                                    match (line, i) {
+                                        (Some((n, bound)), 0) => picked = Some(invocation(bound, Some(n.to_string()))),
+                                        _ => {
+                                            let bound = ranked[i - first];
                                             match bound.action.param {
                                                 Param::None => picked = Some(invocation(bound, None)),
                                                 _ => next_stage = Some(((*bound).clone(), true)),
                                             }
                                         }
                                     }
-                                    if ranked.is_empty() && line.is_none() {
-                                        ui.label(RichText::new("No matching actions").size(crate::theme::look().text_body).color(colors().muted));
-                                    }
-                                    // The same height however many rows (after them: set first,
-                                    // it would put them below it): it doesn't jump as they change.
-                                    ui.set_min_height(list_height);
-                                });
+                                }
                             }
                             Stage::Choose { action, .. } => {
                                 let choices: Vec<Choice> = action.action.param.choices();
                                 let fingerprint: Vec<(&str, &str)> = choices.iter().map(|c| (c.label.as_str(), c.value.as_str())).collect();
                                 let haystacks = || fingerprint.iter().map(|(label, value)| format!("{label} {value}")).collect();
                                 let ranked: Vec<&Choice> = self.ranked.of(&self.filter, &fingerprint, haystacks).iter().map(|i| &choices[*i]).collect();
-                                self.move_selection(up, down, ranked.len());
-                                egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
-                                    for (row, choice) in ranked.iter().enumerate() {
-                                        let selected = row == self.selected;
-                                        let label = if choice.current { format!("{} {}", egui_phosphor::regular::CHECK, choice.label) } else { choice.label.clone() };
-                                        let clicked = palette_row(ui, selected, self.scroll, &label, choice.colour, choice.detail.as_deref(), "");
-                                        if clicked || (selected && enter) {
-                                            picked = Some(invocation(action, Some(choice.value.clone())));
-                                        }
-                                    }
-                                    if ranked.is_empty() {
-                                        ui.label(RichText::new("Nothing to choose").size(crate::theme::look().text_body).color(colors().muted));
-                                    }
-                                    // The same height however many rows (after them: set first,
-                                    // it would put them below it): it doesn't jump as they change.
-                                    ui.set_min_height(list_height);
-                                });
+                                if let Some(by) = moved {
+                                    self.list.moved(by, ranked.len());
+                                }
+                                if ranked.is_empty() {
+                                    ui.label(RichText::new("Nothing to choose").size(crate::theme::look().text_body).color(colors().muted));
+                                }
+                                let details = ranked.iter().any(|c| c.detail.is_some());
+                                let row = |i: usize| choice_row(ranked[i]);
+                                if let Some(i) = self.list.show(ui, Listing { id: "palette_choices", height: list_height, len: ranked.len(), details }, row, enter) {
+                                    picked = Some(invocation(action, Some(ranked[i].value.clone())));
+                                }
                             }
                             Stage::Search { action, .. } => {
                                 let (found, waiting) = match &action.action.param {
                                     Param::Search { found, waiting, .. } => (found.clone(), *waiting),
                                     _ => (Vec::new(), false),
                                 };
-                                self.move_selection(up, down, found.len());
-                                egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
-                                    for (row, choice) in found.iter().enumerate() {
-                                        let selected = row == self.selected;
-                                        let clicked = palette_row(ui, selected, self.scroll, &choice.label, choice.colour, choice.detail.as_deref(), "");
-                                        if clicked || (selected && enter) {
-                                            picked = Some(invocation(action, Some(choice.value.clone())));
-                                        }
-                                    }
-                                    // A space typed (no name a trigger picks has one): what's
-                                    // typed is text, back where it's written.
-                                    if self.gives_back && self.filter.ends_with(' ') {
-                                        leave = true;
-                                    }
-                                    if found.is_empty() {
-                                        let note = match (waiting, self.filter.trim().is_empty()) {
-                                            (true, _) => "Looking…",
-                                            (false, true) => "Type to search",
-                                            (false, false) => "Nothing found",
-                                        };
-                                        ui.label(RichText::new(note).size(crate::theme::look().text_body).color(colors().muted));
-                                    }
-                                    // The same height however many rows (after them: set first,
-                                    // it would put them below it): it doesn't jump as they change.
-                                    ui.set_min_height(list_height);
-                                });
+                                if let Some(by) = moved {
+                                    self.list.moved(by, found.len());
+                                }
+                                // A space typed (no name a trigger picks has one): what's
+                                // typed is text, back where it's written.
+                                if self.gives_back && self.filter.ends_with(' ') {
+                                    leave = true;
+                                }
+                                // The rows are of what's typed: nothing asked this
+                                // frame, and the answers to what was asked in.
+                                if !waiting && self.ask.is_none() {
+                                    self.rows_of_nothing = self.filter.trim().is_empty();
+                                }
+                                if found.is_empty() {
+                                    let note = match (waiting, self.rows_of_nothing) {
+                                        (true, true) => "Looking…",
+                                        (false, true) => "Type to search",
+                                        (_, false) => "Nothing found",
+                                    };
+                                    ui.label(RichText::new(note).size(crate::theme::look().text_body).color(colors().muted));
+                                }
+                                let details = found.iter().any(|c| c.detail.is_some());
+                                let row = |i: usize| choice_row(&found[i]);
+                                if let Some(i) = self.list.show(ui, Listing { id: "palette_found", height: list_height, len: found.len(), details }, row, enter) {
+                                    picked = Some(invocation(action, Some(found[i].value.clone())));
+                                }
                             }
                             // Sent from its box (above).
                             Stage::Writing { .. } => {}
@@ -537,55 +550,13 @@ impl Palette {
         }
         picked
     }
-
-    fn move_selection(&mut self, up: bool, down: bool, len: usize) {
-        self.scroll = up || down;
-        if len == 0 {
-            self.selected = 0;
-            return;
-        }
-        if down {
-            self.selected = (self.selected + 1) % len;
-        }
-        if up {
-            self.selected = (self.selected + len - 1) % len;
-        }
-        self.selected = self.selected.min(len - 1);
-    }
 }
 
 fn invocation(bound: &Bound, value: Option<String>) -> Invocation {
     Invocation { action: bound.action.clone(), origin: bound.origin, value }
 }
 
-/// One tappable row; returns true when clicked. Its label and keys on its
-/// first line (a long label cut short), its description under it (two
-/// lines at most): nothing in it is wider than the palette, so the palette
-/// never grows to fit a row.
-fn palette_row(ui: &mut egui::Ui, selected: bool, scroll: bool, label: &str, colour: Option<(Color32, crate::actions::Mark)>, detail: Option<&str>, keys: &str) -> bool {
-    let (look, theme) = (crate::theme::look(), colors());
-    let fill = if selected { theme.selection } else { Color32::TRANSPARENT };
-    let response = Frame::NONE
-        .fill(fill)
-        .corner_radius(look.radius_m)
-        .inner_margin(crate::theme::margin2(look.space_m, look.space_sm))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            // The label gets what the keys leave it, cut short to fit.
-            egui::Sides::new().shrink_left().truncate().show(
-                ui,
-                |ui| ui.label(crate::actions::choice_text(ui, label, colour, look.text_label, theme.text_strong)),
-                |ui| ui.label(RichText::new(keys).monospace().size(look.text_small).color(theme.key)),
-            );
-            if let Some(detail) = detail.filter(|d| !d.is_empty()) {
-                let mut job = egui::text::LayoutJob::simple(detail.to_owned(), egui::FontId::proportional(look.text_small), theme.muted, ui.available_width());
-                job.wrap.max_rows = 2;
-                ui.add(egui::Label::new(job));
-            }
-        })
-        .response;
-    if selected && scroll {
-        response.scroll_to_me(None);
-    }
-    response.interact(egui::Sense::click()).clicked()
+/// A choice as a row of the list.
+fn choice_row(choice: &Choice) -> crate::pick_list::Row<'_> {
+    crate::pick_list::Row { label: &choice.label, mark: choice.colour, current: choice.current, detail: choice.detail.as_deref(), ..Default::default() }
 }

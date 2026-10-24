@@ -12,19 +12,77 @@ use crate::actions::{Action, Choice, Group, Param, When};
 /// How many of each kind of hit the `@` picker shows.
 const FOUND_EACH: usize = 12;
 
-/// The code index's answers, each with the round of asking it was for.
-type Answers = std::sync::Arc<std::sync::Mutex<Vec<(u64, crate::net::NetResult<arch_search::Found>)>>>;
+/// The code index's answers, each with the round of asking it was for and
+/// the kind asked (an error has none of its own).
+type Answers = std::sync::Arc<std::sync::Mutex<Vec<(u64, arch_search::SearchKind, crate::net::NetResult<arch_search::Found>)>>>;
 
 /// What the `@` picker found for what was typed, as the server said.
 #[derive(Default)]
 pub struct Finding {
-    /// The query asked about (none: nothing yet), its round (answers to
-    /// another are dropped), and how many of its answers came.
+    /// The query asked about (none: nothing yet) and its round (answers to
+    /// another are dropped).
     asked: Option<String>,
     round: u64,
-    answers: usize,
-    found: Vec<Choice>,
+    /// The round's rows as its answers come: the lines it names, the files,
+    /// the symbols.
+    lines: Option<Choice>,
+    files: Option<Vec<Choice>>,
+    symbols: Option<Vec<Choice>>,
+    /// What the picker shows: the newest round answered whole. The rows
+    /// shown stay until the next round's are all in, so the list doesn't
+    /// empty and fill again (or change order) at each key typed.
+    shown: Vec<Choice>,
+    /// The rows shown are of what was asked last.
+    current: bool,
     inbox: Answers,
+}
+
+impl Finding {
+    /// A new round for `query` (the rows shown stay); its number.
+    fn ask(&mut self, query: &str) -> u64 {
+        self.asked = Some(query.to_owned());
+        self.round += 1;
+        self.lines = lines_of(query).map(|(path, first, last)| {
+            let lines = Subject::CodeLines { path, first, last, snapshot: String::new() };
+            let words = lines.name(&harness_contracts::Known::default());
+            choice(&lines, words, "lines of a file".into(), egui_phosphor::regular::LIST_NUMBERS)
+        });
+        (self.files, self.symbols, self.current) = (None, None, false);
+        if query.trim().is_empty() {
+            (self.files, self.symbols) = (Some(Vec::new()), Some(Vec::new()));
+            self.settle();
+        }
+        self.round
+    }
+
+    /// An answer of a kind for the newest round; once both are in, they're
+    /// what's shown.
+    fn answer(&mut self, kind: arch_search::SearchKind, hits: Vec<Choice>) {
+        match kind {
+            arch_search::SearchKind::Files => self.files = Some(hits),
+            arch_search::SearchKind::Symbols => self.symbols = Some(hits),
+            arch_search::SearchKind::Text => return,
+        }
+        self.settle();
+    }
+
+    fn settle(&mut self) {
+        if let (Some(files), Some(symbols)) = (&self.files, &self.symbols) {
+            self.shown = self.lines.iter().chain(files).chain(symbols).cloned().collect();
+            self.current = true;
+        }
+    }
+
+    /// The rows shown aren't of what was asked last.
+    fn waiting(&self) -> bool {
+        self.asked.is_some() && !self.current
+    }
+
+    /// Picked: nothing asked, nothing shown (answers still coming are of
+    /// a round gone).
+    fn clear(&mut self) {
+        *self = Self { round: self.round, inbox: self.inbox.clone(), ..Self::default() };
+    }
 }
 
 /// The server's answers: each box's key, the links checked, what it said.
@@ -129,8 +187,8 @@ impl CockpitApp {
     /// key, or this on a phone).
     pub(super) fn link_actions(&self, here: Here) -> Vec<Action> {
         let picking = self.palette.picking() == Some("link.thing");
-        let found = if picking { self.desk.finding.found.clone() } else { Vec::new() };
-        let waiting = picking && self.desk.finding.answers < 2 && self.desk.finding.asked.is_some();
+        let found = if picking { self.desk.finding.shown.clone() } else { Vec::new() };
+        let waiting = picking && self.desk.finding.waiting();
         let key = crate::keymap::local().input.link.label();
         let available = |yes: bool| if yes { When::Always } else { When::Unavailable };
         let at_link = self.palette.writing().map_or_else(|| self.desk.view(here.kind).typing().is_some_and(|b| b.link_at_caret()), |b| b.link_at_caret());
@@ -160,14 +218,15 @@ impl CockpitApp {
     /// query; takes the answers.
     pub(super) fn find_links(&mut self, ctx: &egui::Context) {
         let answers: Vec<_> = std::mem::take(&mut *self.desk.finding.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-        for (round, answer) in answers {
+        for (round, kind, answer) in answers {
             if round != self.desk.finding.round {
                 continue;
             }
-            self.desk.finding.answers += 1;
-            match answer {
-                Ok(found) => {
-                    let hits = found.hits.into_iter().filter_map(|hit| match found.kind {
+            let hits = match answer {
+                Ok(found) => found
+                    .hits
+                    .into_iter()
+                    .filter_map(|hit| match found.kind {
                         arch_search::SearchKind::Files => {
                             let path = hit.file.clone().unwrap_or_else(|| hit.label.clone());
                             Some(choice(&Subject::CodeFile { path: path.clone() }, path, "a file".into(), egui_phosphor::regular::FILE))
@@ -177,11 +236,14 @@ impl CockpitApp {
                             Some(choice(&Subject::Component { id, was: None }, hit.label.clone(), hit.detail.clone(), egui_phosphor::regular::CODE))
                         }
                         arch_search::SearchKind::Text => None,
-                    });
-                    self.desk.finding.found.extend(hits);
+                    })
+                    .collect(),
+                Err(e) => {
+                    self.note = Some(format!("Couldn't search the code: {}", String::from(e)));
+                    Vec::new()
                 }
-                Err(e) => self.note = Some(format!("Couldn't search the code: {}", String::from(e))),
-            }
+            };
+            self.desk.finding.answer(kind, hits);
         }
         if self.palette.picking() != Some("link.thing") {
             return;
@@ -190,15 +252,8 @@ impl CockpitApp {
         if self.desk.finding.asked.as_deref() == Some(query.as_str()) {
             return;
         }
-        let round = self.desk.finding.round + 1;
-        self.desk.finding = Finding { asked: Some(query.clone()), round, inbox: self.desk.finding.inbox.clone(), ..Finding::default() };
-        if let Some((path, first, last)) = lines_of(&query) {
-            let lines = Subject::CodeLines { path, first, last, snapshot: String::new() };
-            let words = lines.name(&harness_contracts::Known::default());
-            self.desk.finding.found.push(choice(&lines, words, "lines of a file".into(), egui_phosphor::regular::LIST_NUMBERS));
-        }
+        let round = self.desk.finding.ask(&query);
         if query.trim().is_empty() {
-            self.desk.finding.answers = 2;
             return;
         }
         // The code as it is (a plan's components aren't things yet).
@@ -206,7 +261,7 @@ impl CockpitApp {
             let inbox = self.desk.finding.inbox.clone();
             self.desk.net.search(&query, kind, &arch_graph::Source::Code, FOUND_EACH, None, ctx.clone(), move |r| {
                 if let Ok(mut i) = inbox.lock() {
-                    i.push((round, r));
+                    i.push((round, kind, r));
                 }
             });
         }
@@ -271,9 +326,9 @@ impl CockpitApp {
     pub(super) fn run_link(&mut self, value: Option<String>) {
         let here = self.here();
         let Some(subject) = value.and_then(|v| serde_json::from_str::<Subject>(&v).ok()) else { return };
-        let label = self.desk.finding.found.iter().find(|c| serde_json::from_str::<Subject>(&c.value).ok().as_ref() == Some(&subject)).map_or_else(|| "something".to_owned(), |c| c.label.clone());
+        let label = self.desk.finding.shown.iter().find(|c| serde_json::from_str::<Subject>(&c.value).ok().as_ref() == Some(&subject)).map_or_else(|| "something".to_owned(), |c| c.label.clone());
         self.desk.shell_searches.remove("link.thing");
-        self.desk.finding = Finding { round: self.desk.finding.round, inbox: self.desk.finding.inbox.clone(), ..Finding::default() };
+        self.desk.finding.clear();
         self.put_link(here, &format!("@{label}"), Linked::Thing { subject });
     }
 }

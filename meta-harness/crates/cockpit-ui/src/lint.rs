@@ -160,7 +160,7 @@ fn only_the_hosts_say_keys_and_only_from_a_bound_action() {
 
 /// Where controls are drawn: the hosts, the one control, the palette; and
 /// the developer tools (their own subsystem).
-const HOSTS: &[&str] = &["app/draw/", "actions.rs", "hosted.rs", "palette.rs", "feedback.rs"];
+const HOSTS: &[&str] = &["app/draw/", "actions.rs", "hosted.rs", "palette.rs", "pick_list.rs", "feedback.rs"];
 
 /// What draws a control, or reads a click.
 const CONTROLS: &[&str] = &[".button(", "small_button(", "selectable_label(", ".link(", ".hyperlink(", "hyperlink_to(", ".checkbox(", "ComboBox::", "egui::Button::", "Sense::click", "radio", "toggle_value("];
