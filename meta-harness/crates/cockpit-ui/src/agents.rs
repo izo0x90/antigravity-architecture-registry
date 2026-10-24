@@ -80,6 +80,10 @@ enum Reply {
     Done(SlotId, NetResult<()>),
 }
 
+/// How late a sign-in may go and still count as having run out (the
+/// server's clock and this one differ a little).
+const RAN_OUT_SLACK_MS: u64 = 3000;
+
 /// What was pasted back to a sign-in under way (its instance's and id):
 /// being checked, or why it wasn't taken.
 #[derive(Clone, Debug, PartialEq)]
@@ -120,6 +124,8 @@ pub struct Agents {
     signing_in: BTreeSet<InstanceId>,
     /// The last paste to a sign-in under way.
     pasted: Option<Pasted>,
+    /// Harnesses whose last sign-in ran out.
+    ran_out: BTreeSet<InstanceId>,
     /// The sub-slots made, how many, and the last one with the slot that asked.
     made: (u64, Option<(SlotId, SlotId)>),
     mailbox: Mailbox,
@@ -132,7 +138,26 @@ impl Agents {
 
     /// Takes a server event (the shell, for every one).
     pub fn apply(&mut self, event: ClientEvent) {
+        // A sign-in gone at its time: it ran out (said until a new one).
+        if let ClientEvent::InstanceUpdated { snapshot } = &event {
+            let id = &snapshot.instance_id;
+            match (self.waiting(id), &snapshot.auth.waiting) {
+                (Some(was), None) if was.until_ms.is_some_and(|until| until <= crate::attention::now_ms() + RAN_OUT_SLACK_MS) => {
+                    self.ran_out.insert(id.clone());
+                }
+                (_, Some(_)) => {
+                    self.ran_out.remove(id);
+                }
+                _ => {}
+            }
+        }
         self.store.apply(event);
+    }
+
+    /// `instance`'s last sign-in stopped waiting at its time, and no new one
+    /// was started.
+    pub fn ran_out(&self, instance: &InstanceId) -> bool {
+        self.ran_out.contains(instance)
     }
 
     pub fn opening(&self, slot: &SlotId) -> bool {
@@ -277,6 +302,7 @@ impl Agents {
                 net.set_tool_servers(&project, ctx.clone(), move |result| post(&mailbox, Reply::Tools { result, saved: Some(slot) }));
             }
             Act::SignIn { instance, method } => {
+                self.ran_out.remove(&instance);
                 // One at a time: a second tap waits for the first.
                 if self.signing_in.insert(instance.clone()) {
                     let mailbox = self.mailbox.clone();

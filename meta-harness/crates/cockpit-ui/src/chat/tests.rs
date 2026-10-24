@@ -313,6 +313,7 @@ fn signing_in_shows_the_servers_sign_in_and_a_paste_that_was_not_taken() {
     chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::SignIn { instance: InstanceId::new("i"), method: "oauth-personal".into() }, &net, &ctx);
     chat.read();
     assert!(!on_top(&chat).contains(&"auth.login".to_owned()), "one sign-in at a time");
+    assert!(chat.agents().signing_in(&InstanceId::new("i")), "said while it starts");
 
     // The server's sign-in under way (any device sees it): open it, paste back.
     chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(7, 300))) });
@@ -353,4 +354,12 @@ fn a_sign_in_that_stopped_waiting_offers_a_new_one_not_the_paste() {
     chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(3, -1))) });
     let top = on_top(&chat);
     assert!(top.contains(&"auth.login".to_owned()) && !top.contains(&"auth.complete".to_owned()) && !top.contains(&"auth.page".to_owned()), "{top:?}");
+    // The server ends it at its time: said as run out, until a new one.
+    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(None) });
+    assert!(chat.agents().ran_out(&InstanceId::new("i")));
+    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(4, 300))) });
+    assert!(!chat.agents().ran_out(&InstanceId::new("i")));
+    // One cancelled early isn't said as run out.
+    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(None) });
+    assert!(!chat.agents().ran_out(&InstanceId::new("i")));
 }

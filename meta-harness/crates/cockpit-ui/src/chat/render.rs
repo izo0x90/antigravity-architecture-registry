@@ -95,13 +95,22 @@ impl ChatStreamState {
                 ui.label(RichText::new(format!("Not taken: {why}")).size(crate::theme::look().text_label).color(colors().text));
             });
         }
-        if (self.needs_login() || now.is_some())
+        let starting = instance.as_ref().is_some_and(|s| self.agents().signing_in(&s.instance_id));
+        if (self.needs_login() || now.is_some() || starting)
             && let Some(snapshot) = instance
         {
             let look = crate::theme::look();
             banner(ui, colors().info_bg, colors().focus, |ui| match now {
                 None => {
-                    ui.label(RichText::new(format!("{} Sign in to {}", icon::KEY, snapshot.display_name)).strong().size(look.text_label));
+                    let instance = &snapshot.instance_id;
+                    let said = if self.agents().signing_in(instance) {
+                        format!("{} Starting the sign-in to {}…", icon::HOURGLASS, snapshot.display_name)
+                    } else if self.agents().ran_out(instance) {
+                        format!("{} The sign-in to {} stopped waiting: its time ran out. Sign in again for a new link.", icon::CLOCK, snapshot.display_name)
+                    } else {
+                        format!("{} Sign in to {}", icon::KEY, snapshot.display_name)
+                    };
+                    ui.label(RichText::new(said).strong().size(look.text_label));
                 }
                 Some(now) => {
                     ui.vertical(|ui| {
