@@ -160,11 +160,11 @@ impl CockpitApp {
     }
 
     /// What a view shows where it is (`here`), the same way: gathered,
-    /// placed and in layers; bound to keys only when it's where you are
-    /// (`keyed`): a panel not focused shows its controls without keys
-    /// (they don't run it until it is).
+    /// placed, in layers and bound to keys (its groups read them; a panel
+    /// not focused says none on its controls: they don't run it until it
+    /// is).
     pub(crate) fn shown_at(&self, here: Here) -> Vec<Bound> {
-        if here == self.here() { self.bound_actions() } else { self.gather(here, false) }
+        if here == self.here() { self.bound_actions() } else { self.gather(here, true) }
     }
 
     /// The list for `here`: every level of where you are, innermost first,
@@ -177,7 +177,7 @@ impl CockpitApp {
     /// how it shows, never its level) and bound to keys.
     pub(super) fn gather(&self, here: Here, keyed: bool) -> Vec<Bound> {
         #[cfg(test)]
-        if keyed {
+        if keyed && here == self.here() {
             self.gathered.set(self.gathered.get() + 1);
         }
         let kind = here.kind;
@@ -206,11 +206,19 @@ impl CockpitApp {
         let keys: Vec<Keys> = if keyed {
             let keyed: KeyedActions = (kind, actions.iter().map(|(origin, a)| (*origin, a.id.clone(), a.aliases.clone())).collect());
             let mut cache = self.bound_cache.borrow_mut();
-            if cache.as_ref().is_none_or(|(kept, _)| *kept != keyed) {
-                let keys = self.bind_actions(actions.clone(), kind).into_iter().map(|b| (b.leader, b.keys, b.gestures)).collect();
-                *cache = Some((keyed, keys));
+            let at = cache.iter().position(|((k, _), _)| *k == kind);
+            match at {
+                Some(at) if cache[at].0 == keyed => cache[at].1.clone(),
+                _ => {
+                    let keys: Vec<Keys> = self.bind_actions(actions.clone(), kind).into_iter().map(|b| (b.leader, b.keys, b.gestures)).collect();
+                    let kept = (keyed, keys.clone());
+                    match at {
+                        Some(at) => cache[at] = kept,
+                        None => cache.push(kept),
+                    }
+                    keys
+                }
             }
-            cache.as_ref().map(|(_, keys)| keys.clone()).unwrap_or_default()
         } else {
             vec![(None, Vec::new(), Vec::new()); actions.len()]
         };
@@ -218,41 +226,9 @@ impl CockpitApp {
     }
 
     /// Every placement for `here`: the panel's (on its top line, or under
-    /// what you're on), its host's (a panel's tabs), the top bar's.
+    /// what you're on), the top bar's. (A host's own are in its groups.)
     fn placements(&self, here: Here) -> Vec<(String, crate::actions::Control)> {
-        use crate::actions::{At, Control, Style};
-        use egui_phosphor::regular as icon;
-        let panel = self.desk.view(here.kind).placed().into_iter();
-        let button = |caption: &str, glyph: &'static str| Control::new(At::Header, Style::Button, caption, Some(glyph));
-        let host = match here.at {
-            Host::Look => vec![("quicklook.to_panel".to_owned(), button("Open in a panel", icon::COLUMNS)), ("quicklook.toggle".to_owned(), button("", icon::X))],
-            Host::Panel(panel) => {
-                let mut own = self.tabs(panel);
-                if self.desk.panels.len() > 1 {
-                    own.push(("panel.close".to_owned(), button("", icon::X)));
-                }
-                own
-            }
-        };
-        panel.chain(host).chain(self.top_bar_placements()).collect()
-    }
-
-    /// A panel's tabs: the shell's `buffer.*` actions, the shown one named
-    /// (when there's room) and lit.
-    fn tabs(&self, panel: usize) -> Vec<(String, crate::actions::Control)> {
-        use crate::actions::{At, Control, Style, Tone};
-        let active = self.desk.panels.kind(panel);
-        // Narrow (once its width is known): icons only.
-        let compact = self.panel_rects.get(panel).is_some_and(|r| r.is_positive() && r.width() < 340.0);
-        BufferKind::ALL
-            .into_iter()
-            .map(|kind| {
-                let title = kind.title();
-                let caption = if !compact && active == kind { format!("{}{}", &title[..1], title[1..].to_lowercase()) } else { String::new() };
-                let tab = Control::new(At::Header, Style::Button, caption, Some(kind.icon()));
-                (format!("buffer.{}", kind.name()), tab.tone(if active == kind { Tone::Accent } else { Tone::Muted }))
-            })
-            .collect()
+        self.desk.view(here.kind).placed().into_iter().chain(self.top_bar_placements()).collect()
     }
 
     /// The actions bound to their keys, the focused view's own getting the

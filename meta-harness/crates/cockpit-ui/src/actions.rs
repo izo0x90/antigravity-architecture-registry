@@ -126,8 +126,13 @@ pub enum Layer {
 /// Where an action's control shows. Hosts draw both; views draw none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum At {
-    /// The panel's top line: what applies to the whole view.
+    /// The panel's top line: what applies to the whole view (a setting;
+    /// the top bar's buttons).
     Header,
+    /// The panel's notice row, under its top line, while there's
+    /// something: what needs you now, or is happening now, acted on at once
+    /// (a sign-in's steps, Dismiss, Stop, Settle).
+    Notice,
     /// Under the item the cursor is on, while it's on it.
     Item,
     /// Under the box being typed in, while it's typed in (Send…).
@@ -446,6 +451,12 @@ impl Action {
         self
     }
 
+    /// On the panel's notice row (what needs you now): a button.
+    pub fn notice(mut self, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
+        self.control = Some(Control::new(At::Notice, Style::Button, caption, icon));
+        self
+    }
+
     /// Shown under the cursor's item, while the cursor is on it.
     pub fn on_item(mut self, style: Style, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
         self.control = Some(Control::new(At::Item, style, caption, icon));
@@ -677,6 +688,28 @@ pub fn choice_text(ui: &egui::Ui, label: &str, colour: Option<(egui::Color32, Ma
     job.into()
 }
 
+/// How long a long press shows what a control does (as hover would).
+const LONG_TIP_S: f64 = 2.5;
+
+/// What a control does and its keys, on hover; on touch, a long press
+/// shows them too, a moment, as hover would. Only hosts call this.
+pub fn tip_on(response: egui::Response, tip: &str) -> egui::Response {
+    let (ctx, id) = (response.ctx.clone(), response.id.with("long_tip"));
+    let now = ctx.input(|i| i.time);
+    if response.long_touched() {
+        ctx.data_mut(|d| d.insert_temp(id, now));
+    }
+    if let Some(since) = ctx.data(|d| d.get_temp::<f64>(id)) {
+        if now - since < LONG_TIP_S {
+            response.show_tooltip_text(tip);
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(LONG_TIP_S - (now - since)));
+        } else {
+            ctx.data_mut(|d| d.remove::<f64>(id));
+        }
+    }
+    response.on_hover_text(tip)
+}
+
 /// Narrowest a picker gets before its text is truncated.
 const PICKER_MIN_WIDTH: f32 = 90.0;
 
@@ -720,7 +753,7 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
     match (&action.param, toolbar.style) {
         (Param::Toggle { on }, Style::Setting) => {
             let mut value = *on;
-            ui.checkbox(&mut value, tinted(text)).on_hover_text(tip).changed().then(|| ControlUse::Run(Some(value.to_string())))
+            tip_on(ui.checkbox(&mut value, tinted(text)), &tip).changed().then(|| ControlUse::Run(Some(value.to_string())))
         }
         (Param::Choice(choices), Style::Setting) => {
             let caption = tinted(format!("{text}:"));
@@ -734,7 +767,7 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
             if ui.available_width() < measure(ui, caption.clone()) + gap + picker {
                 ui.end_row();
             }
-            ui.label(caption).on_hover_text(&tip);
+            tip_on(ui.label(caption), &tip);
             let mut picked = None;
             // The one list choices are picked from (as the action list's):
             // sized to what it holds (the popup's own scrolling never needed),
@@ -770,10 +803,10 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
         }
         (Param::None, Style::Choice) => {
             let row = egui::Button::selectable(false, tinted(format!("{} {text}", egui_phosphor::regular::CARET_RIGHT))).min_size(egui::vec2(ui.available_width(), 0.0));
-            ui.add(row).on_hover_text(tip).clicked().then_some(ControlUse::Run(None))
+            tip_on(ui.add(row), &tip).clicked().then_some(ControlUse::Run(None))
         }
-        (Param::None, _) => ui.button(tinted(text)).on_hover_text(tip).clicked().then_some(ControlUse::Run(None)),
-        _ => ui.button(tinted(text)).on_hover_text(tip).clicked().then_some(ControlUse::OpenPalette),
+        (Param::None, _) => tip_on(ui.button(tinted(text)), &tip).clicked().then_some(ControlUse::Run(None)),
+        _ => tip_on(ui.button(tinted(text)), &tip).clicked().then_some(ControlUse::OpenPalette),
     }
 }
 
@@ -785,6 +818,36 @@ pub fn wire_name(value: &impl serde::Serialize) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// On touch, a long press on a control shows what it does, as hover
+    /// would: still said a moment after the finger lifts, gone after.
+    #[test]
+    fn a_long_press_says_what_a_control_does() {
+        let ctx = egui::Context::default();
+        let at = egui::pos2(30.0, 20.0);
+        let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: at, force: None };
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let frame = |time: f64, events: Vec<egui::Event>| {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))), time: Some(time), events, ..Default::default() };
+            let output = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    tip_on(ui.button("Copy link"), "Copy the sign-in link (Space a y)");
+                });
+            });
+            output.shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Text(t) if t.galley.text().contains("Space a y")))
+        };
+        frame(0.0, vec![]);
+        frame(0.1, vec![touch(egui::TouchPhase::Start), egui::Event::PointerMoved(at), press(true)]);
+        let mut said = false;
+        for step in 2..=15 {
+            said |= frame(f64::from(step) * 0.1, vec![touch(egui::TouchPhase::Move)]);
+        }
+        frame(1.6, vec![touch(egui::TouchPhase::End), press(false), egui::Event::PointerGone]);
+        assert!(said || frame(1.7, vec![]), "said while held, or once it's let go");
+        assert!(frame(2.0, vec![]), "still said a moment after");
+        assert!(!frame(5.0, vec![]), "gone after");
+    }
+
     use super::*;
 
     fn bound(id: &str, leader: &str) -> Bound {

@@ -122,7 +122,7 @@ fn on_the_graph_fingers_tap_select_double_tap_go_in_drag_and_two_pinch_and_pan()
     assert!((zoom(&app) - z * 1.5).abs() < 1e-3, "spread by half: {} from {z}", zoom(&app));
     let z = zoom(&app);
     feed(&mut app, two(egui::TouchPhase::Move, a + egui::vec2(-25.0, 40.0), b + egui::vec2(25.0, 40.0)));
-    assert!((zoom(&app) - z).abs() < 1e-4 && pan(&app).y > before.y + 30.0, "moved together: it pans");
+    assert!((zoom(&app) - z).abs() < 1e-4 && pan(&app).y > before.y + 5.0, "moved together: it pans (as far as the tree's edge lets it): {:?} from {before:?}", pan(&app));
     feed(&mut app, two(egui::TouchPhase::End, a + egui::vec2(-25.0, 40.0), b + egui::vec2(25.0, 40.0)));
     let lifted = pan(&app);
     feed(&mut app, vec![]);
@@ -209,7 +209,7 @@ fn what_comes_and_goes_on_the_top_and_bottom_lines_never_moves_a_button() {
     app.desk.graph_mut().select(Some("rust:a::step".into()));
     frame(&ctx, &mut app, vec![]);
     let before = frame(&ctx, &mut app, vec![]);
-    let (fit, key) = (drawn_at(&before, "  z z").expect("the fit button"), drawn_at(&before, "f Jump to").expect("a key on the bar"));
+    let (group, key) = (drawn_at(&before, "Buffer  b").expect("a group's button"), drawn_at(&before, "f Jump to").expect("a key on the bar"));
     let reread = drawn_at(&before, "Space I r").expect("the top bar's re-read button");
     // Something waits on you: the bell counts it, and the tray an update.
     for (id, kind) in [("q:1", harness_contracts::NotificationKind::Question), ("turn:1", harness_contracts::NotificationKind::TurnFinished)] {
@@ -223,7 +223,7 @@ fn what_comes_and_goes_on_the_top_and_bottom_lines_never_moves_a_button() {
     frame(&ctx, &mut app, vec![]);
     let after = frame(&ctx, &mut app, vec![]);
     assert!(texts(&after).contains("a long thing to say") && texts(&after).contains("a note on the bottom line"), "both said");
-    assert_eq!(drawn_at(&after, "  z z"), Some(fit), "the top line's buttons stay put");
+    assert_eq!(drawn_at(&after, "Buffer  b"), Some(group), "the top line's buttons stay put");
     assert_eq!(drawn_at(&after, "f Jump to"), Some(key), "the bottom line's keys stay put");
     assert_eq!(drawn_at(&after, "Space I r"), Some(reread), "the top bar's buttons stay put when the bell counts");
 }

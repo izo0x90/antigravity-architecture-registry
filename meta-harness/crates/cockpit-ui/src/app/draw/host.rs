@@ -26,11 +26,34 @@ impl CockpitApp {
         let leader_held = ui.input(|i| self.config.keymap.leader.key_down(i));
         // A card over a panel: what the other buffers say about what it shows.
         let says = if here.at == Host::Look { self.others_say(kind) } else { Vec::new() };
-        let mine: Vec<Bound> = self.shown_at(here).into_iter().filter(|b| b.layer == Layer::Panel).collect();
+        let shown = self.shown_at(here);
+        let groups = self.groups_of(&shown, here);
+        // A panel not focused says no keys on its controls.
+        let mine: Vec<Bound> = shown
+            .into_iter()
+            .filter(|b| b.layer == Layer::Panel)
+            .map(|mut b| {
+                if !is_focused {
+                    (b.keys, b.leader) = (Vec::new(), None);
+                }
+                b
+            })
+            .collect();
         let buttons = self.item_buttons_now();
         let tagged = self.notes_named(here);
+        let number = match here.at {
+            Host::Panel(panel) => Some(panel),
+            Host::Look => None,
+        };
+        let top = crate::hosted::TopLine { number, focused: is_focused, groups: &groups, keyed: is_focused };
         let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, at: here.at, note: &mut self.note, asked: &mut self.asked };
-        crate::hosted::header(ui, self.desk.view(kind), &mine, &tagged, &mut cx);
+        // A group tapped: its panel focused, its menu open.
+        if let Some(key) = crate::hosted::header(ui, self.desk.view(kind), &top, &mine, &tagged, &mut cx) {
+            if let Some(panel) = number {
+                self.desk.panels.focus(panel);
+            }
+            self.open_leader_at(vec![key]);
+        }
         ui.separator();
         // The buttons of what you're on in a bar: their row kept along the
         // bottom (drawn there once everything is laid out), the buffer above.

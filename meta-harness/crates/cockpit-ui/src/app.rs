@@ -234,10 +234,11 @@ pub struct CockpitApp {
     confirming_shutdown: Option<String>,
     /// The shell's own state, kept on home.
     shell: desks::ShellKeeper,
-    /// The keys as last given out, and the actions they were given to (by
-    /// view, name and aliases, in order): keys are given out again only when
-    /// those change. Labels and commands are always the current ones.
-    bound_cache: std::cell::RefCell<Option<(KeyedActions, Vec<Keys>)>>,
+    /// The keys as last given out where each kind of view is, and the
+    /// actions they were given to (by view, name and aliases, in order):
+    /// keys are given out again only when those change. Labels and commands
+    /// are always the current ones.
+    bound_cache: std::cell::RefCell<Vec<(KeyedActions, Vec<Keys>)>>,
     /// Within a frame, the actions as gathered once (dropped when one runs;
     /// none between frames, so the next one gathers them afresh).
     frame_actions: std::cell::RefCell<Option<Vec<Bound>>>,

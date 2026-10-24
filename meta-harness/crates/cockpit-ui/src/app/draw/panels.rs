@@ -1,4 +1,4 @@
-//! Each panel's frame, its tabs, and the palette.
+//! Each panel's frame, and the palette.
 
 use super::super::*;
 use crate::keymap::Host;
@@ -17,22 +17,6 @@ impl CockpitApp {
 
             ui.vertical(|ui| {
                 let active_kind = self.desk.panels.kind(panel);
-
-                // Quiet chrome: the panel's number, then its controls. The row
-                // wraps rather than widen the panel.
-                let header_res = ui.horizontal_wrapped(|ui| {
-                    let number_color = if is_focused { colors().focus } else { colors().faint };
-                    ui.label(RichText::new((panel + 1).to_string()).strong().monospace().size(crate::theme::look().text_body).color(number_color))
-                        .on_hover_text(format!("Panel {}: {}", panel + 1, active_kind.title().to_lowercase()));
-                    // Its own controls from the one list (its host's layer
-                    // where it is): a tab per kind of view, closing it.
-                    let here = Here { at: Host::Panel(panel), kind: active_kind };
-                    let own: Vec<Bound> = self.shown_at(here).into_iter().filter(|b| b.layer == Layer::Host).collect();
-                    self.host_controls(ui, &own, here.at);
-                });
-                self.feedback.register_inspectable(ui, &format!("panel_{}:header", panel + 1), header_res.response.rect);
-                ui.separator();
-
                 self.render_view(Here { at: Host::Panel(panel), kind: active_kind }, ui, is_focused);
             });
         });

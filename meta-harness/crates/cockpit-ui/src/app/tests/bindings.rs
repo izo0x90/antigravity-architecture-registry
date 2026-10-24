@@ -47,20 +47,21 @@ fn vim_sequences_and_leader_drive_the_graph_and_are_rebindable() {
     assert_eq!(selected(&app), "rust:a::step");
 }
 
+/// A panel's top line offers its groups, each its name and (focused) its
+/// key: tapped, its panel is focused and its menu opens, as the leader and
+/// its letter would; the menu's path, tapped, goes back there.
 #[test]
-fn tabs_are_icons_that_name_themselves_and_their_key() {
+fn a_panels_top_line_offers_its_groups_and_a_tap_opens_one() {
     let (ctx, mut app) = app_with_graph();
-    // A tab is the shell's buffer action, its key from its own binding.
-    let bound = app.bound_actions();
-    let key = |id: &str| bound.iter().find(|b| b.action.id == id).map(|b| b.key_hint());
-    assert_eq!((key("buffer.graph").as_deref(), key("buffer.queue").as_deref()), (Some("Space b g"), Some("Space b q")));
-    // Only each panel's active tab is named.
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    let named = |kind: BufferKind| text.lines().any(|l| l.starts_with(&format!("{} {}{}", kind.icon(), &kind.title()[..1], kind.title()[1..].to_lowercase())));
-    let active = app.desk.panels.kinds();
-    for kind in BufferKind::ALL {
-        assert_eq!(named(kind), active.contains(&kind), "{kind:?}: {text}");
-    }
+    assert!(text.contains("Graph actions  ,") && text.contains("Buffer  b"), "the focused panel's groups, with their keys: {text}");
+    assert!(text.lines().any(|l| l == "Buffer"), "a panel not focused: its groups without keys: {text}");
+    let other = 1 - app.desk.panels.focused();
+    click_on(&ctx, &mut app, "Buffer");
+    assert_eq!((app.input_mode, app.leader_path.clone(), app.desk.panels.focused()), (InputMode::Leader, vec!['b'], other), "its panel focused, its menu open");
+    let top = format!("{} \u{203a}", app.config.keymap.leader.label());
+    click_on(&ctx, &mut app, &top);
+    assert_eq!((app.input_mode, app.leader_path.clone()), (InputMode::Leader, Vec::new()), "back to the top of the menu");
 }
 
 #[test]

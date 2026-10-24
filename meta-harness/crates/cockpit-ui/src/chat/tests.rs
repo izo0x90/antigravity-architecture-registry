@@ -291,8 +291,10 @@ pub(crate) fn waiting(id: u64, left_s: i64) -> harness_contracts::SignInWaiting 
 }
 
 /// The chat's buttons on its top line, by id.
+/// What its top lines offer: its settings, and its notice row (what needs
+/// you now).
 fn on_top(chat: &Fed) -> Vec<String> {
-    chat.actions().into_iter().filter(|a| a.control.as_ref().is_some_and(|c| c.at == crate::actions::At::Header)).map(|a| a.id).collect()
+    chat.actions().into_iter().filter(|a| a.control.as_ref().is_some_and(|c| matches!(c.at, crate::actions::At::Header | crate::actions::At::Notice))).map(|a| a.id).collect()
 }
 
 /// The server's answers reach the agents (as each frame).

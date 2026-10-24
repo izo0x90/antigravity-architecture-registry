@@ -70,14 +70,14 @@ impl ActionProvider for ChatStreamState {
         // Session
         let mut new = Action::new("session.new", "New session", "A fresh conversation in this agent slot (the last one is saved)", C::NewSession);
         if idle {
-            new = new.header(Button, "Connect", Some(icon::LIGHTNING));
+            new = new.notice("Connect", Some(icon::LIGHTNING));
         }
         out.push(new);
         if caps.sessions.list_saved {
             let param = self.saved_choices().map(Param::Choice).unwrap_or(Param::None);
             let mut resume = Action::new("session.resume", "Resume a saved session", "Picks up an earlier conversation where it was left", C::ResumeSession).param(param.clone());
             if idle {
-                resume = resume.header(Button, "Resume…", Some(icon::ARROW_COUNTER_CLOCKWISE));
+                resume = resume.notice("Resume…", Some(icon::ARROW_COUNTER_CLOCKWISE));
             }
             out.push(resume);
             if caps.sessions.delete_saved {
@@ -110,9 +110,9 @@ impl ActionProvider for ChatStreamState {
             out.push(Action::new("instance.select", "Choose harness", "Which agent harness this slot's next session runs on", C::SelectInstance).param(Param::Choice(choices)).header(Setting, "Harness", None));
         }
         if let Some(view) = view {
-            out.push(Action::new("session.close", "Close session", "Ends it; it stays saved to resume", C::CloseSession).header(Button, "", Some(icon::X)));
+            out.push(Action::new("session.close", "Close session", "Ends it; it stays saved to resume", C::CloseSession));
             if view.running_turn().is_some() && caps.turns.interrupt {
-                out.push(Action::new("session.stop", "Stop the running turn", "The agent stops what it's doing; what it did stays", C::StopTurn).header(Button, "Stop", Some(icon::STOP)));
+                out.push(Action::new("session.stop", "Stop the running turn", "The agent stops what it's doing; what it did stays", C::StopTurn).notice("Stop", Some(icon::STOP)));
             }
         }
         out.push(Action::new("instance.refresh", "Re-probe the harness", "Asks the harness again what it can do and whether you're signed in", C::RefreshInstance));
@@ -252,7 +252,7 @@ impl ActionProvider for ChatStreamState {
             // Finishing is the typing box's while a sign-in has it: this sends
             // what's in it, or puts you in it to paste.
             if self.sign_in_box().is_some_and(|n| !n.pasted.as_ref().is_some_and(|p| p.finishing)) {
-                out.push(Action::new("auth.complete", "Finish signing in", "Sends what's pasted in the box to the sign-in; with nothing there, puts you in the box to paste", C::CompleteLogin).focused().importance(crate::actions::PRIMARY).header(Button, "Finish signing in", Some(icon::KEY)));
+                out.push(Action::new("auth.complete", "Finish signing in", "Sends what's pasted in the box to the sign-in; with nothing there, puts you in the box to paste", C::CompleteLogin).focused().importance(crate::actions::PRIMARY).notice("Finish signing in", Some(icon::KEY)));
             }
             out.push(Action::new("auth.logout", "Sign out", "The harness forgets your sign-in on this machine", C::Logout));
         }
@@ -278,24 +278,24 @@ impl ActionProvider for ChatStreamState {
         }.focused().importance(crate::actions::PRIMARY).typed(crate::keymap::Sent::Send));
         // What the chat says on its own line, and its ways out.
         if let Some(now) = self.sign_in_now() {
-            out.push(Action::new("auth.cancel", "Stop signing in", "The sign-in stops waiting; nothing else changes", C::CancelLogin).focused().importance(MINOR).header(Button, "Cancel sign-in", None));
+            out.push(Action::new("auth.cancel", "Stop signing in", "The sign-in stops waiting; nothing else changes", C::CancelLogin).focused().importance(MINOR).notice("Cancel sign-in", None));
             if now.waiting.url.is_some() && !now.ran_out {
-                out.push(Action::new("auth.page", "Open the sign-in page", "In a new tab, here", C::OpenLoginPage).focused().importance(crate::actions::PRIMARY).header(Button, "Open the sign-in page", Some(icon::ARROW_SQUARE_OUT)));
+                out.push(Action::new("auth.page", "Open the sign-in page", "In a new tab, here", C::OpenLoginPage).focused().importance(crate::actions::PRIMARY).notice("Open the sign-in page", Some(icon::ARROW_SQUARE_OUT)));
                 // Not minor, unlike other copies: here it's one of the two ways to the page.
-                out.push(Action::new("auth.copy", "Copy the sign-in link", "To open it somewhere else: another browser, another device", C::CopyLoginLink).focused().header(Button, "Copy link", Some(icon::COPY)));
+                out.push(Action::new("auth.copy", "Copy the sign-in link", "To open it somewhere else: another browser, another device", C::CopyLoginLink).focused().notice("Copy link", Some(icon::COPY)));
             }
         }
         if let Some(ended) = self.sign_in_end_to_say().filter(|_| self.sign_in_now().is_none()) {
-            out.push(Action::new("auth.end.dismiss", "Put the sign-in's end away", "Off this chat", C::PutSignInEndAway(ended.id)).focused().importance(MINOR).header(Button, "Dismiss", None));
+            out.push(Action::new("auth.end.dismiss", "Put the sign-in's end away", "Off this chat", C::PutSignInEndAway(ended.id)).focused().importance(MINOR).notice("Dismiss", None));
         }
         if agents.notice().is_some() {
-            out.push(Action::new("chat.dismiss", "Put the notice away", "Off the chat", C::DismissNotice).focused().importance(MINOR).header(Button, "Dismiss", None));
+            out.push(Action::new("chat.dismiss", "Put the notice away", "Off the chat", C::DismissNotice).focused().importance(MINOR).notice("Dismiss", None));
         }
         if self.error().is_some() {
             if self.active_thread().is_none() {
-                out.push(Action::new("chat.retry", "Try connecting again", "To the harness, now", C::Retry).focused().header(Button, "Retry", Some(icon::ARROW_COUNTER_CLOCKWISE)));
+                out.push(Action::new("chat.retry", "Try connecting again", "To the harness, now", C::Retry).focused().notice("Retry", Some(icon::ARROW_COUNTER_CLOCKWISE)));
             }
-            out.push(Action::new("chat.dismiss_error", "Put the error away", "Off the chat", C::DismissError).focused().importance(MINOR).header(Button, "Dismiss", None));
+            out.push(Action::new("chat.dismiss_error", "Put the error away", "Off the chat", C::DismissError).focused().importance(MINOR).notice("Dismiss", None));
         }
         out
     }

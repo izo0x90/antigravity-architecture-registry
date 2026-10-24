@@ -76,7 +76,7 @@ impl GraphState {
 impl ActionProvider for GraphState {
     fn actions(&self) -> Vec<Action> {
         use GraphCommand as G;
-        use Style::{Button, Setting};
+        use Style::Setting;
         let mut out = self.moves();
         let f = |id: &str, label: &str, detail: &str, c: GraphCommand| Action::new(id, label, detail, c).focused();
         let views = ViewKind::ALL
@@ -94,29 +94,29 @@ impl ActionProvider for GraphState {
         if self.nav.only_changed || !self.changed.is_empty() {
             out.push(f("graph.only_changed", "Show only what the changes touch", "Only the components the comparison changed (and what holds them)", G::OnlyChanged).param(Param::Toggle { on: self.nav.only_changed }).header(Setting, "Only changed", None).group(Group::View).importance(MINOR).jump());
         }
-        out.push(f("graph.flip", self.flip_label(), "The other way round: what leads to it instead of what it leads to", G::Flip).header(Button, "", Some(egui_phosphor::regular::ARROWS_DOWN_UP)).group(Group::View).importance(SECONDARY).jump());
-        out.push(f("graph.depth_less", "Show fewer levels", "One level less below the root", G::Depth(-1)).header(Button, "", Some(egui_phosphor::regular::MINUS)).group(Group::View).importance(MINOR).jump());
-        out.push(f("graph.depth_more", "Show more levels", "One level more below the root", G::Depth(1)).header(Button, "", Some(egui_phosphor::regular::PLUS)).group(Group::View).importance(MINOR).jump());
+        out.push(f("graph.flip", self.flip_label(), "The other way round: what leads to it instead of what it leads to", G::Flip).group(Group::View).importance(SECONDARY).jump());
+        out.push(f("graph.depth_less", "Show fewer levels", "One level less below the root", G::Depth(-1)).group(Group::View).importance(MINOR).jump());
+        out.push(f("graph.depth_more", "Show more levels", "One level more below the root", G::Depth(1)).group(Group::View).importance(MINOR).jump());
         if let Some(card) = self.selected_card()
             && self.nav.root.as_deref() != Some(card.key.as_str())
         {
             out.push(f("graph.go_in", &format!("Make {} the root", card.label), "The graph starts from it (the path back is kept)", G::GoIn).icon(egui_phosphor::regular::ARROW_SQUARE_IN).group(Group::Navigate).importance(SECONDARY).jump());
         }
-        out.push(f("graph.fit", "Fit the whole tree to the screen", "Zooms and pans so all of it shows", G::Fit).header(Button, "", Some(egui_phosphor::regular::CORNERS_OUT)).group(Group::View).importance(MINOR));
+        out.push(f("graph.fit", "Fit the whole tree to the screen", "Zooms and pans so all of it shows", G::Fit).group(Group::View).importance(MINOR));
         let fit_card = f("graph.fit_card", "Fit the selected card to the screen", "Zooms and pans so the card fills the panel", G::FitCard).group(Group::View).importance(MINOR);
         out.push(if self.selection.is_some() { fit_card } else { fit_card.when(crate::actions::When::Unavailable) });
         out.push(f("graph.zoom_in", "Zoom in", "Closer, around the middle of the panel", G::Zoom(self.ui.zoom_step)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_PLUS).group(Group::View).importance(MINOR));
         out.push(f("graph.zoom_out", "Zoom out", "Further, around the middle of the panel", G::Zoom(1.0 / self.ui.zoom_step)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS).group(Group::View).importance(MINOR));
         let (found, of) = self.find_choices();
         let find = Param::Search { hint: "a name, a file, or words in a line".into(), found, of };
-        out.push(f("graph.find", "Find in the code (symbols, files, lines)", "As you type; picking one makes it the root", G::Find).param(find).header(Button, "", Some(egui_phosphor::regular::MAGNIFYING_GLASS)).group(Group::Navigate).importance(SECONDARY).jump());
+        out.push(f("graph.find", "Find in the code (symbols, files, lines)", "As you type; picking one makes it the root", G::Find).param(find).group(Group::Navigate).importance(SECONDARY).jump());
         // Too big to show whole: only the levels that fit.
         if let Some(cut) = self.tree.as_ref().and_then(|t| t.cut.as_ref()).filter(|c| c.shown < c.asked && c.shown > 0) {
             let delta = cut.shown as i32 - self.depth() as i32;
-            out.push(f("graph.fit_levels", &format!("Show only the {} levels that fit", cut.shown), "Too big to show whole: as many levels as the server lays out", G::Depth(delta)).header(Button, format!("Show {} levels", cut.shown), None).group(Group::View).importance(SECONDARY).jump());
+            out.push(f("graph.fit_levels", &format!("Show only the {} levels that fit", cut.shown), "Too big to show whole: as many levels as the server lays out", G::Depth(delta)).notice(format!("Show {} levels", cut.shown), None).group(Group::View).importance(SECONDARY).jump());
         }
         if self.agent.is_some() {
-            out.push(f("graph.agent_return", "Return to where you were before the agent moved the view", "The view as it was before the agent's navigate", G::AgentReturn).header(Button, "Return", Some(egui_phosphor::regular::ARROW_U_UP_LEFT)).group(Group::Navigate).importance(PRIMARY).jump());
+            out.push(f("graph.agent_return", "Return to where you were before the agent moved the view", "The view as it was before the agent's navigate", G::AgentReturn).notice("Return", Some(egui_phosphor::regular::ARROW_U_UP_LEFT)).group(Group::Navigate).importance(PRIMARY).jump());
         }
         // The path to the root: each step back along it.
         if let Some(root) = &self.nav.root {
@@ -129,7 +129,7 @@ impl ActionProvider for GraphState {
             }
             out.push(f("graph.path", "Go back along the path", "The roots you went in through: pick one to go back to it", G::Path).param(Param::Choice(steps)).header(Setting, "Path", None).group(Group::Navigate).importance(MINOR).jump());
         }
-        out.push(f("graph.legend", if self.legend_open { "Hide the legend" } else { "Show the legend" }, "What the graph's colours, shapes and badges mean", G::Legend).header(Button, "", Some(egui_phosphor::regular::INFO)).group(Group::View).importance(MINOR));
+        out.push(f("graph.legend", if self.legend_open { "Hide the legend" } else { "Show the legend" }, "What the graph's colours, shapes and badges mean", G::Legend).group(Group::View).importance(MINOR));
         out
     }
 

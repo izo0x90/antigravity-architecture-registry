@@ -321,7 +321,8 @@ fn agent_moves(app: &mut CockpitApp, select: &str, panel: Option<u32>) {
 
 /// Where the kept keys live (moves when they're given out again).
 fn kept_keys(app: &CockpitApp) -> *const Keys {
-    app.bound_cache.borrow().as_ref().map(|(_, keys)| keys.as_ptr()).unwrap()
+    let kind = app.focused_kind();
+    app.bound_cache.borrow().iter().find(|((k, _), _)| *k == kind).map(|(_, keys)| keys.as_ptr()).unwrap()
 }
 
 fn index_event(status: arch_graph::IndexStatus) -> harness_contracts::ClientEvent {

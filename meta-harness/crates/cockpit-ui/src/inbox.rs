@@ -11,7 +11,7 @@ use egui::{RichText, Vec2};
 use egui_phosphor::regular as icon;
 use harness_contracts::{Level, Notification, NotificationId, RuntimeRequest};
 
-use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY, Style};
+use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY};
 use crate::agents::Act;
 use crate::request_card::{Drafts, render_request};
 use crate::kind::BufferKind;
@@ -353,8 +353,8 @@ impl ActionProvider for InboxView {
         let act = |id: &str, label: &str, detail: &str, c: Command| Action::new(id, label, detail, c).focused().group(Group::Act);
         let mut out = self.moves();
         if self.at.is_some_and(|(_, of)| of > 1) || self.shown.is_none() && self.item.is_some() {
-            out.push(act("inbox.prev", "Previous", "The item before, in what waits on you", Command::Step(-1)).importance(SECONDARY).header(Style::Button, "", Some(icon::CARET_LEFT)));
-            out.push(act("inbox.next", "Next", "The next item, in what waits on you", Command::Step(1)).importance(PRIMARY).header(Style::Button, "", Some(icon::CARET_RIGHT)));
+            out.push(act("inbox.prev", "Previous", "The item before, in what waits on you", Command::Step(-1)).importance(SECONDARY).notice("", Some(icon::CARET_LEFT)));
+            out.push(act("inbox.next", "Next", "The next item, in what waits on you", Command::Step(1)).importance(PRIMARY).notice("", Some(icon::CARET_RIGHT)));
         }
         let Some(shown) = &self.shown else { return out };
         // Under its request while you're on it.
@@ -366,13 +366,13 @@ impl ActionProvider for InboxView {
             out.push(answer.place(act(&answer.id, &answer.label, "Answers the agent's request this way", Command::Answer(answer.option.clone())).importance(PRIMARY), here));
         }
         if shown.notification.discussion.is_some() {
-            out.push(act("inbox.open_chat", "Open the discussion", "The discussion that waits on you", Command::OpenChat).importance(PRIMARY).header(Style::Button, "Open it", Some(icon::CHAT_CIRCLE_DOTS)));
+            out.push(act("inbox.open_chat", "Open the discussion", "The discussion that waits on you", Command::OpenChat).importance(PRIMARY).notice("Open it", Some(icon::CHAT_CIRCLE_DOTS)));
         } else if shown.notification.slot.is_some() {
-            out.push(act("inbox.open_chat", "Open its chat", "The agent's chat this came from", Command::OpenChat).importance(SECONDARY).header(Style::Button, "Open its chat", Some(icon::CHAT_TEARDROP_TEXT)));
+            out.push(act("inbox.open_chat", "Open its chat", "The agent's chat this came from", Command::OpenChat).importance(SECONDARY).notice("Open its chat", Some(icon::CHAT_TEARDROP_TEXT)));
         } else if shown.notification.terminal.is_some() {
-            out.push(act("inbox.open_chat", "Open its terminal", "The terminal this came from", Command::OpenChat).importance(SECONDARY).header(Style::Button, "Open its terminal", Some(icon::TERMINAL_WINDOW)));
+            out.push(act("inbox.open_chat", "Open its terminal", "The terminal this came from", Command::OpenChat).importance(SECONDARY).notice("Open its terminal", Some(icon::TERMINAL_WINDOW)));
         }
-        out.push(act("inbox.dismiss", "Put it away", "Off the list of what waits on you", Command::Dismiss).importance(MINOR).header(Style::Button, "Put away", Some(icon::ARCHIVE)));
+        out.push(act("inbox.dismiss", "Put it away", "Off the list of what waits on you", Command::Dismiss).importance(MINOR).notice("Put away", Some(icon::ARCHIVE)));
         out
     }
 

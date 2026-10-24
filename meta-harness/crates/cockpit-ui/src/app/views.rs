@@ -38,21 +38,25 @@ impl CockpitApp {
 
     /// What `When` conditions are judged against, for the focused view.
     pub fn situation(&self) -> Situation {
-        let kind = self.focused_kind();
+        self.situation_of(self.focused_kind())
+    }
+
+    /// The same, for the view of `kind` (where it is, focused or not).
+    pub fn situation_of(&self, kind: BufferKind) -> Situation {
         Situation {
             target: self.desk.view(kind).target(),
             searched: self.desk.searches.get(&kind).is_some_and(|q| !q.is_empty()),
             can_back: self.desk.jumps.can_back(),
             can_forward: self.desk.jumps.can_forward(),
             marked: !self.desk.marks.is_empty(),
-            reaches: self.reaches(),
+            reaches: self.reaches_of(kind),
         }
     }
 
-    /// The relational go-tos that lead somewhere from the focused target, if
-    /// its relations are here.
-    pub(super) fn reaches(&self) -> Option<Vec<GoTo>> {
-        let target = self.desk.view(self.focused_kind()).target()?;
+    /// The relational go-tos that lead somewhere from the view's target,
+    /// if its relations are here.
+    pub(super) fn reaches_of(&self, kind: BufferKind) -> Option<Vec<GoTo>> {
+        let target = self.desk.view(kind).target()?;
         let detail = self.desk.details.get(target.component()?, self.desk.shared.source.get())?;
         let ops = [GoTo::Uses, GoTo::Callers, GoTo::Callees, GoTo::Parent, GoTo::Members, GoTo::Implements, GoTo::Flows];
         Some(ops.into_iter().filter(|op| !candidates(*op, detail).is_empty()).collect())

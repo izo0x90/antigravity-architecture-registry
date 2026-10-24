@@ -927,7 +927,7 @@ impl ActionProvider for ChangesView {
         out.extend([
             f("changes.compare", "Compare what with what", "Uncommitted, the last commit, staged, any commit or branch: what against what", Command::Compare).param(Param::Choice(choices)).header(Style::Setting, "Compare", None).group(ActionGroup::View).importance(SECONDARY),
             f("changes.layout", "Lay changes out", "One column or side by side (auto: side by side when there's room)", Command::Layout).param(Param::Choice(layouts)).header(Style::Setting, "Layout", None).group(ActionGroup::View).importance(MINOR),
-            f("changes.refresh", "Read the changes again", "Asks git again what changed", Command::Refresh).header(Style::Button, "", Some(egui_phosphor::regular::ARROW_CLOCKWISE)).group(ActionGroup::View).importance(MINOR),
+            f("changes.refresh", "Read the changes again", "Asks git again what changed", Command::Refresh).group(ActionGroup::View).importance(MINOR),
         ]);
         out.push(f("changes.timeline", "Show when the files changed and who was working", "The windows between snapshots, newest first, with the sessions at work", Command::Timeline).param(Param::Toggle { on: self.on_timeline }).header(Style::Setting, "Timeline", None).group(ActionGroup::View).importance(SECONDARY));
         // Staging: the user's own act, on the uncommitted changes.

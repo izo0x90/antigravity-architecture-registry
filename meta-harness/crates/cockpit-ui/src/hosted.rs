@@ -109,18 +109,49 @@ pub enum NoteMark {
     Discussions,
 }
 
-/// The panel's top line: its bound actions' header buttons (`bound`: the
-/// panel's layer of where you are), the place for its busy mark, its title
-/// and status, the notes on what the cursor's on (each tag a solid tag in
-/// its colour and its name; its discussions a speech bubble and a few
-/// words); its settings on a row under.
-pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, bound: &[Bound], notes: &[(NoteMark, String, egui::Color32)], cx: &mut RunCx<'_>) {
+/// A group of the leader's, as a host's top line offers it: its key (after
+/// the leader) and its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupButton {
+    pub key: char,
+    pub name: String,
+    /// What it is and how it's reached by keys (on hover, a long press).
+    pub tip: String,
+}
+
+/// What a host's top line starts with: the panel's number (none for the
+/// quick look) and whether it's focused, and its groups (`keyed`: their
+/// keys are said; a panel not focused says none).
+pub struct TopLine<'a> {
+    pub number: Option<usize>,
+    pub focused: bool,
+    pub groups: &'a [GroupButton],
+    pub keyed: bool,
+}
+
+/// The panel's top line: its number, its groups as buttons (each its name
+/// and its one key; tapped, its menu opens: returned), the place for its
+/// busy mark, its title and status, the notes on what the cursor's on
+/// (each tag a solid tag in its colour and its name; its discussions a
+/// speech bubble and a few words). Under it, while there's something, the
+/// notice row (what needs you now: `bound`'s notice buttons), then its
+/// settings (`bound`: the panel's layer of where you are).
+pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, top: &TopLine<'_>, bound: &[Bound], notes: &[(NoteMark, String, egui::Color32)], cx: &mut RunCx<'_>) -> Option<char> {
     let look = crate::theme::look();
-    let at_header = |style: Style| bound.iter().filter(move |b| b.action.control.as_ref().is_some_and(|c| c.at == At::Header && c.style == style));
+    let placed = |at: At, style: Style| bound.iter().filter(move |b| b.action.control.as_ref().is_some_and(|c| c.at == at && c.style == style));
+    let mut tapped = None;
     // One line that wraps (a narrow panel, a phone): nothing overlaps.
-    // The buttons first: what follows them grows and wraps after them.
+    // The groups first: what follows them grows and wraps after them.
     ui.horizontal_wrapped(|ui| {
-        crate::actions::controls(ui, at_header(Style::Button), cx);
+        if let Some(number) = top.number {
+            let colour = if top.focused { crate::theme::colors().focus } else { crate::theme::colors().faint };
+            ui.label(RichText::new((number + 1).to_string()).strong().monospace().size(look.text_body).color(colour));
+        }
+        for group in top.groups {
+            if group_button(ui, group, top.keyed) {
+                tapped = Some(group.key);
+            }
+        }
         // The busy mark's place, kept whether it shows or not.
         let mark = egui::WidgetText::from(RichText::new(egui_phosphor::regular::HOURGLASS).size(look.text_label).color(Tone::Warn.color()));
         let galley = mark.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
@@ -141,9 +172,25 @@ pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, bound: &[Bound], notes: &[(
             ui.add(egui::Label::new(RichText::new(name).size(look.text_small).color(*colour)).truncate());
         }
     });
-    if at_header(Style::Setting).next().is_some() {
-        ui.horizontal_wrapped(|ui| crate::actions::controls(ui, at_header(Style::Setting), cx));
+    if placed(At::Notice, Style::Button).next().is_some() {
+        ui.horizontal_wrapped(|ui| crate::actions::controls(ui, placed(At::Notice, Style::Button), cx));
     }
+    if placed(At::Header, Style::Setting).next().is_some() {
+        ui.horizontal_wrapped(|ui| crate::actions::controls(ui, placed(At::Header, Style::Setting), cx));
+    }
+    tapped
+}
+
+/// A group's button: its name, then its key (when keys are said); what's
+/// in it on hover or a long press. Whether it was tapped.
+fn group_button(ui: &mut egui::Ui, group: &GroupButton, keyed: bool) -> bool {
+    let look = crate::theme::look();
+    let mut job = egui::text::LayoutJob::default();
+    RichText::new(&group.name).size(look.text_body).append_to(&mut job, ui.style(), egui::FontSelection::Default, egui::Align::Center);
+    if keyed {
+        RichText::new(format!("  {}", group.key)).monospace().size(look.text_small).color(crate::theme::colors().key).append_to(&mut job, ui.style(), egui::FontSelection::Default, egui::Align::Center);
+    }
+    crate::actions::tip_on(ui.button(job), &group.tip).clicked()
 }
 
 /// What other buffers say about what a card shows (the quick look's,

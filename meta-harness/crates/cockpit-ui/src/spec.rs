@@ -905,7 +905,7 @@ impl ActionProvider for SpecState {
             if !self.floating {
                 out.push(
                     f("spec.pin", if self.pinned { "Unpin (follow what you're on)" } else { "Pin this card" }, "Pinned, it stays on this card while you move elsewhere", S::Pin)
-                        .header(Style::Button, if self.pinned { "Pinned" } else { "Pin" }, Some(egui_phosphor::regular::PUSH_PIN))
+                        
                         .group(Group::View)
                         .importance(MINOR),
                 );
@@ -920,7 +920,7 @@ impl ActionProvider for SpecState {
         if !self.floating {
             out.push(
                 f("spec.pin", if self.pinned { "Unpin (follow what you're on)" } else { "Pin this component" }, "Pinned, it stays on this card while you move elsewhere", S::Pin)
-                    .header(Style::Button, if self.pinned { "Pinned" } else { "Pin" }, Some(egui_phosphor::regular::PUSH_PIN))
+                    
                     .group(Group::View)
                     .importance(MINOR),
             );
@@ -930,7 +930,7 @@ impl ActionProvider for SpecState {
         if self.source.plan().is_some() {
             out.push(
                 f("spec.mark_reviewed", "Mark the plan reviewed (later changes are highlighted)", "From now on, what changes in the plan is marked as new", S::MarkReviewed)
-                    .header(Style::Button, "Reviewed", Some(egui_phosphor::regular::CHECK_SQUARE))
+                    
                     .importance(MINOR),
             );
             // Always there: with no open points it says so.
@@ -946,7 +946,7 @@ impl ActionProvider for SpecState {
                 .importance(MINOR),
         );
         if self.out_of_date && self.detail.as_ref().is_some_and(|d| d.code.is_some()) {
-            out.push(f("spec.reread", "Read this code again (it changed since)", "The index reads its file again, so the card is up to date", S::Reread).header(Style::Button, "Re-read", None).importance(MINOR));
+            out.push(f("spec.reread", "Read this code again (it changed since)", "The index reads its file again, so the card is up to date", S::Reread).notice("Re-read", None).importance(MINOR));
         }
         out
     }

@@ -426,13 +426,13 @@ impl ActionProvider for DiscussionView {
             f("discussion.settle", if asks_you { "Settle it (your answer's said)" } else { "Settle it (accept its answer)" }, "Settled: it holds nothing any more (a plan's approval)", Command::Settle)
                 .importance(if settles { PRIMARY } else { MINOR })
                 .when(if settles { crate::actions::When::Always } else { crate::actions::When::Unavailable })
-                .header(Style::Button, "Settle", Some(icon::CHECK)),
+                .notice("Settle", Some(icon::CHECK)),
         );
         out.push(
             f("discussion.reopen", "Reopen it (say why)", "Open again: the agent asked answers again", Command::Reopen)
                 .importance(SECONDARY)
                 .when(if d.status != DiscussionStatus::Open { crate::actions::When::Always } else { crate::actions::When::Unavailable })
-                .header(Style::Button, "Reopen", Some(icon::ARROW_COUNTER_CLOCKWISE)),
+                .notice("Reopen", Some(icon::ARROW_COUNTER_CLOCKWISE)),
         );
         // (A change request asks an agent slot: its answer names what it changed.)
         let question = d.kind == DiscussionKind::Question && open && d.asked != harness_contracts::USER;
