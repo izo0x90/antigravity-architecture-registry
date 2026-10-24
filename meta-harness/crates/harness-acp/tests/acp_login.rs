@@ -202,3 +202,25 @@ async fn a_login_command_taking_a_paste_is_stopped_by_cancel() {
     tokio::time::sleep(Duration::from_secs(4)).await;
     assert!(!done.exists(), "the login was stopped, not left to finish");
 }
+
+#[tokio::test]
+async fn a_login_command_starting_is_stopped_by_cancel() {
+    let dir = tempfile::tempdir().unwrap();
+    let ran_on = dir.path().join("ran-on");
+    // Slow to show its link.
+    let launch = Launch { program: "sh".into(), args: vec!["-c".into(), format!("sleep 2; touch {}; echo 'visit https://claude.ai/oauth?x=1'; read code", ran_on.display())], env: Vec::new(), env_remove: Vec::new() };
+    let said = Said::default();
+    let to = said.clone();
+    let auth = Arc::new(AcpAuthController::new(Arc::new(agent()), Arc::new(Profile::new(AcpSettings::default(), dir.path(), None)), Some(launch), Arc::new(move |e| to.lock().unwrap().push(e))));
+    auth.set_logins(vec![harness_acp::CommandLogin { method: "login".into(), args: Vec::new(), env: Vec::new() }]);
+    let beginning = { let auth = auth.clone(); tokio::spawn(async move { auth.begin("login").await }) };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // The sign-in every device sees starting.
+    let Some(AuthEvent::Waiting(starting)) = last(&said) else { panic!("{:?}", last(&said)) };
+    assert!(starting.url.is_none());
+    auth.cancel(starting.id).await.unwrap();
+    let answered = tokio::time::timeout(Duration::from_secs(1), beginning).await.expect("answered at once").unwrap();
+    assert!(matches!(answered, Err(HarnessError::Conflict { .. })), "{answered:?}");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(!ran_on.exists(), "the login command was stopped while it started");
+}

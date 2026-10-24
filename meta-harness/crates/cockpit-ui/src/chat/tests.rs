@@ -363,11 +363,18 @@ fn a_sign_in_that_stopped_waiting_offers_a_new_one_and_says_how_it_ended() {
     assert_eq!(chat.agents().sign_in_ended(&InstanceId::new("i")).map(|e| e.how.clone()), Some(harness_contracts::SignInEnd::RanOut));
     assert!(on_top(&chat).contains(&"auth.login".to_owned()));
     // Said whatever the status (signed in, switching account, say), until put away.
-    let mut signed_in = signed_out_harness(None);
-    signed_in.auth.status = harness_contracts::AuthStatus::SignedIn;
-    signed_in.auth.ended = Some(Box::new(harness_contracts::SignInEnded { id: 5, how: harness_contracts::SignInEnd::Failed { reason: "bad code".into() } }));
-    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_in });
-    assert!(chat.sign_in_end_to_say().is_some() && on_top(&chat).contains(&"auth.end.dismiss".to_owned()));
+    let mut unknown = signed_out_harness(None);
+    unknown.auth.status = harness_contracts::AuthStatus::Unknown;
+    unknown.auth.ended = Some(Box::new(harness_contracts::SignInEnded { id: 5, how: harness_contracts::SignInEnd::Failed { reason: "bad code".into() } }));
+    chat.apply(ClientEvent::InstanceUpdated { snapshot: unknown.clone() });
+    let top = on_top(&chat);
+    assert!(chat.sign_in_end_to_say().is_some() && top.contains(&"auth.end.dismiss".to_owned()) && top.contains(&"auth.login".to_owned()), "{top:?}");
+    // Signed in since (another way): nothing to say.
+    let mut since = unknown.clone();
+    since.auth.status = harness_contracts::AuthStatus::SignedIn;
+    chat.apply(ClientEvent::InstanceUpdated { snapshot: since });
+    assert!(chat.sign_in_end_to_say().is_none());
+    chat.apply(ClientEvent::InstanceUpdated { snapshot: unknown });
     let (ctx, net) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"));
     chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::PutSignInEndAway { id: 5 }, &net, &ctx);
     chat.read();

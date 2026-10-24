@@ -52,14 +52,14 @@ struct Callback {
 }
 
 enum Running {
-    /// Between steps, nothing held yet (starting, or a paste being taken up).
+    /// Between steps, nothing held yet.
     Pending,
     /// The agent's login: its callback once it's shown its link.
     Agent { task: tokio::task::JoinHandle<()>, callback: Option<Callback>, ended: Ended },
     /// A login command, its link shown.
     Command(Box<LoginRun>),
-    /// A login command taking what was pasted.
-    Finishing(tokio::task::JoinHandle<()>),
+    /// A step run by a task (a login command starting, or taking a paste).
+    Task(tokio::task::AbortHandle),
 }
 
 /// The sign-in under way.
@@ -73,13 +73,17 @@ struct State {
     under: Option<Under>,
     /// How the last one ended (what's said to a request about it).
     last: Option<SignInEnded>,
+    /// What's to be said, in the order it happened.
+    outbox: std::collections::VecDeque<AuthEvent>,
 }
 
 /// The sign-in under way (one controller's), and where to say what happens
-/// to it: said while it's held, so what's said is in the order it happened.
+/// to it. What happens is queued while it's held and said after (one
+/// sayer at a time, in order): saying can't re-enter it.
 #[derive(Clone)]
 struct Slot {
     state: Arc<Mutex<State>>,
+    say: Arc<Mutex<()>>,
     on_change: AuthChanged,
 }
 
@@ -91,47 +95,83 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// command, with it), a login command killed.
 fn stop(running: Running) {
     match running {
-        Running::Agent { task, .. } | Running::Finishing(task) => task.abort(),
+        Running::Agent { task, .. } => task.abort(),
+        Running::Task(task) => task.abort(),
         Running::Pending | Running::Command(_) => {}
     }
 }
 
 impl Slot {
+    fn new(on_change: AuthChanged) -> Self {
+        Self { state: Arc::default(), say: Arc::default(), on_change }
+    }
+
+    /// Says what's queued, in order.
+    fn flush(&self) {
+        let _saying = lock(&self.say);
+        while let Some(event) = lock(&self.state).outbox.pop_front() {
+            (self.on_change)(event);
+        }
+    }
+
     fn current(&self) -> Option<u64> {
         lock(&self.state).under.as_ref().map(|u| u.id)
     }
 
-    /// Starts sign-in `id`, stopping the one under way; says so.
-    fn start(&self, waiting: SignInWaiting) {
-        let mut state = lock(&self.state);
-        if let Some(replaced) = state.under.replace(Under { id: waiting.id, running: Running::Pending }) {
-            stop(replaced.running);
-            self.said(&mut state, replaced.id, SignInEnd::Stopped);
-        }
-        (self.on_change)(AuthEvent::Waiting(waiting));
+    /// Starts a new sign-in (its id taken here, so ids grow in the order
+    /// sign-ins start), stopping the one under way; says so.
+    fn start(&self, waiting: impl FnOnce(u64) -> SignInWaiting) -> u64 {
+        let id = {
+            let mut state = lock(&self.state);
+            let id = next_id();
+            if let Some(replaced) = state.under.replace(Under { id, running: Running::Pending }) {
+                stop(replaced.running);
+                Self::said(&mut state, replaced.id, SignInEnd::Stopped);
+            }
+            state.outbox.push_back(AuthEvent::Waiting(waiting(id)));
+            id
+        };
+        self.flush();
+        id
     }
 
-    /// Sign-in `id`, if it's still the one under way, now `running`.
-    fn put(&self, id: u64, running: Running) -> std::result::Result<(), Running> {
+    /// Sign-in `id`, if it's still the one under way, now `running`; what
+    /// it was is stopped (unless it's the step making the change).
+    fn put(&self, id: u64, running: Running, stop_old: bool) -> std::result::Result<(), Running> {
         let mut state = lock(&self.state);
         match state.under.as_mut() {
             Some(at) if at.id == id => {
-                stop(std::mem::replace(&mut at.running, running));
+                let old = std::mem::replace(&mut at.running, running);
+                if stop_old {
+                    stop(old);
+                }
                 Ok(())
             }
             _ => Err(running),
         }
     }
 
-    /// Sign-in `id`'s link, if it's still the one under way: shown.
-    fn show(&self, waiting: SignInWaiting, callback: Option<Callback>) -> bool {
-        let mut state = lock(&self.state);
-        let Some(at) = state.under.as_mut().filter(|u| u.id == waiting.id) else { return false };
-        if let (Running::Agent { callback: c, .. }, Some(callback)) = (&mut at.running, callback) {
-            *c = Some(callback);
-        }
-        (self.on_change)(AuthEvent::Waiting(waiting));
-        true
+    /// Sign-in `id`'s link, if it's still the one under way: `running` now
+    /// (held by the step making the change), and shown. Whether it was.
+    fn hold(&self, waiting: SignInWaiting, running: Option<Running>, callback: Option<Callback>) -> bool {
+        let shown = {
+            let mut state = lock(&self.state);
+            match state.under.as_mut().filter(|u| u.id == waiting.id) {
+                None => false,
+                Some(at) => {
+                    if let Some(running) = running {
+                        at.running = running;
+                    }
+                    if let (Running::Agent { callback: c, .. }, Some(callback)) = (&mut at.running, callback) {
+                        *c = Some(callback);
+                    }
+                    state.outbox.push_back(AuthEvent::Waiting(waiting));
+                    true
+                }
+            }
+        };
+        self.flush();
+        shown
     }
 
     /// What's under way, if it's sign-in `id`, for `take` to change.
@@ -142,22 +182,47 @@ impl Slot {
 
     /// Ends sign-in `id`, if it's still the one under way, saying how.
     fn end(&self, id: u64, how: SignInEnd) {
-        let mut state = lock(&self.state);
-        if state.under.as_ref().is_some_and(|u| u.id == id) {
-            if let Some(taken) = state.under.take() {
-                stop(taken.running);
+        let taken = {
+            let mut state = lock(&self.state);
+            if state.under.as_ref().is_some_and(|u| u.id == id) {
+                let taken = state.under.take();
+                Self::said(&mut state, id, how);
+                taken
+            } else {
+                None
             }
-            self.said(&mut state, id, how);
+        };
+        if let Some(taken) = taken {
+            stop(taken.running);
         }
+        self.flush();
     }
 
-    fn said(&self, state: &mut State, id: u64, how: SignInEnd) {
+    /// Ends sign-in `id` from inside the step that holds it (its own task
+    /// isn't stopped: it's ending), saying how.
+    fn ended_by_step(&self, id: u64, how: SignInEnd) {
+        let taken = {
+            let mut state = lock(&self.state);
+            if state.under.as_ref().is_some_and(|u| u.id == id) {
+                let taken = state.under.take();
+                Self::said(&mut state, id, how);
+                taken
+            } else {
+                None
+            }
+        };
+        // A login command it held goes (killed); its own task runs on to its end.
+        drop(taken);
+        self.flush();
+    }
+
+    fn said(state: &mut State, id: u64, how: SignInEnd) {
         let signed_in = how == SignInEnd::SignedIn;
         let ended = SignInEnded { id, how };
         state.last = Some(ended.clone());
-        (self.on_change)(AuthEvent::Ended(ended));
+        state.outbox.push_back(AuthEvent::Ended(ended));
         if signed_in {
-            (self.on_change)(AuthEvent::Status(Some(true)));
+            state.outbox.push_back(AuthEvent::Status(Some(true)));
         }
     }
 
@@ -165,7 +230,7 @@ impl Slot {
     fn gone(&self, id: u64) -> HarnessError {
         let state = lock(&self.state);
         let reason = match state.last.as_ref().filter(|e| e.id == id).map(|e| &e.how) {
-            Some(SignInEnd::Failed { reason }) => return HarnessError::Provider { reason: format!("the sign-in failed: {reason}") },
+            Some(SignInEnd::Failed { reason }) => return HarnessError::Provider { reason: failed(reason) },
             Some(SignInEnd::RanOut) => "that sign-in's time ran out: sign in again",
             Some(SignInEnd::SignedIn) => "that sign-in is done: it's signed in",
             Some(SignInEnd::Stopped) => "that sign-in was stopped (cancelled, or a new one started): sign in again",
@@ -173,6 +238,11 @@ impl Slot {
         };
         HarnessError::Conflict { reason: reason.into() }
     }
+}
+
+/// "The sign-in failed: …", once.
+fn failed(reason: &str) -> String {
+    if reason.starts_with("the sign-in") { reason.to_owned() } else { format!("the sign-in failed: {reason}") }
 }
 
 fn now_ms() -> u64 {
@@ -213,7 +283,7 @@ impl Drop for AcpAuthController {
 
 impl AcpAuthController {
     pub fn new(launcher: Arc<dyn AcpLauncher>, profile: Arc<Profile>, launch: Option<Launch>, on_change: AuthChanged) -> Self {
-        Self { steps: Steps { launcher, profile, launch, slot: Slot { state: Arc::default(), on_change } }, logins: Mutex::default() }
+        Self { steps: Steps { launcher, profile, launch, slot: Slot::new(on_change) }, logins: Mutex::default() }
     }
 
     /// The agent's login commands, as its last check found them.
@@ -225,7 +295,7 @@ impl AcpAuthController {
 impl Steps {
     async fn begin_command(&self, id: u64, until_ms: Option<u64>, login: CommandLogin) -> Result<Option<SignInWaiting>> {
         let fail = |reason: String| {
-            self.slot.end(id, SignInEnd::Failed { reason });
+            self.slot.ended_by_step(id, SignInEnd::Failed { reason });
             Err(self.slot.gone(id))
         };
         let Some(launch) = &self.launch else { return fail("the agent can't be started to sign in".into()) };
@@ -239,7 +309,7 @@ impl Steps {
         }
         match (started.exited, started.link) {
             (Some(true), _) => {
-                self.slot.end(id, SignInEnd::SignedIn);
+                self.slot.ended_by_step(id, SignInEnd::SignedIn);
                 Ok(None)
             }
             (Some(false), _) => fail(started.run.last_words()),
@@ -253,8 +323,9 @@ impl Steps {
                     expects: Some(expects),
                     until_ms,
                 };
-                self.slot.put(id, Running::Command(Box::new(started.run))).map_err(|_| self.slot.gone(id))?;
-                self.slot.show(waiting.clone(), None);
+                if !self.slot.hold(waiting.clone(), Some(Running::Command(Box::new(started.run))), None) {
+                    return Err(self.slot.gone(id));
+                }
                 Ok(Some(waiting))
             }
         }
@@ -293,7 +364,7 @@ impl Steps {
                         expects: Some("the address of the page that failed to load".into()),
                         until_ms,
                     };
-                    let _ = link_to.send(if shown.show(waiting.clone(), Some(callback)) { Ok(waiting) } else { Err("stopped".into()) });
+                    let _ = link_to.send(if shown.hold(waiting.clone(), None, Some(callback)) { Ok(waiting) } else { Err("stopped".into()) });
                 });
                 cx.send_request(acp::AuthenticateRequest::new(method)).block_task().await
             })
@@ -306,13 +377,15 @@ impl Steps {
             if let SignInEnd::Failed { reason } = &how {
                 tracing::warn!(target: "harness_acp", "sign-in failed: {reason}");
             }
-            ended_to.send_replace(Some(match &how {
+            // Recorded first: whoever wakes on its end finds why.
+            let ended = match &how {
                 SignInEnd::Failed { reason } => Err(reason.clone()),
                 _ => Ok(()),
-            }));
-            slot.end(id, how);
+            };
+            slot.ended_by_step(id, how);
+            ended_to.send_replace(Some(ended));
         });
-        if let Err(running) = self.slot.put(id, Running::Agent { task, callback: None, ended: ended.clone() }) {
+        if let Err(running) = self.slot.put(id, Running::Agent { task, callback: None, ended: ended.clone() }, true) {
             stop(running);
             return Err(self.slot.gone(id));
         }
@@ -372,14 +445,14 @@ impl Steps {
                 return;
             }
             let result = run.finish(&response).await;
-            slot.end(id, match &result {
+            slot.ended_by_step(id, match &result {
                 Ok(()) => SignInEnd::SignedIn,
                 Err(HarnessError::Provider { reason }) => SignInEnd::Failed { reason: reason.clone() },
                 Err(err) => SignInEnd::Failed { reason: err.to_string() },
             });
             let _ = done_to.send(result.is_ok());
         });
-        if let Err(running) = self.slot.put(id, Running::Finishing(task)) {
+        if let Err(running) = self.slot.put(id, Running::Task(task.abort_handle()), true) {
             stop(running);
             return Err(self.slot.gone(id));
         }
@@ -403,11 +476,10 @@ async fn how_it_ended(mut ended: Ended, limit: Duration) -> Option<std::result::
 #[async_trait]
 impl AuthController for AcpAuthController {
     async fn begin(&self, method_id: &str) -> Result<Option<SignInWaiting>> {
-        let id = next_id();
         let within_s = self.steps.profile.settings.login.within_s;
         let until_ms = within_s.map(|s| now_ms() + s * 1000);
         // A sign-in started again replaces the one under way.
-        self.steps.slot.start(SignInWaiting { id, url: None, instructions: "Starting the sign-in…".into(), expects: None, until_ms });
+        let id = self.steps.slot.start(|id| SignInWaiting { id, url: None, instructions: "Starting the sign-in…".into(), expects: None, until_ms });
         // Its time, counted from now, the same for every kind: then it ends.
         if let Some(within_s) = within_s {
             let slot = self.steps.slot.clone();
@@ -418,13 +490,25 @@ impl AuthController for AcpAuthController {
         }
         let login = lock(&self.logins).iter().find(|l| l.method == method_id).cloned();
         let (steps, method) = (self.steps.clone(), method_id.to_owned());
+        // A login command starting is held as the sign-in (Cancel stops it);
+        // an agent's login holds itself once it runs.
+        let command = login.is_some();
+        let (go_to, go) = tokio::sync::oneshot::channel::<()>();
         let started = tokio::spawn(async move {
+            if go.await.is_err() {
+                return Err(steps.slot.gone(id));
+            }
             match login {
                 Some(login) => steps.begin_command(id, until_ms, login).await,
                 None => steps.begin_agent(id, until_ms, method).await,
             }
         });
-        started.await.unwrap_or_else(|e| Err(HarnessError::Provider { reason: format!("the sign-in stopped: {e}") }))
+        if command {
+            // Replaced already: it doesn't start.
+            let _ = self.steps.slot.put(id, Running::Task(started.abort_handle()), false);
+        }
+        let _ = go_to.send(());
+        started.await.unwrap_or_else(|_| Err(self.steps.slot.gone(id)))
     }
 
     async fn complete(&self, id: u64, response: &str) -> Result<()> {
@@ -437,10 +521,11 @@ impl AuthController for AcpAuthController {
                 *running = Running::Agent { task, callback, ended };
                 Ok(finishing)
             }
-            other => {
-                *running = other;
-                Err(HarnessError::Conflict { reason: "the sign-in isn't ready for that yet: wait for its link".into() })
+            Running::Task(task) => {
+                *running = Running::Task(task);
+                Err(HarnessError::Conflict { reason: "the sign-in is busy (starting, or taking a paste): wait for its answer".into() })
             }
+            Running::Pending => Err(HarnessError::Conflict { reason: "the sign-in hasn't shown its link yet".into() }),
         });
         let steps = self.steps.clone();
         let response = response.to_owned();
@@ -452,7 +537,7 @@ impl AuthController for AcpAuthController {
                 Some(Ok(Finishing::Agent { callback, ended })) => steps.finish_agent(id, callback, ended, &response).await,
             }
         });
-        finished.await.unwrap_or_else(|e| Err(HarnessError::Provider { reason: format!("the sign-in stopped: {e}") }))
+        finished.await.unwrap_or_else(|_| Err(self.steps.slot.gone(id)))
     }
 
     async fn cancel(&self, id: u64) -> Result<()> {

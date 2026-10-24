@@ -149,12 +149,20 @@ fn ensure_nah_gitignore(nah: &Path) -> Result<(), ServiceError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "# Caches are rebuilt from the code, the server's state is one person's and the harnesses' homes hold their logins; plans are kept.\n".to_owned(),
         Err(e) => return Err(io(&ignore, e)),
     };
-    // A line that lets one of them back in goes.
-    let undoes = |line: &str| line.trim().strip_prefix('!').is_some_and(|back| NAH_IGNORED.iter().any(|dir| back.trim_start_matches('/').split('/').next() == Some(*dir)));
-    let undone = text.lines().any(undoes);
-    let text: String = if undone { text.lines().filter(|l| !undoes(l)).map(|l| format!("{l}\n")).collect() } else { text };
-    let missing: Vec<String> = NAH_IGNORED.into_iter().map(|dir| format!("{dir}/")).filter(|entry| !text.lines().any(|l| l.trim() == entry)).collect();
-    if !missing.is_empty() || !ignore.exists() || undone {
+    // Git's last matching line wins: when any line lets something back in,
+    // the server's entries go last, after it.
+    let reopens = text.lines().any(|l| l.trim_start().starts_with('!'));
+    let entries: Vec<String> = NAH_IGNORED.into_iter().map(|dir| format!("{dir}/")).collect();
+    let last = text.lines().rev().filter(|l| !l.trim().is_empty()).take(entries.len()).collect::<Vec<_>>();
+    let undone = reopens && !entries.iter().all(|e| last.contains(&e.as_str()));
+    let text: String = if undone { text.lines().filter(|l| !entries.iter().any(|e| l == e)).map(|l| format!("{l}\n")).collect() } else { text };
+    let missing: Vec<String> = entries.into_iter().filter(|entry| !text.lines().any(|l| l == entry)).collect();
+    // Git doesn't read one that's a link: a file of its own.
+    let linked = std::fs::symlink_metadata(&ignore).is_ok_and(|m| m.file_type().is_symlink());
+    if linked {
+        std::fs::remove_file(&ignore).map_err(|e| io(&ignore, e))?;
+    }
+    if !missing.is_empty() || !ignore.exists() || undone || linked {
         let mut text = text;
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
@@ -529,9 +537,11 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\ncache/\nstate/\nharness/\n");
         state_dir(dir.path()).unwrap();
         assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\ncache/\nstate/\nharness/\n", "nothing added twice");
-        // A line letting the logins back in goes.
-        std::fs::write(dir.path().join(".nah/.gitignore"), "# mine\ncache/\nstate/\nharness/\n!harness/\n!harness/claude-code/\n").unwrap();
+        // A line letting things back in: the server's entries go after it.
+        std::fs::write(dir.path().join(".nah/.gitignore"), "# mine\ncache/\nstate/\nharness/\n!**/harness/\n").unwrap();
         state_dir(dir.path()).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\ncache/\nstate/\nharness/\n");
+        assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\n!**/harness/\ncache/\nstate/\nharness/\n");
+        state_dir(dir.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\n!**/harness/\ncache/\nstate/\nharness/\n", "settled");
     }
 }

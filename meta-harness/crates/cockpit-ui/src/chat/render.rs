@@ -143,9 +143,12 @@ impl ChatStreamState {
     }
 
     /// How its last sign-in ended, when that's worth saying (it ran out or
-    /// failed) and it isn't put away.
+    /// failed, and it isn't signed in since) and it isn't put away.
     pub(super) fn sign_in_end_to_say(&self) -> Option<harness_contracts::SignInEnded> {
         let instance = self.active_instance()?;
+        if self.instance().is_some_and(|s| s.auth.status == harness_contracts::AuthStatus::SignedIn) {
+            return None;
+        }
         let ended = self.agents().sign_in_ended(&instance).cloned()?;
         matches!(ended.how, harness_contracts::SignInEnd::RanOut | harness_contracts::SignInEnd::Failed { .. }).then_some(ended)
     }

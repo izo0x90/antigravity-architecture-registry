@@ -37,6 +37,10 @@ fn make_home(project: &Path, dir: &Path) -> std::io::Result<()> {
     if linked(dir) || on_the_way.any(linked) {
         return Err(std::io::Error::other("a link is on the way to it: a home is a folder of its own"));
     }
+    // Kept in the project, nothing in it may lead out of it either.
+    if dir.starts_with(project) && dir.exists() && links_in(dir)? {
+        return Err(std::io::Error::other("there's a link in it: a home kept in the project holds only its own files"));
+    }
     if dir.exists() {
         return Ok(());
     }
@@ -96,6 +100,18 @@ impl ProviderDriver for AcpDriver {
     }
 }
 
+/// Whether there's a link anywhere in `dir`.
+fn links_in(dir: &Path) -> std::io::Result<bool> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_symlink() || (kind.is_dir() && links_in(&entry.path())?) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,6 +134,9 @@ mod tests {
             std::fs::create_dir_all(other.path().join(".nah")).unwrap();
             std::os::unix::fs::symlink(dir.path().join("docs"), other.path().join(".nah/harness")).unwrap();
             assert!(make_home(other.path(), &other.path().join(".nah/harness/antigravity")).is_err());
+            // A link inside it.
+            std::os::unix::fs::symlink(dir.path().join("docs"), home.join("antigravity-acp")).unwrap();
+            assert!(make_home(dir.path(), &home).is_err());
         }
     }
 }

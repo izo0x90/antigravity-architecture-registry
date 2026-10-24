@@ -244,7 +244,7 @@ impl ActionProvider for ChatStreamState {
             // Signing in (again): when it isn't, or the last one stopped
             // waiting; not while one's being asked for.
             let again = now.as_ref().is_none_or(|n| n.ran_out) && !agents.signing_in(&s.instance_id);
-            out.push(if again && (self.needs_login() || now.is_some()) { login.header(Setting, "Sign in", Some(icon::KEY)) } else { login });
+            out.push(if again && (self.needs_login() || now.is_some() || self.sign_in_end_to_say().is_some()) { login.header(Setting, "Sign in", Some(icon::KEY)) } else { login });
             let hint = now.as_ref().and_then(|n| n.waiting.expects.clone()).unwrap_or_else(|| "what the sign-in page gave you".into());
             let complete = Action::new("auth.complete", "Finish signing in", "Paste what the sign-in page gave you", C::CompleteLogin).param(Param::Text { hint, start: String::new() });
             let takes = now.as_ref().is_some_and(|n| n.waiting.expects.is_some() && !n.ran_out && !n.pasted.as_ref().is_some_and(|p| p.finishing));
