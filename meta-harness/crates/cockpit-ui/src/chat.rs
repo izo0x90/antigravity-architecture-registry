@@ -240,20 +240,31 @@ impl ChatStreamState {
         Some(SignInNow { ran_out: left_s == Some(0), left_s, pasted, waiting })
     }
 
-    /// The sign-in under way, while the typing box is its: it shows its link
-    /// and what to paste back, and its time isn't up.
-    fn sign_in_box(&self) -> Option<SignInNow> {
+    /// The sign-in under way, when it wants the typing box: it shows its
+    /// link and what to paste back, and its time isn't up.
+    fn sign_in_wants_box(&self) -> Option<SignInNow> {
         self.sign_in_now().filter(|n| n.waiting.expects.is_some() && n.waiting.url.is_some() && !n.ran_out)
     }
 
-    /// Who has the typing box: a sign-in, while one waits for its answer.
-    /// Taking it, what's in it is the slot's saved draft (reported first),
-    /// and the box is emptied for the sign-in; giving it back, the box is
-    /// emptied and the saved draft taken again. Meanwhile nothing typed is
-    /// saved (a pasted code never is). Said, when it's taken from typing.
+    /// The sign-in under way, while it has the typing box: the one answer
+    /// to "whose is the box" that sending, the offered actions and the hint
+    /// all read (`tend_sign_in_box` keeps it).
+    fn sign_in_box(&self) -> Option<SignInNow> {
+        self.ui.sign_in_has_box.then(|| self.sign_in_now()).flatten()
+    }
+
+    /// Who has the typing box: a sign-in, while one wants it and the slot's
+    /// drafts have been read (so what's in the box is kept by them). Taking
+    /// it, what's in it is reported first, and the box is emptied for the
+    /// sign-in; giving it back, the box is emptied and the slot's draft as
+    /// it is now taken again. Meanwhile nothing typed is saved (a pasted
+    /// code never is). Said, when it's taken from typing.
     fn tend_sign_in_box(&mut self, note: &mut Option<String>) {
-        match (self.sign_in_box().is_some(), self.ui.sign_in_has_box) {
+        let read = self.unsent.get().current(&self.ui.slot).is_some();
+        match (self.sign_in_wants_box().is_some() && read, self.ui.sign_in_has_box) {
             (true, false) => {
+                // What's in the box is the slot's draft from here: reported.
+                self.take_unsent();
                 self.report_unsent();
                 if !self.ui.input.text.trim().is_empty() {
                     *note = Some("A sign-in is waiting: the box is its now; what you were writing is kept and comes back after.".into());

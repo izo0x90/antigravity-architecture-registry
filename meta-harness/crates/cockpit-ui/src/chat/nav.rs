@@ -49,11 +49,11 @@ impl ChatStreamState {
 impl ChatStreamState {
     /// Its slot's unsent text as the server saved it, taken when the box
     /// is empty (once per slot shown, once the drafts are read).
-    fn take_unsent(&mut self) {
+    pub(super) fn take_unsent(&mut self) {
         if self.unsent_for.as_ref() == Some(&self.ui.slot) || self.ui.sign_in_has_box {
             return;
         }
-        let Some(saved) = self.unsent.get().saved(&self.ui.slot).map(|s| s.cloned()) else { return };
+        let Some(saved) = self.unsent.get().current(&self.ui.slot).map(|s| s.cloned()) else { return };
         self.unsent_for = Some(self.ui.slot.clone());
         if self.ui.input.text.is_empty()
             && let Some(saved) = &saved

@@ -322,7 +322,6 @@ fn signing_in_shows_the_servers_sign_in_and_a_paste_that_was_not_taken() {
     tick(&mut chat, &ctx, &net);
     let top = on_top(&chat);
     assert!(top.contains(&"auth.page".to_owned()) && top.contains(&"auth.copy".to_owned()) && top.contains(&"auth.cancel".to_owned()), "{top:?}");
-    assert!(chat.actions().iter().any(|a| a.id == "auth.complete"), "finishing is offered while it waits");
 
     // Pasted: being checked, then refused while it still waits.
     chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::FinishSignIn { instance: InstanceId::new("i"), answer: "4/abc".into() }, &net, &ctx);
@@ -331,7 +330,6 @@ fn signing_in_shows_the_servers_sign_in_and_a_paste_that_was_not_taken() {
     assert!(net.answer("POST /api/instances/i/auth/complete", 400, &serde_json::json!({ "error": "that isn't the address" })));
     tick(&mut chat, &ctx, &net);
     assert!(chat.agents().pasted(&InstanceId::new("i"), 7).is_some_and(|p| p.refused.is_some() && !p.finishing));
-    assert!(chat.actions().iter().any(|a| a.id == "auth.complete"), "it still waits: paste again");
     assert!(chat.error().is_none());
 
     // A new sign-in meanwhile: a late answer about the old one doesn't touch it.

@@ -251,7 +251,7 @@ impl ActionProvider for ChatStreamState {
             out.push(if again && (self.needs_login() || now.is_some() || self.sign_in_end_to_say().is_some()) { login.header(Setting, "Sign in", Some(icon::KEY)) } else { login });
             // Finishing is the typing box's while a sign-in has it: this sends
             // what's in it, or puts you in it to paste.
-            if self.sign_in_box().is_some() {
+            if self.sign_in_box().is_some_and(|n| !n.pasted.as_ref().is_some_and(|p| p.finishing)) {
                 out.push(Action::new("auth.complete", "Finish signing in", "Sends what's pasted in the box to the sign-in; with nothing there, puts you in the box to paste", C::CompleteLogin).focused().importance(crate::actions::PRIMARY).header(Button, "Finish signing in", Some(icon::KEY)));
             }
             out.push(Action::new("auth.logout", "Sign out", "The harness forgets your sign-in on this machine", C::Logout));

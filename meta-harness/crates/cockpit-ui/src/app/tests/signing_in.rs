@@ -96,3 +96,42 @@ fn after_cancel_what_is_typed_goes_to_the_agent() {
     let calls = sent(&app);
     assert!(calls.iter().any(|c| c.ends_with("/prompt")) && !calls.iter().any(|c| c.contains("auth/complete")), "{calls:?}");
 }
+
+#[test]
+fn the_draft_that_comes_back_is_the_one_written_last() {
+    let (ctx, mut app) = chat_app("from before");
+    // Written after the desk opened (saved a moment later).
+    app.desk.chat_mut().ui.input.text = "written since".into();
+    frame(&ctx, &mut app, vec![]);
+    instance(&mut app, Some(waiting(7, 300)));
+    frame(&ctx, &mut app, vec![]);
+    assert!(box_text(&app).is_empty());
+    // Finish signing in is the box's; not while a paste is checked.
+    assert!(app.desk.chat().actions().iter().any(|a| a.id == "auth.complete"));
+    instance(&mut app, None);
+    frame(&ctx, &mut app, vec![]);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(box_text(&app), "written since");
+}
+
+#[test]
+fn before_the_drafts_are_read_the_box_stays_the_chats() {
+    let (ctx, mut app) = full_app();
+    crate::chat::tests::conversation_events().into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
+    let chat = BufferId::new(BufferKind::Chat, 0);
+    app.desk.panels = crate::panels::Panels::new(vec![chat], 0);
+    app.use_buffer(chat);
+    app.desk.chat_mut().ui.input.text = "typed before they came".into();
+    instance(&mut app, Some(waiting(7, 300)));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(box_text(&app), "typed before they came", "nothing taken it couldn't keep");
+    // Read: then it's the sign-in's, what was typed kept.
+    app.desk.shared.drafts.get_mut().arrived(Default::default());
+    frame(&ctx, &mut app, vec![]);
+    frame(&ctx, &mut app, vec![]);
+    assert!(box_text(&app).is_empty());
+    instance(&mut app, None);
+    frame(&ctx, &mut app, vec![]);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(box_text(&app), "typed before they came");
+}

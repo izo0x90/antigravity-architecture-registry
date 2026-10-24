@@ -45,10 +45,11 @@ impl Drafts {
         }
     }
 
-    /// What was saved for `slot` (none: not read yet; some none: nothing
-    /// saved for it).
-    pub fn saved(&self, slot: &SlotId) -> Option<Option<&Message>> {
-        Some(self.loaded.as_ref()?.get(slot))
+    /// `slot`'s draft as it is now: what's to be saved, else what was
+    /// (none: not read yet; some none: nothing for it).
+    pub fn current(&self, slot: &SlotId) -> Option<Option<&Message>> {
+        self.loaded.as_ref()?;
+        Some(self.pending.get(slot).map(|(draft, _)| draft).or_else(|| self.sent.get(slot)))
     }
 
     /// A chat view's text for `slot` changed: saved once it's been still a
@@ -130,14 +131,14 @@ mod tests {
         let (net, ctx) = (NetClient::new("http://127.0.0.1:9"), egui::Context::default());
         let lead = SlotId::new("lead");
         let mut drafts = Drafts::default();
-        assert_eq!(drafts.saved(&lead), None, "not read yet");
+        assert_eq!(drafts.current(&lead), None, "not read yet");
         drafts.changed(lead.clone(), "typing".into(), 0.0);
         drafts.tick(0.6, 0.5, &net, &ctx);
         assert!(drafts.pending.is_empty() && drafts.sent.is_empty(), "not read yet: nothing saved over it");
         drafts.arrived([(lead.clone(), Message::text("saved"))].into());
         drafts.tick(1.0, 0.5, &net, &ctx);
-        assert_eq!(drafts.saved(&lead), Some(Some(&Message::text("saved"))));
-        assert_eq!(drafts.saved(&SlotId::new("sub-1")), Some(None), "read: nothing for it");
+        assert_eq!(drafts.current(&lead), Some(Some(&Message::text("saved"))));
+        assert_eq!(drafts.current(&SlotId::new("sub-1")), Some(None), "read: nothing for it");
         // Unchanged: nothing to send. Changed: sent once it's been still a moment.
         drafts.changed(lead.clone(), "saved".into(), 1.0);
         assert!(drafts.pending.is_empty());
