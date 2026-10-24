@@ -263,6 +263,7 @@ pub fn fake_harness() -> harness_contracts::HarnessEntry {
     harness_contracts::HarnessEntry {
         profile: harness_contracts::HarnessProfile { instance: InstanceId::new(FAKE), driver: DriverKind::new(FAKE), display_name: "Fake".into(), settings: serde_json::Value::Null },
         launch: harness_contracts::HarnessLaunch::Unavailable { reason: "fake".into(), fix: None },
+        home: None,
     }
 }
 
@@ -278,20 +279,10 @@ impl ProviderDriver for FakeDriver {
 
     async fn create(&self, id: InstanceId, _config: serde_json::Value) -> Result<Arc<dyn ProviderInstance>> {
         let (snapshot, _) = watch::channel(ProviderSnapshot {
-            instance_id: id.clone(),
-            driver: DriverKind::new(FAKE),
-            display_name: "Fake".into(),
             status: ProviderStatus::Ready,
-            auth: AuthState { status: AuthStatus::SignedIn, account: None, methods: Vec::new() },
-            capabilities: Capabilities::default(),
-            models: Vec::new(),
-            commands: Vec::new(),
-            skills: Vec::new(),
+            auth: AuthState { status: AuthStatus::SignedIn, account: None, methods: Vec::new(), waiting: None },
             runtime_modes: vec![RuntimeMode::ApprovalRequired],
-            supports_plan_mode: false,
-            tool_servers: Vec::new(),
-            problems: Vec::new(),
-            home: None,
+            ..ProviderSnapshot::new(id.clone(), DriverKind::new(FAKE), "Fake")
         });
         Ok(Arc::new(FakeInstance { id, snapshot }))
     }

@@ -102,6 +102,15 @@ async fn fs_read_endpoint_reads_only_inside_the_repository() {
     }
     let (status, body) = http(addr, "GET", "/api/fs/read?path=/etc/hostname", None).await;
     assert_eq!(status, 403, "{body}");
+    // The server's own: a harness's kept login, its state.
+    let root = state.project.arch.root();
+    std::fs::create_dir_all(root.join(".nah/harness/antigravity/antigravity-acp")).unwrap();
+    std::fs::write(root.join(".nah/harness/antigravity/antigravity-acp/acp_token.json"), "{\"refresh_token\":\"x\"}").unwrap();
+    for private in [".nah/harness/antigravity/antigravity-acp/acp_token.json", ".nah/harness/../harness/antigravity/antigravity-acp/acp_token.json"] {
+        let (status, body) = http(addr, "GET", &format!("/api/fs/read?path={private}"), None).await;
+        assert_eq!(status, 403, "{private}: {body}");
+        assert!(!body.contains("refresh_token"));
+    }
 }
 
 #[tokio::test]

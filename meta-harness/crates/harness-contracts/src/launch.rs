@@ -27,6 +27,10 @@ pub struct Launch {
 pub struct HarnessEntry {
     pub profile: HarnessProfile,
     pub launch: HarnessLaunch,
+    /// The folder the project keeps its home in (its login, settings,
+    /// sessions); none: its own folders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<std::path::PathBuf>,
 }
 
 /// Which harness it is, from its pack.

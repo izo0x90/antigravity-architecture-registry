@@ -150,20 +150,10 @@ fn its_skills_tool_servers_and_adding_to_the_running_turn_are_actions() {
     let ids = |chat: &Fed| chat.actions().into_iter().map(|a| a.id).collect::<Vec<_>>();
     assert!(!ids(&chat).iter().any(|a| a == "mcp.add" || a == "harness.skills" || a == "chat.inject"), "nothing known yet");
     let mut snapshot = ProviderSnapshot {
-        instance_id: InstanceId::new("i"),
-        driver: harness_contracts::DriverKind::new("acp"),
-        display_name: "Claude Code".into(),
         status: ProviderStatus::Ready,
-        auth: harness_contracts::AuthState { status: harness_contracts::AuthStatus::SignedIn, account: None, methods: Vec::new() },
-        capabilities: Default::default(),
-        models: Vec::new(),
-        commands: Vec::new(),
+        auth: harness_contracts::AuthState { status: harness_contracts::AuthStatus::SignedIn, account: None, methods: Vec::new(), waiting: None },
         skills: vec![harness_contracts::Skill { name: "review".into(), description: Some("Review".into()), path: None, scope: harness_contracts::Scope::User }],
-        runtime_modes: Vec::new(),
-        supports_plan_mode: false,
-        tool_servers: Vec::new(),
-        problems: Vec::new(),
-        home: None,
+        ..ProviderSnapshot::new(InstanceId::new("i"), harness_contracts::DriverKind::new("acp"), "Claude Code")
     };
     snapshot.capabilities.turns.active_steering = true;
     chat.apply(ClientEvent::InstanceUpdated { snapshot });
@@ -272,39 +262,30 @@ fn a_long_chat_moves_by_the_shared_rules() {
 }
 
 /// A harness that runs its own Google login, signed out, its home kept for
-/// the project.
-fn signed_out_harness() -> Fed {
-    let mut chat = conversation();
-    let snapshot = ProviderSnapshot {
-        instance_id: InstanceId::new("i"),
-        driver: harness_contracts::DriverKind::new("acp"),
-        display_name: "Antigravity".into(),
+/// the project; and the sign-in under way, as the server says it.
+fn signed_out_harness(waiting: Option<harness_contracts::SignInWaiting>) -> ProviderSnapshot {
+    let waiting = waiting.map(Box::new);
+    ProviderSnapshot {
         status: ProviderStatus::Ready,
         auth: harness_contracts::AuthState {
             status: harness_contracts::AuthStatus::SignedOut,
             account: None,
             methods: vec![harness_contracts::AuthMethod { id: "oauth-personal".into(), name: "Google".into(), description: None, kind: harness_contracts::AuthMethodKind::Agent }],
+            waiting,
         },
-        capabilities: Default::default(),
-        models: Vec::new(),
-        commands: Vec::new(),
-        skills: Vec::new(),
-        runtime_modes: Vec::new(),
-        supports_plan_mode: false,
-        tool_servers: Vec::new(),
-        problems: Vec::new(),
-        home: Some("/work/p/.nah/harness/i".into()),
-    };
-    chat.apply(ClientEvent::InstanceUpdated { snapshot });
-    chat
+        home: Some(harness_contracts::HarnessHome { path: "/work/p/.nah/harness/i".into(), kept: true }),
+        ..ProviderSnapshot::new(InstanceId::new("i"), harness_contracts::DriverKind::new("acp"), "Antigravity")
+    }
 }
 
-fn challenge(within_s: u64) -> crate::net::AuthChallenge {
-    crate::net::AuthChallenge {
+/// A sign-in under way, `left_s` seconds from now (on this clock).
+fn waiting(id: u64, left_s: i64) -> harness_contracts::SignInWaiting {
+    harness_contracts::SignInWaiting {
+        id,
         url: Some("https://accounts.google.com/o/oauth2/auth?redirect_uri=http%3A%2F%2F127.0.0.1%3A4000%2F".into()),
         instructions: "Open the link and sign in.".into(),
         expects: Some("the address of the page that failed to load".into()),
-        within_s: Some(within_s),
+        until_ms: Some((crate::attention::now_ms() as i64 + left_s * 1000) as u64),
     }
 }
 
@@ -314,47 +295,62 @@ fn on_top(chat: &Fed) -> Vec<String> {
 }
 
 /// The server's answers reach the agents (as each frame).
-fn tick(chat: &mut Fed, ctx: &egui::Context) {
-    chat.shared.agents.get_mut().tick(&NetClient::new("http://127.0.0.1:9"), ctx);
+fn tick(chat: &mut Fed, ctx: &egui::Context, net: &NetClient) {
+    chat.shared.agents.get_mut().tick(net, ctx);
     chat.read();
 }
 
 #[test]
-fn signing_in_shows_the_link_the_time_left_and_a_paste_that_was_not_taken() {
-    let ctx = egui::Context::default();
-    let mut chat = signed_out_harness();
-    let status: Vec<String> = crate::hosted::Hosted::status(&chat.chat).into_iter().map(|s| format!("{} {}", s.text, s.detail.unwrap_or_default())).collect();
-    assert!(status.iter().any(|s| s.contains("Not signed in")), "{status:?}");
-    assert!(status.iter().any(|s| s.contains("/work/p/.nah/harness/i")), "where its home is: {status:?}");
-    assert!(on_top(&chat).contains(&"auth.login".to_owned()));
+fn signing_in_shows_the_servers_sign_in_and_a_paste_that_was_not_taken() {
+    let (ctx, net) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"));
+    let mut chat = conversation();
+    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(None) });
+    let status: Vec<(String, Option<String>)> = crate::hosted::Hosted::status(&chat.chat).into_iter().map(|s| (s.text, s.detail)).collect();
+    assert!(status.iter().any(|(_, detail)| detail.as_deref().is_some_and(|d| d.contains("/work/p/.nah/harness/i"))), "where its home is: {status:?}");
+    assert!(on_top(&chat).contains(&"auth.login".to_owned()), "signed out: Sign in");
 
-    chat.shared.agents.get_mut().sign_in_began_for_test(SlotId::new(LEAD), Ok(challenge(300)));
-    tick(&mut chat, &ctx);
-    let login = chat.agents().login().cloned().expect("under way");
-    assert!(login.left(ctx.input(|i| i.time)).is_some_and(|left| left > 290.0), "{login:?}");
+    // Asked for: not again until it's answered.
+    chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::SignIn { instance: InstanceId::new("i"), method: "oauth-personal".into() }, &net, &ctx);
+    chat.read();
+    assert!(!on_top(&chat).contains(&"auth.login".to_owned()), "one sign-in at a time");
+
+    // The server's sign-in under way (any device sees it): open it, paste back.
+    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(7, 300))) });
+    assert!(net.answer("POST /api/instances/i/auth/oauth-personal", 200, &serde_json::json!(waiting(7, 300))));
+    tick(&mut chat, &ctx, &net);
     let top = on_top(&chat);
-    assert!(top.contains(&"auth.page".to_owned()) && top.contains(&"auth.complete".to_owned()) && !top.contains(&"auth.login".to_owned()), "{top:?}");
+    assert!(top.contains(&"auth.page".to_owned()) && top.contains(&"auth.complete".to_owned()) && top.contains(&"auth.cancel".to_owned()), "{top:?}");
 
-    // A wrong paste: said, and the sign-in still waits for the right one.
-    chat.shared.agents.get_mut().sign_in_finished_for_test(Err(crate::net::NetError::other("that isn't the address of the page that failed to load")));
-    tick(&mut chat, &ctx);
-    let login = chat.agents().login().cloned().expect("still under way");
-    assert_eq!(login.refused.as_deref(), Some("that isn't the address of the page that failed to load"));
-    assert!(on_top(&chat).contains(&"auth.complete".to_owned()));
+    // Pasted: being checked, then refused while it still waits.
+    chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::FinishSignIn { instance: InstanceId::new("i"), answer: "4/abc".into() }, &net, &ctx);
+    chat.read();
+    assert!(!on_top(&chat).contains(&"auth.complete".to_owned()), "not again while it's checked");
+    assert!(net.answer("POST /api/instances/i/auth/complete", 400, &serde_json::json!({ "error": "that isn't the address" })));
+    tick(&mut chat, &ctx, &net);
+    assert!(chat.agents().pasted(&InstanceId::new("i"), 7).is_some_and(|p| p.refused.is_some() && !p.finishing));
+    assert!(on_top(&chat).contains(&"auth.complete".to_owned()), "it still waits: paste again");
+    assert!(chat.error().is_none());
 
-    chat.shared.agents.get_mut().sign_in_finished_for_test(Ok(()));
-    tick(&mut chat, &ctx);
-    assert!(chat.agents().login().is_none(), "taken: signed in");
+    // A new sign-in meanwhile: a late answer about the old one doesn't touch it.
+    chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::FinishSignIn { instance: InstanceId::new("i"), answer: "http://127.0.0.1:4000/?code=x".into() }, &net, &ctx);
+    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(8, 300))) });
+    assert!(net.answer("POST /api/instances/i/auth/complete", 200, &serde_json::Value::Null));
+    tick(&mut chat, &ctx, &net);
+    assert!(on_top(&chat).contains(&"auth.complete".to_owned()), "the new one still waits");
+
+    // Over on the server (taken, or ended): its answer is said as an error.
+    chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::FinishSignIn { instance: InstanceId::new("i"), answer: "http://127.0.0.1:4000/?code=y".into() }, &net, &ctx);
+    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(None) });
+    assert!(net.answer("POST /api/instances/i/auth/complete", 502, &serde_json::json!({ "error": "the sign-in failed: bad code" })));
+    tick(&mut chat, &ctx, &net);
+    assert!(chat.error().is_some_and(|e| e.contains("bad code")), "{:?}", chat.error());
+    assert!(on_top(&chat).contains(&"auth.login".to_owned()), "sign in again");
 }
 
 #[test]
 fn a_sign_in_that_stopped_waiting_offers_a_new_one_not_the_paste() {
-    let ctx = egui::Context::default();
-    let mut chat = signed_out_harness();
-    chat.shared.agents.get_mut().sign_in_began_for_test(SlotId::new(LEAD), Ok(challenge(0)));
-    tick(&mut chat, &ctx);
-    tick(&mut chat, &ctx);
-    assert!(chat.agents().login().is_some_and(|l| l.ran_out));
+    let mut chat = conversation();
+    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(3, -1))) });
     let top = on_top(&chat);
     assert!(top.contains(&"auth.login".to_owned()) && !top.contains(&"auth.complete".to_owned()) && !top.contains(&"auth.page".to_owned()), "{top:?}");
 }

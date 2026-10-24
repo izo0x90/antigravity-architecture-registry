@@ -46,6 +46,10 @@ async fn fs_read_handler(
     if !canonical.starts_with(&root) {
         return Err((StatusCode::FORBIDDEN, "Only files inside the repository can be read".to_string()));
     }
+    // The server's own: its state and the harnesses' kept logins.
+    if arch_service::private_dirs(&root).iter().any(|dir| canonical.starts_with(dir)) {
+        return Err((StatusCode::FORBIDDEN, "That's the server's own (its state, the harnesses' logins): it isn't served".to_string()));
+    }
     if !canonical.is_file() {
         return Err((StatusCode::BAD_REQUEST, "Target is not a regular file".to_string()));
     }

@@ -35,7 +35,7 @@ pub struct AcpSettings {
     pub steering: Option<String>,
     /// How it reports who it's signed in as.
     pub sign_in: Option<SignInSettings>,
-    /// Logins by the agent's own login command.
+    /// Its logins: by a login command of its own, or run by itself.
     pub login: LoginSettings,
     /// Questions it asks in forms.
     pub questions: QuestionSettings,
@@ -44,6 +44,8 @@ pub struct AcpSettings {
     /// How its home (login, settings, sessions) is moved to a folder of the
     /// project's, when the project keeps it.
     pub home: Option<HomeSettings>,
+    /// Added to its environment, whatever starts it.
+    pub env: BTreeMap<String, String>,
     pub skills: Option<SkillSettings>,
     /// Its configuration files that list tool servers.
     pub tool_config: Vec<ToolConfigSetting>,
@@ -54,8 +56,26 @@ impl AcpSettings {
     pub fn parse(value: &serde_json::Value) -> Result<Self, String> {
         match value {
             serde_json::Value::Null => Ok(Self::default()),
-            value => serde_json::from_value(value.clone()).map_err(|e| format!("its harness settings are wrong: {e}")),
+            value => {
+                let settings: Self = serde_json::from_value(value.clone()).map_err(|e| format!("its harness settings are wrong: {e}"))?;
+                settings.check().map_err(|why| format!("its harness settings are wrong: {why}"))?;
+                Ok(settings)
+            }
         }
+    }
+
+    /// What can't be told from their shape alone.
+    fn check(&self) -> Result<(), String> {
+        self.login.link_pattern()?;
+        if self.login.on_session && self.login.link.is_none() {
+            return Err("login.on_session needs login.link: the link that says it's asking for its login".into());
+        }
+        if let Some(home) = &self.home
+            && !self.dirs.contains_key(&home.dir)
+        {
+            return Err(format!("home.dir names {}, which isn't one of its dirs", home.dir));
+        }
+        Ok(())
     }
 }
 
@@ -132,7 +152,7 @@ fn default_wait() -> u64 {
     6
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LoginSettings {
     /// A pattern for the link its login prints (the first match is shown to
@@ -143,9 +163,8 @@ pub struct LoginSettings {
     pub expects: Option<String>,
     /// How long a login it runs itself waits for the browser, in seconds.
     pub within_s: Option<u64>,
-    /// How long a login it runs itself is given to say its link, in
-    /// seconds (30 when not given).
-    pub wait_s: Option<u64>,
+    /// How long its login is given to show its link, in seconds.
+    pub wait_s: u64,
     /// Where it keeps its login (a template): there, it's signed in, for an
     /// agent that doesn't say so itself.
     pub kept: Option<String>,
@@ -154,8 +173,14 @@ pub struct LoginSettings {
     pub on_session: bool,
 }
 
+impl Default for LoginSettings {
+    fn default() -> Self {
+        Self { link: None, expects: None, within_s: None, wait_s: 30, kept: None, on_session: false }
+    }
+}
+
 impl LoginSettings {
-    /// The pattern of its login's link.
+    /// The pattern of its login's link: any `https://` link when not given.
     pub fn link_pattern(&self) -> Result<regex::Regex, String> {
         regex::Regex::new(self.link.as_deref().unwrap_or(r"https://\S+")).map_err(|e| format!("the login link pattern is wrong: {e}"))
     }
@@ -185,15 +210,29 @@ pub struct DirSetting {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HomeSettings {
-    /// The variables that move it, each a template where `{kept}` is the
-    /// folder it's kept in.
+    /// The one of its `dirs` that's its home: its variable moves it.
+    pub dir: String,
+    /// Also set when it's kept elsewhere (a login kept as a file, say).
+    #[serde(default)]
     pub env: BTreeMap<String, String>,
 }
 
-impl HomeSettings {
-    /// The variables that keep it in `kept`.
-    pub fn env_for(&self, kept: &Path) -> Vec<(String, String)> {
-        self.env.iter().map(|(name, value)| (name.clone(), value.replace("{kept}", &kept.to_string_lossy()))).collect()
+impl AcpSettings {
+    /// `launch` with what it's always given (`env`) and, when its home is
+    /// kept in `kept`, the variables that put it there: each replacing the
+    /// launch's own of that name.
+    pub fn launch_with(&self, mut launch: Launch, kept: Option<&Path>) -> Result<Launch, String> {
+        let mut set: Vec<(String, String)> = self.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        if let Some(kept) = kept {
+            let home = self.home.as_ref().ok_or("its home can't be kept in the project: its pack doesn't say how to move it")?;
+            let dir = self.dirs.get(&home.dir).ok_or_else(|| format!("home.dir names {}, which isn't one of its dirs", home.dir))?;
+            set.push((dir.env.clone(), kept.display().to_string()));
+            set.extend(home.env.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        launch.env.retain(|(name, _)| !set.iter().any(|(k, _)| k == name));
+        launch.env_remove.retain(|name| !set.iter().any(|(k, _)| k == name));
+        launch.env.extend(set);
+        Ok(launch)
     }
 }
 

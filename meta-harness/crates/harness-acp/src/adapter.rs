@@ -28,13 +28,123 @@ pub struct AcpAdapter {
     instance_id: InstanceId,
     profile: Arc<Profile>,
     launcher: Arc<dyn AcpLauncher>,
-    /// Told when a session finds it isn't signed in.
-    signed_out: crate::auth::AuthChanged,
+    /// Told when a session can't open for not being signed in.
+    on_auth: crate::auth::AuthChanged,
 }
 
 impl AcpAdapter {
-    pub fn new(instance_id: InstanceId, profile: Arc<Profile>, launcher: Arc<dyn AcpLauncher>, signed_out: crate::auth::AuthChanged) -> Self {
-        Self { instance_id, profile, launcher, signed_out }
+    pub fn new(instance_id: InstanceId, profile: Arc<Profile>, launcher: Arc<dyn AcpLauncher>, on_auth: crate::auth::AuthChanged) -> Self {
+        Self { instance_id, profile, launcher, on_auth }
+    }
+
+    async fn open(&self, config: SessionConfig) -> Result<Box<dyn SessionRuntime>> {
+        let cwd = self.profile.cwd(&config.policy);
+        let mut policy = config.policy.clone();
+        policy.cwd = Some(cwd.display().to_string());
+        let config = SessionConfig { policy, ..config };
+        let transport = self.launcher.launch(&config).await?;
+        // An agent that starts a login itself when it isn't signed in: its
+        // link, said while the session opens, means it isn't.
+        let pattern = self.profile.settings.login.on_session.then(|| self.profile.login_link.clone()).flatten();
+        let said = transport.said;
+        let asks_login = async move {
+            match pattern {
+                Some(pattern) => crate::launch::says(said, pattern).await,
+                None => std::future::pending().await,
+            }
+        };
+        let thread = Thread {
+            id: config.thread_id.clone(),
+            instance_id: self.instance_id.clone(),
+            native_id: None,
+            title: None,
+            status: ThreadStatus::Starting,
+            policy: config.policy.clone(),
+            model: config.model.clone(),
+            controls: Default::default(),
+            mcp_servers: Vec::new(),
+        };
+        let shared = Arc::new(Shared {
+            state: Mutex::new(SessionState::new(thread)),
+            pending: Mutex::new(HashMap::new()),
+            policy: Mutex::new(config.policy.clone()),
+            profile: self.profile.clone(),
+            waiting: Mutex::new(VecDeque::new()),
+        });
+
+        let files = self.profile.workspace(&cwd);
+        let client = self.profile.client_capabilities(files.is_some());
+        let (handle_tx, handle_rx) = tokio::sync::oneshot::channel();
+        let streams = ByteStreams::new(transport.writer, transport.reader);
+        let connection = tokio::spawn(run_connection(streams, shared.clone(), files, handle_tx));
+        let cx = handle_rx.await.map_err(|_| HarnessError::Provider { reason: "agent connection failed to start".into() })?;
+
+        let init = cx.send_request(acp::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client)).block_task().await.map_err(acp_error)?;
+        let declared = AcpDeclaredCapabilities::of(&init, &self.profile);
+        let agent = &init.agent_capabilities;
+        let mcp: Vec<acp::McpServer> = config.mcp_servers.iter().map(|s| mcp_server(s, agent.mcp_capabilities.sse)).collect();
+        let meta = self.profile.session_meta();
+        let opening = async { match &config.resume {
+            // Prefer load: it replays the history into the stream.
+            Some(id) if agent.load_session => {
+                let native = acp::SessionId::new(id.as_str().to_owned());
+                let loaded = cx
+                    .send_request(acp::LoadSessionRequest::new(native.clone(), cwd).mcp_servers(mcp).meta(meta))
+                    .block_task()
+                    .await
+                    .map_err(acp_error)?;
+                Ok((native, loaded.modes, loaded.config_options))
+            }
+            Some(id) if agent.session_capabilities.resume.is_some() => {
+                let native = acp::SessionId::new(id.as_str().to_owned());
+                let resumed = cx
+                    .send_request(acp::ResumeSessionRequest::new(native.clone(), cwd).mcp_servers(mcp).meta(meta))
+                    .block_task()
+                    .await
+                    .map_err(acp_error)?;
+                Ok((native, resumed.modes, resumed.config_options))
+            }
+            Some(_) => Err(HarnessError::Unsupported { operation: "resuming sessions" }),
+            None => {
+                let created = cx.send_request(acp::NewSessionRequest::new(cwd).mcp_servers(mcp).meta(meta)).block_task().await.map_err(acp_error)?;
+                Ok((created.session_id, created.modes, created.config_options))
+            }
+        } };
+        let (native_id, modes, config_options) = tokio::select! {
+            opened = opening => opened?,
+            Some(_) = asks_login => return Err(HarnessError::AuthRequired { reason: NOT_SIGNED_IN.into() }),
+        };
+
+        {
+            let mut state = lock(&shared.state);
+            if let Some(controls) = config_options.as_deref() {
+                state.set_config(convert::config_controls(controls));
+            }
+            let (modes, current_mode) = modes.as_ref().map(convert::modes).unwrap_or_default();
+            state.set_thread(|t| {
+                t.native_id = Some(NativeId::new(native_id.to_string()));
+                t.status = ThreadStatus::Idle;
+                t.controls.modes = modes;
+                t.controls.current_mode = current_mode;
+                // Shown to every client: no session's key in it.
+                t.mcp_servers = config.mcp_servers.iter().map(harness_contracts::McpServer::redacted).collect();
+            });
+        }
+
+        let session = AcpSession {
+            thread_id: config.thread_id.clone(),
+            link: Arc::new(Link { cx, native_id, shared }),
+            declared: declared.declared,
+            supports_close: agent.session_capabilities.close.is_some(),
+            connection,
+            _guard: transport.guard,
+        };
+        session.apply_policy(config.policy).await?;
+        if let Some(model) = config.model {
+            let options = model.options.clone();
+            session.steer(harness_contracts::SteerInput { model: Some(model), config: options, ..Default::default() }).await?;
+        }
+        Ok(Box::new(session))
     }
 }
 
@@ -246,116 +356,13 @@ impl ProviderAdapter for AcpAdapter {
         self.profile.capabilities()
     }
 
+    /// A session that can't open for not being signed in (however the agent
+    /// says so) says the instance isn't.
     async fn open_session(&self, config: SessionConfig) -> Result<Box<dyn SessionRuntime>> {
-        let cwd = self.profile.cwd(&config.policy);
-        let mut policy = config.policy.clone();
-        policy.cwd = Some(cwd.display().to_string());
-        let config = SessionConfig { policy, ..config };
-        let transport = self.launcher.launch(&config).await?;
-        // An agent that starts a login itself when it isn't signed in: its
-        // link, said while the session opens, means it isn't.
-        let pattern = self.profile.settings.login.on_session.then(|| self.profile.settings.login.link_pattern().ok()).flatten();
-        let said = transport.said;
-        let asks_login = async move {
-            match pattern {
-                Some(pattern) => crate::launch::says(said, pattern).await,
-                None => std::future::pending().await,
-            }
-        };
-        let thread = Thread {
-            id: config.thread_id.clone(),
-            instance_id: self.instance_id.clone(),
-            native_id: None,
-            title: None,
-            status: ThreadStatus::Starting,
-            policy: config.policy.clone(),
-            model: config.model.clone(),
-            controls: Default::default(),
-            mcp_servers: Vec::new(),
-        };
-        let shared = Arc::new(Shared {
-            state: Mutex::new(SessionState::new(thread)),
-            pending: Mutex::new(HashMap::new()),
-            policy: Mutex::new(config.policy.clone()),
-            profile: self.profile.clone(),
-            waiting: Mutex::new(VecDeque::new()),
-        });
-
-        let files = self.profile.workspace(&cwd);
-        let client = self.profile.client_capabilities(files.is_some());
-        let (handle_tx, handle_rx) = tokio::sync::oneshot::channel();
-        let streams = ByteStreams::new(transport.writer, transport.reader);
-        let connection = tokio::spawn(run_connection(streams, shared.clone(), files, handle_tx));
-        let cx = handle_rx.await.map_err(|_| HarnessError::Provider { reason: "agent connection failed to start".into() })?;
-
-        let init = cx.send_request(acp::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client)).block_task().await.map_err(acp_error)?;
-        let declared = AcpDeclaredCapabilities::of(&init, &self.profile);
-        let agent = &init.agent_capabilities;
-        let mcp: Vec<acp::McpServer> = config.mcp_servers.iter().map(|s| mcp_server(s, agent.mcp_capabilities.sse)).collect();
-        let meta = self.profile.session_meta();
-        let opening = async { match &config.resume {
-            // Prefer load: it replays the history into the stream.
-            Some(id) if agent.load_session => {
-                let native = acp::SessionId::new(id.as_str().to_owned());
-                let loaded = cx
-                    .send_request(acp::LoadSessionRequest::new(native.clone(), cwd).mcp_servers(mcp).meta(meta))
-                    .block_task()
-                    .await
-                    .map_err(acp_error)?;
-                Ok((native, loaded.modes, loaded.config_options))
-            }
-            Some(id) if agent.session_capabilities.resume.is_some() => {
-                let native = acp::SessionId::new(id.as_str().to_owned());
-                let resumed = cx
-                    .send_request(acp::ResumeSessionRequest::new(native.clone(), cwd).mcp_servers(mcp).meta(meta))
-                    .block_task()
-                    .await
-                    .map_err(acp_error)?;
-                Ok((native, resumed.modes, resumed.config_options))
-            }
-            Some(_) => Err(HarnessError::Unsupported { operation: "resuming sessions" }),
-            None => {
-                let created = cx.send_request(acp::NewSessionRequest::new(cwd).mcp_servers(mcp).meta(meta)).block_task().await.map_err(acp_error)?;
-                Ok((created.session_id, created.modes, created.config_options))
-            }
-        } };
-        let (native_id, modes, config_options) = tokio::select! {
-            opened = opening => opened?,
-            Some(_) = asks_login => {
-                (self.signed_out)(Some(false));
-                return Err(HarnessError::AuthRequired { reason: NOT_SIGNED_IN.into() });
-            }
-        };
-
-        {
-            let mut state = lock(&shared.state);
-            if let Some(controls) = config_options.as_deref() {
-                state.set_config(convert::config_controls(controls));
-            }
-            let (modes, current_mode) = modes.as_ref().map(convert::modes).unwrap_or_default();
-            state.set_thread(|t| {
-                t.native_id = Some(NativeId::new(native_id.to_string()));
-                t.status = ThreadStatus::Idle;
-                t.controls.modes = modes;
-                t.controls.current_mode = current_mode;
-                // Shown to every client: no session's key in it.
-                t.mcp_servers = config.mcp_servers.iter().map(harness_contracts::McpServer::redacted).collect();
-            });
+        let opened = self.open(config).await;
+        if let Err(HarnessError::AuthRequired { .. }) = &opened {
+            (self.on_auth)(crate::auth::AuthEvent::Status(Some(false)));
         }
-
-        let session = AcpSession {
-            thread_id: config.thread_id.clone(),
-            link: Arc::new(Link { cx, native_id, shared }),
-            declared: declared.declared,
-            supports_close: agent.session_capabilities.close.is_some(),
-            connection,
-            _guard: transport.guard,
-        };
-        session.apply_policy(config.policy).await?;
-        if let Some(model) = config.model {
-            let options = model.options.clone();
-            session.steer(harness_contracts::SteerInput { model: Some(model), config: options, ..Default::default() }).await?;
-        }
-        Ok(Box::new(session))
+        opened
     }
 }

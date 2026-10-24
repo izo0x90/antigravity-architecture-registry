@@ -129,6 +129,15 @@ fn tool_icon(kind: &ToolKind) -> &'static str {
     }
 }
 
+/// A sign-in under way, as it stands now: what the server said, the
+/// seconds left (if it says), and the last paste.
+struct SignInNow {
+    waiting: harness_contracts::SignInWaiting,
+    left_s: Option<u64>,
+    ran_out: bool,
+    pasted: Option<crate::agents::Pasted>,
+}
+
 fn status_tag(status: ItemStatus) -> (&'static str, Color32) {
     match status {
         ItemStatus::Pending => ("[..]", colors().muted),
@@ -216,6 +225,16 @@ impl ChatStreamState {
 
     fn instance(&self) -> Option<Ref<'_, ProviderSnapshot>> {
         Ref::filter_map(self.agents(), |a| a.instance_in(&self.ui.slot)).ok()
+    }
+
+    /// Its harness's sign-in under way, as it stands now.
+    fn sign_in_now(&self) -> Option<SignInNow> {
+        let instance = self.active_instance()?;
+        let agents = self.agents();
+        let waiting = agents.waiting(&instance)?.clone();
+        let left_s = waiting.until_ms.map(|until| until.saturating_sub(crate::attention::now_ms()).div_ceil(1000));
+        let pasted = agents.pasted(&instance, waiting.id).cloned();
+        Some(SignInNow { ran_out: left_s == Some(0), left_s, pasted, waiting })
     }
 
     fn thread(&self) -> Option<Ref<'_, ThreadView>> {

@@ -212,7 +212,11 @@ pack installed or fixed meanwhile is used without a restart:
 program = "/opt/agy/agy_acp_server.par"
 args = []
 env = { SOME_VAR = "value" }
+home = "kept"
 ```
+
+A name that isn't a harness instance, or a setting that can't be used,
+stops the harnesses, saying which file and why.
 
 Manifests are checked strictly when loaded. The installer is generic: it
 knows kinds of steps, not tools. Every URL, version, path, checksum and
@@ -269,8 +273,9 @@ The settings (wrong or unknown ones stop the harness, saying why):
 | `session_meta` | added to every session we open |
 | `queueing`, `steering` | where its `initialize` answer says it queues prompts, and takes messages into the running turn (JSON pointers) |
 | `sign_in` | the notification that says who it's signed in as, and where in it the status, name, email, plan and organization are |
-| `login` | the link its login prints (`link`), what the page gives back to paste (`expects`), how long a login it runs itself waits for the browser (`within_s`) and is given to say its link (`wait_s`, 30), its login file where it can't say who it's signed in as (`kept`), and whether, signed out, it starts a login when a session opens (`on_session`: the session is refused, said as not signed in) |
-| `home` | the variables that move its home (login, settings, sessions) to a folder of the project's (`env`, `{kept}` the folder) |
+| `login` | the link its login prints (`link`), what the page gives back to paste (`expects`), how long its login waits for the browser (`within_s`; the server stops it then) and is given to show its link (`wait_s`, 30), its login file, which says it's signed in when nothing else has said (`kept`), and whether, signed out, it starts a login when a session opens (`on_session`, with `link`: the session is refused as not signed in) |
+| `home` | which of its `dirs` is its home (login, settings, sessions: `dir`; its variable moves it) and what else is set when the project keeps it (`env`) |
+| `env` | added to its environment, whatever starts it |
 | `questions` | the suffix of a question's own "Other" box in its forms |
 | `dirs` | its folders (`{name}` in paths), each from a variable, else a default |
 | `skills` | where it finds skills, in its order, and how it names and orders them |
@@ -283,18 +288,24 @@ agent made from its settings (`tests/harness_contract.rs`).
 Sessions, checks, logins and saved sessions run in the project. Signing in
 uses the agent's own login, run on the project's server and finished from
 any device (the browser, the cockpit's server and the project's server may
-be three machines): the cockpit shows the link to open. Claude Code's page
-shows a code to paste back. Antigravity's ends on a page that fails to
-load (it goes to `127.0.0.1` on the device): paste that page's address,
-within the time shown (5 minutes), and the server hands it to the
-waiting login. Antigravity opens no browser on the server's machine. Who
-it's signed in as shows beside its name. An API key in the server's
+be three machines). The sign-in under way is the server's: every device
+shows its link, the time left and Finish signing in, until it's taken,
+cancelled, started again or runs out. Claude Code's page shows a code to
+paste back. Antigravity's ends on a page that fails to load (it goes to
+`127.0.0.1` on the device): paste that page's address within the time
+shown (5 minutes), and the server hands it to the waiting login, only to
+the port its link named. Antigravity opens no browser on the server's
+machine. Who it's signed in as shows beside its name; a session refused
+for not being signed in says so too. An API key in the server's
 environment isn't passed to Claude Code, so it uses the account.
 
 Where each harness keeps its home (login, settings, sessions) is the
-project's choice (`.nah/harnesses.toml`, below): its own folders, as when
-it runs by itself (the default), or a folder of the project's, made for
-the server's user only and never committed.
+project's choice, in its table in `harnesses.toml`: `home = "native"`, its
+own folders as when it runs by itself (the default); `"kept"`,
+`.nah/harness/<instance>/` (made for the server's user only, kept out of
+git and never served, nor to the agent's file access); or a folder of
+your own (the project's when relative; used as it is: keep it out of git
+yourself). Its line in the cockpit says where its home is.
 
 While a turn runs, Enter queues the next message (the agent queues it, or
 the server sends it when the turn ends; it shows as QUEUED);
@@ -821,7 +832,6 @@ overrides them in its own `.nah/` folder:
 | `.nah/schema_dsl.toml` | extra shorthand type names for schemas |
 | `.nah/mcp.toml` | the project's tool servers, given to every harness's sessions |
 | `.nah/changes.toml` | `[timeline]`: how long snapshots and turns are kept (`keep_days`, 14) and a closed session's turns after it closed (`closed_session_days`, 1) |
-| `.nah/harnesses.toml` | `[home]`, by harness: `"native"` (its own folders; the default), `"kept"` (`.nah/harness/<harness>/`) or a folder (the project's when relative). Kept, it's started with its pack's `home` variables pointing there, and signs in there |
 | `.nah/terminals.toml` | `long_command_secs` (10): a command that ran this long is a notification when it finishes; `scrollback_lines` (10,000): lines each terminal keeps above its screen; `running_log_mb` (64): how much of a command a note keeps while it runs |
 | `.nah/access.toml` | what each agent role (lead, sub, worker, external) may do with NAH's tools. A role named here replaces the shipped one. It covers NAH's tools only; a slot's own harness tools follow its mode and your approvals |
 

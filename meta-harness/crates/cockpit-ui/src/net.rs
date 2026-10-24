@@ -56,18 +56,6 @@ struct UiConfigFile {
     text: Option<String>,
 }
 
-/// A sign-in started: what to do, the page to open (if any), and what to
-/// paste back (if anything).
-#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AuthChallenge {
-    pub url: Option<String>,
-    pub instructions: String,
-    pub expects: Option<String>,
-    /// How long the login waits for it, in seconds.
-    pub within_s: Option<u64>,
-}
-
 pub type NetResult<T> = Result<T, NetError>;
 
 /// Why an answer couldn't be had: what the server said (or the network),
@@ -623,9 +611,17 @@ impl NetClient {
         self.call::<()>("POST", &format!("/api/instances/{instance}/auth/logout"), Some(serde_json::json!({})), ctx, on_done);
     }
 
-    pub fn begin_auth(&self, instance: &InstanceId, method: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<AuthChallenge>) + Send + 'static) {
+    /// Starts signing in: what's to be done (the instance's snapshot says it
+    /// too), or nothing when it's signed in at once.
+    pub fn begin_auth(&self, instance: &InstanceId, method: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<Option<harness_contracts::SignInWaiting>>) + Send + 'static) {
         let path = format!("/api/instances/{instance}/auth/{}", urlencoding::encode(method));
         self.call("POST", &path, Some(serde_json::json!({})), ctx, on_done);
+    }
+
+    /// Stops the sign-in under way.
+    pub fn cancel_auth(&self, instance: &InstanceId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        let path = format!("/api/instances/{instance}/auth/cancel");
+        self.call::<()>("POST", &path, Some(serde_json::json!({})), ctx, on_done);
     }
 
     pub fn complete_auth(&self, instance: &InstanceId, response: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {

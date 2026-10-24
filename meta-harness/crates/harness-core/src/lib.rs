@@ -95,27 +95,20 @@ pub trait SessionCatalog: Send + Sync {
 /// Interactive login for an instance.
 #[async_trait]
 pub trait AuthController: Send + Sync {
-    /// Starts a login with one of the snapshot's `AuthMethod`s.
-    async fn begin(&self, method_id: &str) -> Result<AuthChallenge>;
+    /// Starts a login with one of the snapshot's `AuthMethod`s: what's to
+    /// be done (also in the snapshot, for every device), or nothing when
+    /// it's signed in at once.
+    async fn begin(&self, method_id: &str) -> Result<Option<harness_contracts::SignInWaiting>>;
 
-    /// Completes a login, e.g. with a pasted callback URL or code.
+    /// Completes the login under way, e.g. with a pasted callback URL or code.
     async fn complete(&self, response: &str) -> Result<()>;
+
+    /// Stops the login under way.
+    async fn cancel(&self) -> Result<()>;
 
     async fn logout(&self) -> Result<()>;
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AuthChallenge {
-    /// URL for the user to open, if the method is browser-based.
-    pub url: Option<String>,
-    pub instructions: String,
-    /// What `complete` takes, in words (the page's last URL, a code), when
-    /// it takes anything.
-    pub expects: Option<String>,
-    /// How long the login waits for it, in seconds (none: it doesn't say).
-    pub within_s: Option<u64>,
-}
 
 /// Opens sessions. Stateless apart from what the instance gave it.
 #[async_trait]

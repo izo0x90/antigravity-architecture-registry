@@ -157,7 +157,7 @@ pub struct MockAgent {
     /// Messages steered in, not answered yet.
     steered: Arc<Mutex<Vec<String>>>,
     /// Its loopback login went through (the browser's callback reached it).
-    pub signed_in: Arc<std::sync::atomic::AtomicBool>,
+    pub login_done: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// The link a loopback login prints, its callback on `port`.
@@ -171,7 +171,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 impl MockAgent {
     pub fn new(setup: MockSetup) -> Self {
-        Self { setup, seen: Arc::default(), hold: Arc::default(), in_flight: Arc::default(), running: Arc::default(), one_at_a_time: Arc::default(), said: Arc::default(), steered: Arc::default(), signed_in: Arc::default() }
+        Self { setup, seen: Arc::default(), hold: Arc::default(), in_flight: Arc::default(), running: Arc::default(), one_at_a_time: Arc::default(), said: Arc::default(), steered: Arc::default(), login_done: Arc::default() }
     }
 
     pub fn seen(&self) -> Seen {
@@ -415,8 +415,9 @@ impl AcpLauncher for MockAgent {
                         }
                         // As Antigravity: a listener on a local port, its link said,
                         // the browser's callback awaited.
-                        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|_| agent_client_protocol::Error::internal_error())?;
-                        let port = listener.local_addr().map_err(|_| agent_client_protocol::Error::internal_error())?.port();
+                        let failed = |e: std::io::Error| agent_client_protocol::Error::internal_error().data(e.to_string());
+                        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(failed)?;
+                        let port = listener.local_addr().map_err(failed)?.port();
                         let _ = says_to.send(format!("Open the following link to authenticate the ACP server: {}", loopback_link(port)));
                         let agent = on_auth.clone();
                         cx.spawn(async move {
@@ -429,7 +430,7 @@ impl AcpLauncher for MockAgent {
                             let reply = if fine { "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok" } else { "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n" };
                             let _ = stream.write_all(reply.as_bytes()).await;
                             if fine {
-                                agent.signed_in.store(true, std::sync::atomic::Ordering::SeqCst);
+                                agent.login_done.store(true, std::sync::atomic::Ordering::SeqCst);
                                 responder.respond(acp::AuthenticateResponse::new())
                             } else {
                                 responder.respond_with_error(agent_client_protocol::Error::invalid_request().data("bad callback"))
@@ -441,7 +442,7 @@ impl AcpLauncher for MockAgent {
                 .on_receive_request(
                     async move |req: acp::NewSessionRequest, responder, _cx| {
                         // Signed out, as Antigravity: its login starts, and no answer.
-                        if on_new.setup.loopback_login && !on_new.signed_in.load(std::sync::atomic::Ordering::SeqCst) {
+                        if on_new.setup.loopback_login && !on_new.login_done.load(std::sync::atomic::Ordering::SeqCst) {
                             let _ = on_new_says.send(format!("Open the following link to authenticate the ACP server: {}", loopback_link(1)));
                             std::mem::forget(responder);
                             return Ok(());

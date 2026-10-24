@@ -2,12 +2,11 @@
 //! it, configured by that pack's profile (its settings say how the agent
 //! differs) and started by its launch.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use harness_contracts::{DriverKind, HarnessEntry, HarnessLaunch, InstanceId, Launch};
+use harness_contracts::{DriverKind, HarnessEntry, HarnessLaunch, InstanceId};
 use harness_core::{DriverMetadata, HarnessError, ProviderDriver, ProviderInstance, Result};
 
 use crate::instance::{AcpInstance, InstanceParts};
@@ -20,38 +19,25 @@ pub const DRIVER_KIND: &str = "acp";
 pub struct AcpDriver {
     /// The project its agents work in.
     project: PathBuf,
-    /// The folders the project keeps harnesses' homes in, by instance; one
-    /// not here keeps its own.
-    homes: BTreeMap<String, PathBuf>,
 }
 
 impl AcpDriver {
-    pub fn new(project: PathBuf, homes: BTreeMap<String, PathBuf>) -> Self {
-        Self { project, homes }
+    pub fn new(project: PathBuf) -> Self {
+        Self { project }
     }
 }
 
-/// `launch` with the harness's home kept in `dir`: the folder made (for
-/// the server's user only, out of git) and the variables its pack says
-/// move it.
-fn keep_home(mut launch: Launch, settings: &AcpSettings, dir: &Path) -> std::result::Result<Launch, String> {
-    let home = settings.home.as_ref().ok_or("its home can't be kept in the project: its pack doesn't say how to move it")?;
-    make_home(dir).map_err(|e| format!("its home folder {}: {e}", dir.display()))?;
-    launch.env.extend(home.env_for(dir));
-    Ok(launch)
-}
-
+/// Makes a harness's home folder when it isn't there yet, for the server's
+/// user only. One that's there is used as it is.
 fn make_home(dir: &Path) -> std::io::Result<()> {
+    if dir.exists() {
+        return Ok(());
+    }
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    // A login is in it: never committed.
-    let ignore = dir.join(".gitignore");
-    if !ignore.exists() {
-        std::fs::write(ignore, "# A harness's home, its login included: never committed.\n*\n")?;
     }
     Ok(())
 }
@@ -78,14 +64,18 @@ impl ProviderDriver for AcpDriver {
             Ok(settings) => (settings, launch),
             Err(why) => (AcpSettings::default(), Err(why)),
         };
-        let home = self.homes.get(id.as_str()).cloned();
-        let launch = match &home {
-            Some(dir) => launch.and_then(|launch| keep_home(launch, &settings, dir)),
-            None => launch,
-        };
-        let profile = Arc::new(Profile::new(settings, &self.project, launch.as_ref().ok()));
+        // Given what it always gets, and its home where the project keeps it.
+        let home = entry.home.clone();
+        let mut launch = launch.and_then(|launch| settings.launch_with(launch, home.as_deref()));
+        if let (Ok(_), Some(dir)) = (&launch, &home) {
+            let made = { let dir = dir.clone(); tokio::task::spawn_blocking(move || make_home(&dir)).await };
+            if let Err(why) = made.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string())) {
+                launch = Err(format!("its home folder {}: {why}", dir.display()));
+            }
+        }
+        let profile = Arc::new(Profile::new(settings, &self.project, launch.as_ref().ok()).keeping_home(home.clone()));
         let launcher = launch.map(|launch| (Arc::new(ProcessLauncher::from(&launch)) as Arc<dyn AcpLauncher>, Some(launch)));
-        let instance = AcpInstance::create(InstanceParts { id, harness: entry.profile, profile, launcher, home });
+        let instance = AcpInstance::create(InstanceParts { id, harness: entry.profile, profile, launcher });
         let first = instance.clone();
         tokio::spawn(async move {
             if let Err(err) = first.refresh().await {

@@ -25,12 +25,12 @@ mod workspace;
 pub mod testing;
 
 pub use adapter::AcpAdapter;
-pub use auth::{AcpAuthController, AuthChanged};
+pub use auth::{AcpAuthController, AuthChanged, AuthEvent};
 pub use catalog::AcpSessionCatalog;
 pub use control::{AcpDeclaredCapabilities, AcpProbe, CommandLogin, probe};
 pub use driver::{AcpDriver, DRIVER_KIND};
 pub use instance::{AcpInstance, InstanceParts};
-pub use launch::{AcpLauncher, AcpTransport, ProcessLauncher};
+pub use launch::{AcpLauncher, AcpTransport, ProcessLauncher, says};
 pub use profile::{Declared, Profile};
 pub use session::AcpSession;
 pub use settings::AcpSettings;

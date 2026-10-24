@@ -75,9 +75,9 @@ default = "{home}/.claude"
 env = "CLAUDE_CONFIG_DIR"
 default = "{home}"
 
-# Its home, login included: moved by CLAUDE_CONFIG_DIR.
+# Its home, login included (CLAUDE_CONFIG_DIR moves both its folders).
 [provides.settings.home]
-env = { CLAUDE_CONFIG_DIR = "{kept}" }
+dir = "claude"
 
 # A skill is a folder with a SKILL.md (named by the folder unless it says).
 [provides.settings.skills]

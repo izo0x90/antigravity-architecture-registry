@@ -121,9 +121,18 @@ fn sync_dir(_dir: &Path) -> Result<(), ServiceError> {
 /// What `.nah/.gitignore` keeps out of version control: the cache (rebuilt
 /// from the code) and the server's state (slots, notifications, one
 /// person's screen). Plans stay committed.
-const NAH_IGNORED: [&str; 2] = [CACHE_DIR, STATE_DIR];
+const NAH_IGNORED: [&str; 3] = [CACHE_DIR, STATE_DIR, HARNESS_DIR];
 const CACHE_DIR: &str = "cache";
 const STATE_DIR: &str = "state";
+/// Harnesses' homes the project keeps (their logins): never committed.
+const HARNESS_DIR: &str = "harness";
+
+/// The project's folders only the server reads: its state and the
+/// harnesses' homes it keeps (their logins). Never served.
+pub fn private_dirs(repo_root: &Path) -> [PathBuf; 2] {
+    let nah = repo_root.join(".nah");
+    [nah.join(STATE_DIR), nah.join(HARNESS_DIR)]
+}
 
 /// Ensures `.nah/.gitignore` lists what's kept out of version control (adding
 /// what an older one lacks), without touching the repository's own .gitignore.
@@ -131,7 +140,7 @@ fn ensure_nah_gitignore(nah: &Path) -> Result<(), ServiceError> {
     let ignore = nah.join(".gitignore");
     let text = match std::fs::read_to_string(&ignore) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "# Caches are rebuilt from the code and the server's state is one person's; plans are kept.\n".to_owned(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "# Caches are rebuilt from the code, the server's state is one person's and the harnesses' homes hold their logins; plans are kept.\n".to_owned(),
         Err(e) => return Err(io(&ignore, e)),
     };
     let missing: Vec<String> = NAH_IGNORED.into_iter().map(|dir| format!("{dir}/")).filter(|entry| !text.lines().any(|l| l.trim() == entry)).collect();

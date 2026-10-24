@@ -209,9 +209,11 @@ fn its_skill_and_tool_server_places_are_all_filled_in() {
 fn its_home_moves_to_a_folder_of_the_projects_all_of_it() {
     let kept = Path::new(PROJECT).join(".nah/harness/h");
     for (name, settings) in shipped() {
-        let home = settings.home.as_ref().unwrap_or_else(|| panic!("{name}: says how its home moves"));
-        let launch = Launch { program: "x".into(), args: Vec::new(), env: home.env_for(&kept), env_remove: Vec::new() };
+        assert!(settings.home.is_some(), "{name}: says how its home moves");
+        let launch = Launch { program: "x".into(), args: Vec::new(), env: Vec::new(), env_remove: Vec::new() };
+        let launch = settings.launch_with(launch, Some(&kept)).unwrap_or_else(|e| panic!("{name}: {e}"));
         let profile = Profile::new(settings, Path::new(PROJECT), Some(&launch));
+        assert_eq!(profile.home().map(|h| h.path), Some(kept.display().to_string()), "{name}: its home is the folder");
         let places = profile.settings.skills.as_ref().map(|s| profile.places.skill_roots(s)).unwrap_or_default();
         let users = places.iter().filter(|root| root.scope == Scope::User).map(|root| root.path.clone());
         let tools = profile.places.tool_files(&profile.settings.tool_config).into_iter().filter(|f| f.scope == Scope::User).map(|f| f.path);
@@ -219,18 +221,5 @@ fn its_home_moves_to_a_folder_of_the_projects_all_of_it() {
         for path in users.chain(tools).chain(login) {
             assert!(path.starts_with(&kept), "{name}: {} is kept with it", path.display());
         }
-    }
-}
-
-#[tokio::test]
-async fn a_login_it_runs_itself_shows_its_link_and_says_how_long_it_waits() {
-    for (name, settings) in shipped().into_iter().filter(|(_, s)| !s.advertise.auth_terminal) {
-        let within_s = settings.login.within_s;
-        let agent = MockAgent::new(MockSetup { loopback_login: true, ..MockSetup::like(&settings) });
-        let profile = Arc::new(Profile::new(settings, Path::new(PROJECT), None));
-        let auth = harness_acp::AcpAuthController::new(Arc::new(agent), profile, None, Arc::new(|_| {}));
-        let challenge = harness_core::AuthController::begin(&auth, "oauth-personal").await.unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert!(challenge.url.is_some_and(|url| url.contains("redirect_uri=")), "{name}: the link to open");
-        assert!(within_s.is_some() && challenge.within_s == within_s, "{name}: how long it waits");
     }
 }

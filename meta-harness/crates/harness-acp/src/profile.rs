@@ -19,6 +19,12 @@ pub struct Profile {
     /// The project its sessions, checks and logins run in.
     pub project: PathBuf,
     pub places: Places,
+    /// The folder the project keeps its home in (none: its own folders):
+    /// its login is there, so its file access never reaches it.
+    pub kept_home: Option<PathBuf>,
+    /// The pattern of its login's link (its settings', checked when they
+    /// were read; none only if they weren't).
+    pub login_link: Option<regex::Regex>,
 }
 
 /// What the agent's `initialize` answer says it does beyond the protocol.
@@ -33,7 +39,20 @@ pub struct Declared {
 impl Profile {
     pub fn new(settings: AcpSettings, project: &Path, launch: Option<&Launch>) -> Self {
         let places = Places::new(&settings, project, launch);
-        Self { settings, project: project.to_path_buf(), places }
+        let login_link = settings.login.link_pattern().ok();
+        Self { settings, project: project.to_path_buf(), places, kept_home: None, login_link }
+    }
+
+    /// With its home kept in `dir` (by the project).
+    pub fn keeping_home(mut self, dir: Option<PathBuf>) -> Self {
+        self.kept_home = dir;
+        self
+    }
+
+    /// Where its home is, if its pack says, and whether the project keeps it.
+    pub fn home(&self) -> Option<harness_contracts::HarnessHome> {
+        let home = self.settings.home.as_ref()?;
+        Some(harness_contracts::HarnessHome { path: self.places.path(&format!("{{{}}}", home.dir)).display().to_string(), kept: self.kept_home.is_some() })
     }
 
     /// What it can do before it's asked (`initialize` fills in the rest).
@@ -161,7 +180,7 @@ impl Profile {
 
     /// File access for a session working in `cwd`, when it's given it.
     pub fn workspace(&self, cwd: &Path) -> Option<WorkspaceFs> {
-        self.settings.client_fs.then(|| WorkspaceFs::new(vec![cwd.to_path_buf()]))
+        self.settings.client_fs.then(|| WorkspaceFs::new(vec![cwd.to_path_buf()], self.kept_home.iter().cloned().collect()))
     }
 
     /// The suffix of a question's own answer box, if its forms have them.

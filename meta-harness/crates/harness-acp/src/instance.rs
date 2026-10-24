@@ -15,7 +15,7 @@ use harness_core::{AuthController, HarnessError, ProviderAdapter, ProviderInstan
 use tokio::sync::watch;
 
 use crate::adapter::AcpAdapter;
-use crate::auth::AcpAuthController;
+use crate::auth::{AcpAuthController, AuthEvent};
 use crate::catalog::AcpSessionCatalog;
 use crate::control::probe;
 use crate::launch::{AcpLauncher, AcpTransport};
@@ -28,8 +28,6 @@ pub struct InstanceParts {
     pub profile: Arc<Profile>,
     /// How its agent is started, or why it can't be.
     pub launcher: std::result::Result<(Arc<dyn AcpLauncher>, Option<Launch>), String>,
-    /// The folder it keeps its home in for the project (none: its own).
-    pub home: Option<std::path::PathBuf>,
 }
 
 /// The launcher of an agent that can't be started: it says why.
@@ -56,34 +54,33 @@ pub struct AcpInstance {
 
 impl AcpInstance {
     pub fn create(parts: InstanceParts) -> Arc<Self> {
-        let InstanceParts { id, harness, profile, launcher, home } = parts;
+        let InstanceParts { id, harness, profile, launcher } = parts;
         let (launcher, launch, unavailable): (Arc<dyn AcpLauncher>, _, _) = match launcher {
             Ok((launcher, launch)) => (launcher, launch, None),
             Err(why) => (Arc::new(Unavailable(why.clone())), None, Some(why)),
         };
         let (snapshot, _) = watch::channel(ProviderSnapshot {
-            instance_id: id.clone(),
-            driver: harness.driver.clone(),
-            display_name: harness.display_name.clone(),
-            status: ProviderStatus::Starting,
-            auth: AuthState { status: AuthStatus::Unknown, account: None, methods: Vec::new() },
             capabilities: profile.capabilities(),
-            models: Vec::new(),
-            commands: Vec::new(),
-            skills: Vec::new(),
             runtime_modes: profile.runtime_modes(),
             supports_plan_mode: profile.supports_plan_mode(),
-            tool_servers: Vec::new(),
-            problems: Vec::new(),
-            home: home.map(|dir| dir.display().to_string()),
+            home: profile.home(),
+            ..ProviderSnapshot::new(id.clone(), harness.driver.clone(), harness.display_name.clone())
         });
         Arc::new_cyclic(|me: &Weak<Self>| {
             let me = me.clone();
-            // After a login or logout: say so, then check again (for who).
-            let on_auth = Arc::new(move |signed_in: Option<bool>| {
+            // A sign-in under way, or over: say so; signed in (or not known),
+            // check again (for who).
+            let on_auth = Arc::new(move |event: AuthEvent| {
                 let Some(instance) = me.upgrade() else { return };
+                let signed_in = match event {
+                    AuthEvent::Waiting(waiting) => return instance.snapshot.send_modify(|s| s.auth.waiting = waiting.map(Box::new)),
+                    AuthEvent::Status(signed_in) => signed_in,
+                };
                 if let Some(signed_in) = signed_in {
                     instance.snapshot.send_modify(|s| s.auth.status = if signed_in { AuthStatus::SignedIn } else { AuthStatus::SignedOut });
+                }
+                if signed_in == Some(false) {
+                    return;
                 }
                 tokio::spawn(async move {
                     if let Err(err) = instance.refresh().await {
@@ -156,11 +153,20 @@ impl ProviderInstance for AcpInstance {
         match probe(&self.launcher, &self.profile).await {
             Ok(info) => {
                 self.auth.set_logins(info.logins);
+                // One that doesn't say, nothing known yet: signed in when its
+                // login is kept where it keeps it. What it does (a session
+                // refused, a sign-in) says more, and isn't overridden.
+                let kept = match (&info.sign_in, &self.profile.settings.login.kept) {
+                    (None, Some(kept)) if self.snapshot.borrow().auth.status == AuthStatus::Unknown => tokio::fs::try_exists(self.profile.places.path(kept)).await.unwrap_or(false),
+                    _ => false,
+                };
                 self.snapshot.send_modify(|s| {
                     s.status = ProviderStatus::Ready;
                     s.auth.methods = info.auth_methods;
                     if let Some(sign_in) = &info.sign_in {
                         apply_sign_in(&mut s.auth, sign_in);
+                    } else if kept && s.auth.status == AuthStatus::Unknown {
+                        s.auth.status = AuthStatus::SignedIn;
                     }
                     info.capabilities.apply(&mut s.capabilities);
                 });

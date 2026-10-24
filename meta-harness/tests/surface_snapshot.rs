@@ -61,6 +61,7 @@ const ROUTES: &[&str] = &[
     "/api/instances/fake/sessions/n1",
     "/api/instances/fake/auth/oauth",
     "/api/instances/fake/auth/complete",
+    "/api/instances/fake/auth/cancel",
     "/api/instances/fake/auth/logout",
     "/api/threads/t1/steer",
     "/api/threads/t1/interrupt",

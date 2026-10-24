@@ -33,7 +33,7 @@ async fn the_driver_starts_the_installed_pack_and_opens_a_session_needs_the_pack
     assert!(launch.program.starts_with(&catalog.root.display().to_string()), "from the pack's own folder: {launch:?}");
     println!("launch: {} {}", launch.program, launch.args.join(" "));
     // The driver's own code: probe (ACP initialize), then a new session.
-    let driver = harness_acp::AcpDriver::new(root.to_path_buf(), Default::default());
+    let driver = harness_acp::AcpDriver::new(root.to_path_buf());
     let instance = driver.create(entry.profile.instance.clone(), driver.default_config(&entry)).await.unwrap();
     let started = std::time::Instant::now();
     tokio::time::timeout(Duration::from_secs(600), instance.refresh()).await.expect("initialize answered in time").unwrap();
@@ -58,13 +58,15 @@ async fn the_driver_starts_the_installed_pack_and_opens_a_session_needs_the_pack
     assert!(matches!(refused, harness_core::HarnessError::AuthRequired { .. }), "{refused}");
     let auth = instance.auth().expect("it signs in");
     let started = std::time::Instant::now();
-    let challenge = auth.begin("oauth-personal").await.unwrap();
-    let link = challenge.url.expect("its link");
+    let waiting = auth.begin("oauth-personal").await.unwrap().expect("a link to open");
+    let link = waiting.url.clone().expect("its link");
     println!("link in {:?}: {link}", started.elapsed());
     assert!(link.starts_with("https://accounts.google.com/") && link.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A"), "{link}");
-    assert_eq!(challenge.within_s, Some(300));
+    assert_eq!(instance.snapshot().borrow().auth.waiting.as_deref(), Some(&waiting), "every device sees it");
     let wrong = auth.complete("http://127.0.0.1:1/?code=x").await.unwrap_err();
     assert!(matches!(wrong, harness_core::HarnessError::Refused { .. }), "{wrong}");
+    auth.cancel().await.unwrap();
+    assert_eq!(instance.snapshot().borrow().auth.waiting, None);
 }
 
 /// The body of `GET path` from the server at `port`.

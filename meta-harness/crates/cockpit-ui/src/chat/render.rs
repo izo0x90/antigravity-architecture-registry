@@ -75,7 +75,7 @@ impl ChatStreamState {
     pub(super) fn render_banners(&mut self, ui: &mut egui::Ui) {
         // What it says; its ways out (Dismiss, Retry, signing in) are its
         // actions, on its top line.
-        let (notice, login) = (self.agents().notice().cloned(), self.agents().login().cloned());
+        let (notice, now) = (self.agents().notice().cloned(), self.sign_in_now());
         if let Some(notice) = notice {
             banner(ui, colors().info_bg, colors().focus, |ui| {
                 ui.label(RichText::new(icon::INFO).size(crate::theme::look().text_label).color(colors().info));
@@ -89,40 +89,42 @@ impl ChatStreamState {
             });
         }
         let instance = self.instance().map(|s| s.clone());
-        if (self.needs_login() || login.is_some())
+        if let Some(why) = now.as_ref().and_then(|n| n.pasted.as_ref()).and_then(|p| p.refused.clone()) {
+            banner(ui, colors().error_bg, colors().error, |ui| {
+                ui.label(RichText::new(icon::X_CIRCLE).size(crate::theme::look().text_label).color(colors().error));
+                ui.label(RichText::new(format!("Not taken: {why}")).size(crate::theme::look().text_label).color(colors().text));
+            });
+        }
+        if (self.needs_login() || now.is_some())
             && let Some(snapshot) = instance
         {
             let look = crate::theme::look();
-            banner(ui, colors().info_bg, colors().focus, |ui| match login {
+            banner(ui, colors().info_bg, colors().focus, |ui| match now {
                 None => {
                     ui.label(RichText::new(format!("{} Sign in to {}", icon::KEY, snapshot.display_name)).strong().size(look.text_label));
                 }
-                Some(login) => {
+                Some(now) => {
                     ui.vertical(|ui| {
                         let said = |ui: &mut egui::Ui, text: &str, color: egui::Color32| {
                             ui.label(RichText::new(text).size(look.text_label).color(color));
                         };
-                        if login.ran_out {
-                            said(ui, &format!("{} The sign-in stopped waiting. Sign in again to get a new link.", icon::CLOCK), colors().error);
+                        if now.ran_out {
+                            said(ui, &format!("{} The sign-in stopped waiting. Sign in again for a new link.", icon::CLOCK), colors().text);
                             return;
                         }
-                        said(ui, &login.challenge.instructions, colors().text);
-                        if let Some(url) = &login.challenge.url {
+                        said(ui, &now.waiting.instructions, colors().text);
+                        if let Some(url) = &now.waiting.url {
                             // Its address, to copy when the page can't open here.
                             let mut shown = url.clone();
                             ui.add(egui::TextEdit::singleline(&mut shown).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
                         }
-                        if let Some(expects) = &login.challenge.expects {
-                            said(ui, &format!("Then paste {expects} with Finish signing in."), colors().muted);
-                        }
-                        if let Some(left) = login.left(ui.input(|i| i.time)) {
-                            let left = left.ceil() as u64;
+                        if let Some(left) = now.left_s {
                             said(ui, &format!("{} {}:{:02} left", icon::TIMER, left / 60, left % 60), colors().muted);
+                            // Its time left, to the second, while it's shown.
+                            ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
                         }
-                        if login.finishing {
+                        if now.pasted.as_ref().is_some_and(|p| p.finishing) {
                             said(ui, "Checking what you pasted…", colors().muted);
-                        } else if let Some(why) = &login.refused {
-                            said(ui, &format!("{} Not taken: {why}", icon::X_CIRCLE), colors().error);
                         }
                     });
                 }
@@ -130,10 +132,11 @@ impl ChatStreamState {
         }
     }
 
-    /// The harness offers sign-in and isn't signed in (or said so).
+    /// The harness offers sign-in and isn't signed in (a session refused
+    /// for it says so too).
     pub(super) fn needs_login(&self) -> bool {
         self.instance().is_some_and(|s| {
-            !s.auth.methods.is_empty() && (s.auth.status == harness_contracts::AuthStatus::SignedOut || self.error().is_some_and(|e| e.to_lowercase().contains("authentication")))
+            !s.auth.methods.is_empty() && s.auth.status == harness_contracts::AuthStatus::SignedOut
         })
     }
 
@@ -375,13 +378,16 @@ impl crate::hosted::Hosted for ChatStreamState {
             let status = Status::new(format!("{} {}", icon::USER_CIRCLE, account.label), Tone::Muted);
             out.push(if detail.is_empty() { status } else { status.detail(detail) });
         }
-        match self.instance().map(|s| (s.auth.status, s.auth.methods.is_empty())) {
-            Some((harness_contracts::AuthStatus::SignedOut, false)) => out.push(Status::new(format!("{} Not signed in", icon::KEY), Tone::Warn)),
-            Some((harness_contracts::AuthStatus::SignedIn, _)) if self.instance().is_some_and(|s| s.auth.account.is_none()) => out.push(Status::new(format!("{} Signed in", icon::KEY), Tone::Muted)),
-            _ => {}
-        }
-        if let Some(home) = self.instance().and_then(|s| s.home.clone()) {
-            out.push(Status::new(icon::HOUSE, Tone::Muted).detail(format!("Its home (sign-in, settings, sessions) is kept for this project in {home}")));
+        if let Some(s) = self.instance() {
+            match s.auth.status {
+                harness_contracts::AuthStatus::SignedOut if !s.auth.methods.is_empty() => out.push(Status::new(format!("{} Not signed in", icon::KEY), Tone::Warn)),
+                harness_contracts::AuthStatus::SignedIn if s.auth.account.is_none() => out.push(Status::new(format!("{} Signed in", icon::KEY), Tone::Muted)),
+                _ => {}
+            }
+            if let Some(home) = &s.home {
+                let whose = if home.kept { "kept for this project" } else { "its own" };
+                out.push(Status::new(icon::HOUSE, Tone::Muted).detail(format!("Its home (sign-in, settings, sessions), {whose}: {}", home.path)));
+            }
         }
         if let Some(problems) = self.instance().map(|s| s.problems.clone()).filter(|p| !p.is_empty()) {
             out.push(Status::new(icon::WARNING, Tone::Warn).detail(problems.join("\n")));

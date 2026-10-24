@@ -26,6 +26,7 @@ pub(crate) fn routes() -> Router<HarnessState> {
         .route("/api/instances/{id}/sessions/{native_id}", delete(delete_saved_session))
         .route("/api/instances/{id}/auth/{method}", post(begin_auth))
         .route("/api/instances/{id}/auth/complete", post(complete_auth))
+        .route("/api/instances/{id}/auth/cancel", post(cancel_auth))
         .route("/api/instances/{id}/auth/logout", post(logout))
         .route("/api/threads/{thread}/steer", post(steer))
         .route("/api/threads/{thread}/interrupt", post(interrupt))
@@ -92,7 +93,9 @@ fn auth_controller(state: &HarnessState, id: String) -> ApiResult<Arc<dyn harnes
     Ok(state.registry.get(&InstanceId::new(id))?.auth().ok_or(HarnessError::Unsupported { operation: "login" })?)
 }
 
-async fn begin_auth(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path((id, method)): Path<(String, String)>) -> ApiResult<Json<harness_core::AuthChallenge>> {
+/// What's to be done to sign in (also in the instance's snapshot), or
+/// nothing: it's signed in.
+async fn begin_auth(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path((id, method)): Path<(String, String)>) -> ApiResult<Json<Option<harness_contracts::SignInWaiting>>> {
     Ok(Json(auth_controller(&state, id)?.begin(&method).await?))
 }
 
@@ -103,6 +106,11 @@ async fn complete_auth(
     Json(body): Json<CompleteAuthRequest>,
 ) -> ApiResult<StatusCode> {
     auth_controller(&state, id)?.complete(&body.response).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn cancel_auth(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
+    auth_controller(&state, id)?.cancel().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

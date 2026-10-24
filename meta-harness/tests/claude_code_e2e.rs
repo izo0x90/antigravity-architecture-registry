@@ -21,7 +21,7 @@ async fn signed_out_it_says_so_offers_its_logins_and_shows_a_sign_in_link_needs_
     let home = tempfile::tempdir().unwrap();
     launch.env.push(("CLAUDE_CONFIG_DIR".into(), home.path().display().to_string()));
 
-    let driver = harness_acp::AcpDriver::new(root.to_path_buf(), Default::default());
+    let driver = harness_acp::AcpDriver::new(root.to_path_buf());
     let instance = driver.create(entry.profile.instance.clone(), driver.default_config(&entry)).await.unwrap();
     tokio::time::timeout(Duration::from_secs(120), instance.refresh()).await.expect("checked in time").unwrap();
     let snapshot = instance.snapshot().borrow().clone();
@@ -34,8 +34,9 @@ async fn signed_out_it_says_so_offers_its_logins_and_shows_a_sign_in_link_needs_
 
     // Signing in starts its login command, which shows a link.
     let auth = harness_core::ProviderInstance::auth(instance.as_ref()).unwrap();
-    let challenge = tokio::time::timeout(Duration::from_secs(60), auth.begin("claude-ai-login")).await.expect("a link in time").unwrap();
+    let challenge = tokio::time::timeout(Duration::from_secs(60), auth.begin("claude-ai-login")).await.expect("a link in time").unwrap().expect("not signed in at once");
     println!("{challenge:#?}");
+    assert_eq!(instance.snapshot().borrow().auth.waiting.as_deref(), Some(&challenge), "every device sees it");
     let url = challenge.url.expect("a link to open");
     assert!(url.starts_with("https://") && url.contains("oauth"), "{url}");
     assert!(challenge.expects.is_some(), "it takes a code back");

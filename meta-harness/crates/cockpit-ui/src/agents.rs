@@ -15,7 +15,7 @@ use harness_contracts::{
     ToolServers, LEAD,
 };
 
-use crate::net::{AuthChallenge, NetClient, NetResult, OpenSlotSession, SlotOpened};
+use crate::net::{NetClient, NetResult, OpenSlotSession, SlotOpened};
 use crate::store::{Store, ThreadView};
 
 /// The lead's session as the AGENT light and the chat's banner see it.
@@ -56,7 +56,7 @@ pub enum Act {
     SignIn { instance: InstanceId, method: String },
     FinishSignIn { instance: InstanceId, answer: String },
     SignOut { instance: InstanceId },
-    StopSigningIn,
+    StopSigningIn { instance: InstanceId },
     PutNoticeAway,
     PutErrorAway,
     /// The slot's updates were seen (its chat is on screen).
@@ -71,41 +71,23 @@ enum Reply {
     /// A session was ended to start again with new tool servers.
     Restart { slot: SlotId, resume: Option<NativeId>, result: NetResult<()> },
     Saved(SlotId, NetResult<Vec<SavedSession>>),
-    AuthStarted(SlotId, NetResult<AuthChallenge>),
-    /// What was pasted back was taken (signed in), or why not.
-    AuthFinished(NetResult<()>),
+    AuthStarted { slot: SlotId, instance: InstanceId, result: NetResult<Option<harness_contracts::SignInWaiting>> },
+    /// What was pasted back to sign-in `id` was taken (signed in), or why not.
+    AuthFinished { slot: SlotId, instance: InstanceId, id: u64, result: NetResult<()> },
     /// The tool servers every session gets; after a change, the slot whose
     /// session restarts with them.
     Tools { result: NetResult<ToolServers>, saved: Option<SlotId> },
     Done(SlotId, NetResult<()>),
 }
 
-/// A sign-in under way: what the server said to do, until when the login
-/// waits, and how the last paste went.
+/// What was pasted back to a sign-in under way (its instance's and id):
+/// being checked, or why it wasn't taken.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Login {
-    pub challenge: AuthChallenge,
-    /// When the login stops waiting (the frame clock), if it says.
-    pub until: Option<f64>,
-    /// The paste is being checked.
+pub struct Pasted {
+    pub instance: InstanceId,
+    pub id: u64,
     pub finishing: bool,
-    /// Why the last paste wasn't taken.
     pub refused: Option<String>,
-    /// It stopped waiting: what's pasted now can't be taken (kept by
-    /// `tick`).
-    pub ran_out: bool,
-}
-
-impl Login {
-    fn new(challenge: AuthChallenge, now: f64) -> Self {
-        let until = challenge.within_s.map(|s| now + s as f64);
-        Self { challenge, until, finishing: false, refused: None, ran_out: false }
-    }
-
-    /// Seconds left before the login stops waiting (none: it doesn't say).
-    pub fn left(&self, now: f64) -> Option<f64> {
-        self.until.map(|until| (until - now).max(0.0))
-    }
 }
 
 type Mailbox = Arc<Mutex<Vec<Reply>>>;
@@ -134,8 +116,10 @@ pub struct Agents {
     /// asked for.
     tools: Option<ToolServers>,
     tools_asked: bool,
-    /// A sign-in under way: the page to open and what to paste back.
-    login: Option<Login>,
+    /// Sign-ins asked for and not answered yet, by instance.
+    signing_in: BTreeSet<InstanceId>,
+    /// The last paste to a sign-in under way.
+    pasted: Option<Pasted>,
     /// The sub-slots made, how many, and the last one with the slot that asked.
     made: (u64, Option<(SlotId, SlotId)>),
     mailbox: Mailbox,
@@ -171,8 +155,19 @@ impl Agents {
         self.tools.as_ref()
     }
 
-    pub fn login(&self) -> Option<&Login> {
-        self.login.as_ref()
+    /// The sign-in under way for `instance` (the server's, for every device).
+    pub fn waiting(&self, instance: &InstanceId) -> Option<&harness_contracts::SignInWaiting> {
+        self.store.instances.get(instance)?.auth.waiting.as_deref()
+    }
+
+    /// A sign-in asked for `instance` and not answered yet.
+    pub fn signing_in(&self, instance: &InstanceId) -> bool {
+        self.signing_in.contains(instance)
+    }
+
+    /// The last paste to `instance`'s sign-in `id`.
+    pub fn pasted(&self, instance: &InstanceId, id: u64) -> Option<&Pasted> {
+        self.pasted.as_ref().filter(|p| &p.instance == instance && p.id == id)
     }
 
     /// How many sub-slots were made, and the last with the slot it was made from.
@@ -282,20 +277,28 @@ impl Agents {
                 net.set_tool_servers(&project, ctx.clone(), move |result| post(&mailbox, Reply::Tools { result, saved: Some(slot) }));
             }
             Act::SignIn { instance, method } => {
-                let mailbox = self.mailbox.clone();
-                net.begin_auth(&instance, &method, ctx.clone(), move |r| post(&mailbox, Reply::AuthStarted(slot, r)));
+                // One at a time: a second tap waits for the first.
+                if self.signing_in.insert(instance.clone()) {
+                    let mailbox = self.mailbox.clone();
+                    let asked = instance.clone();
+                    net.begin_auth(&instance, &method, ctx.clone(), move |result| post(&mailbox, Reply::AuthStarted { slot, instance: asked, result }));
+                }
             }
             Act::FinishSignIn { instance, answer } => {
-                // Kept until it's taken: a wrong paste can be tried again.
-                if let Some(login) = &mut self.login {
-                    login.finishing = true;
-                    login.refused = None;
-                }
+                let Some(id) = self.waiting(&instance).map(|w| w.id) else {
+                    self.errors.insert(slot, "No sign-in is waiting: sign in again.".into());
+                    return;
+                };
+                self.pasted = Some(Pasted { instance: instance.clone(), id, finishing: true, refused: None });
                 let mailbox = self.mailbox.clone();
-                net.complete_auth(&instance, &answer, ctx.clone(), move |r| post(&mailbox, Reply::AuthFinished(r)));
+                let asked = instance.clone();
+                net.complete_auth(&instance, &answer, ctx.clone(), move |result| post(&mailbox, Reply::AuthFinished { slot, instance: asked, id, result }));
             }
             Act::SignOut { instance } => net.logout(&instance, ctx.clone(), done),
-            Act::StopSigningIn => self.login = None,
+            Act::StopSigningIn { instance } => {
+                self.pasted = None;
+                net.cancel_auth(&instance, ctx.clone(), done);
+            }
             Act::PutNoticeAway => self.notice = None,
             Act::PutErrorAway => {
                 self.errors.remove(&slot);
@@ -360,16 +363,6 @@ impl Agents {
             let mailbox = self.mailbox.clone();
             net.tool_servers(ctx.clone(), move |result| post(&mailbox, Reply::Tools { result, saved: None }));
         }
-        if let Some(login) = &mut self.login
-            && let Some(until) = login.until
-        {
-            let now = ctx.input(|i| i.time);
-            login.ran_out = now >= until;
-            if !login.ran_out {
-                // Its time left, shown to the second.
-                ctx.request_repaint_after(std::time::Duration::from_secs(1));
-            }
-        }
         let replies = std::mem::take(&mut *self.mailbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for reply in replies {
             match reply {
@@ -399,17 +392,32 @@ impl Agents {
                 Reply::SlotMade(from, Ok(made)) => self.made = (self.made.0 + 1, Some((from, made))),
                 Reply::Restart { slot, resume, result: Ok(()) } => self.open(slot, net, ctx, resume),
                 Reply::Saved(_, Ok(sessions)) => self.saved = Some(sessions),
-                Reply::AuthStarted(slot, Ok(challenge)) => {
-                    self.errors.remove(&slot);
-                    // Nothing to open or paste: it's done (the harness checks again).
-                    let now = ctx.input(|i| i.time);
-                    self.login = (challenge.url.is_some() || challenge.expects.is_some()).then(|| Login::new(challenge, now));
+                Reply::AuthStarted { slot, instance, result } => {
+                    self.signing_in.remove(&instance);
+                    match result {
+                        // What's to be done comes in the instance's snapshot too.
+                        Ok(_) => {
+                            self.errors.remove(&slot);
+                        }
+                        Err(e) => {
+                            self.errors.insert(slot, e.into());
+                        }
+                    }
                 }
-                Reply::AuthFinished(Ok(())) => self.login = None,
-                Reply::AuthFinished(Err(e)) => {
-                    if let Some(login) = &mut self.login {
-                        login.finishing = false;
-                        login.refused = Some(e.into());
+                Reply::AuthFinished { slot, instance, id, result } => {
+                    let still = self.waiting(&instance).is_some_and(|w| w.id == id);
+                    match (result, self.pasted.as_mut().filter(|p| p.instance == instance && p.id == id)) {
+                        (Ok(()), _) => self.pasted = None,
+                        // The sign-in still waits: what was wrong with the paste.
+                        (Err(e), Some(pasted)) if still => {
+                            pasted.finishing = false;
+                            pasted.refused = Some(e.into());
+                        }
+                        // It's over: why, as any error.
+                        (Err(e), _) => {
+                            self.pasted = None;
+                            self.errors.insert(slot, e.into());
+                        }
                     }
                 }
                 Reply::Tools { result: Ok(tools), saved } => {
@@ -422,7 +430,7 @@ impl Agents {
                 Reply::Tools { result: Err(e), saved } => {
                     self.errors.insert(saved.unwrap_or_else(|| SlotId::new(LEAD)), e.into());
                 }
-                Reply::Saved(slot, Err(e)) | Reply::AuthStarted(slot, Err(e)) | Reply::Done(slot, Err(e)) | Reply::SlotMade(slot, Err(e)) | Reply::Restart { slot, result: Err(e), .. } => {
+                Reply::Saved(slot, Err(e)) | Reply::Done(slot, Err(e)) | Reply::SlotMade(slot, Err(e)) | Reply::Restart { slot, result: Err(e), .. } => {
                     self.errors.insert(slot, e.into());
                 }
                 Reply::Sent(_, Ok(())) | Reply::Done(_, Ok(())) => {}
@@ -436,16 +444,6 @@ impl Agents {
     /// The tool servers, as if the server sent them.
     pub(crate) fn take_tools_for_test(&mut self, tools: ToolServers) {
         self.tools = Some(tools);
-    }
-
-    /// The server's answer to starting a sign-in, as if it came.
-    pub(crate) fn sign_in_began_for_test(&mut self, slot: SlotId, challenge: NetResult<AuthChallenge>) {
-        post(&self.mailbox, Reply::AuthStarted(slot, challenge));
-    }
-
-    /// The server's answer to what was pasted, as if it came.
-    pub(crate) fn sign_in_finished_for_test(&mut self, result: NetResult<()>) {
-        post(&self.mailbox, Reply::AuthFinished(result));
     }
 }
 
@@ -466,22 +464,10 @@ mod tests {
     use super::*;
     use harness_contracts::ProviderSnapshot;
 
-    fn snapshot(status: ProviderStatus) -> ProviderSnapshot {
+    pub(crate) fn snapshot(status: ProviderStatus) -> ProviderSnapshot {
         ProviderSnapshot {
-            instance_id: InstanceId::new("antigravity"),
-            driver: harness_contracts::DriverKind::new("antigravity"),
-            display_name: "Antigravity".into(),
             status,
-            auth: harness_contracts::AuthState { status: harness_contracts::AuthStatus::Unknown, account: None, methods: Vec::new() },
-            capabilities: Default::default(),
-            models: Vec::new(),
-            commands: Vec::new(),
-            skills: Vec::new(),
-            runtime_modes: Vec::new(),
-            supports_plan_mode: false,
-            tool_servers: Vec::new(),
-            problems: Vec::new(),
-            home: None,
+            ..ProviderSnapshot::new(InstanceId::new("antigravity"), harness_contracts::DriverKind::new("antigravity"), "Antigravity")
         }
     }
 

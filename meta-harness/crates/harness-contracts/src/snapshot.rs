@@ -30,10 +30,58 @@ pub struct ProviderSnapshot {
     /// in words.
     #[serde(default)]
     pub problems: Vec<String>,
-    /// The folder it keeps its home in (login, settings, sessions) for the
-    /// project; none: its own folders.
+    /// Where it keeps its home (login, settings, sessions), when its pack
+    /// says.
     #[serde(default)]
-    pub home: Option<String>,
+    pub home: Option<HarnessHome>,
+}
+
+impl ProviderSnapshot {
+    /// A harness just made: starting, nothing known of it yet.
+    pub fn new(instance_id: InstanceId, driver: DriverKind, display_name: impl Into<String>) -> Self {
+        Self {
+            instance_id,
+            driver,
+            display_name: display_name.into(),
+            status: ProviderStatus::Starting,
+            auth: AuthState { status: AuthStatus::Unknown, account: None, methods: Vec::new(), waiting: None },
+            capabilities: Capabilities::default(),
+            models: Vec::new(),
+            commands: Vec::new(),
+            skills: Vec::new(),
+            runtime_modes: Vec::new(),
+            supports_plan_mode: false,
+            tool_servers: Vec::new(),
+            problems: Vec::new(),
+            home: None,
+        }
+    }
+}
+
+/// A harness's home: the folder, and whether the project keeps it there
+/// (else it's the harness's own).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessHome {
+    pub path: String,
+    pub kept: bool,
+}
+
+/// A sign-in under way on the project's server, for any device to finish:
+/// the page to open, what to paste back, until when it waits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignInWaiting {
+    /// Which sign-in (a new one replaces it).
+    pub id: u64,
+    pub url: Option<String>,
+    /// What to do, in words.
+    pub instructions: String,
+    /// What it takes back, in words.
+    pub expects: Option<String>,
+    /// When it stops waiting (milliseconds since the epoch, the server's
+    /// clock), if it says.
+    pub until_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +100,9 @@ pub struct AuthState {
     pub status: AuthStatus,
     pub account: Option<Account>,
     pub methods: Vec<AuthMethod>,
+    /// A sign-in under way.
+    #[serde(default)]
+    pub waiting: Option<Box<SignInWaiting>>,
 }
 
 /// Who the harness is signed in as, as it reports it.

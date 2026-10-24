@@ -65,20 +65,9 @@ pub(crate) fn turn(id: &str, thread: &str, status: TurnStatus) -> ClientEvent {
 
 fn instance(id: &str, status: AuthStatus) -> ClientEvent {
     let snapshot = ProviderSnapshot {
-        instance_id: InstanceId::new(id),
-        driver: DriverKind::new("acp"),
-        display_name: "Claude Code".into(),
         status: ProviderStatus::Ready,
-        auth: AuthState { status, account: None, methods: Vec::new() },
-        capabilities: Default::default(),
-        models: Vec::new(),
-        commands: Vec::new(),
-        skills: Vec::new(),
-        runtime_modes: Vec::new(),
-        supports_plan_mode: false,
-        tool_servers: Vec::new(),
-        problems: Vec::new(),
-        home: None,
+        auth: AuthState { status, account: None, methods: Vec::new(), waiting: None },
+        ..ProviderSnapshot::new(InstanceId::new(id), DriverKind::new("acp"), "Claude Code")
     };
     ClientEvent::InstanceUpdated { snapshot }
 }

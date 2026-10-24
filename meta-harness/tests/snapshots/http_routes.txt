@@ -11,6 +11,7 @@
 /api/instances/fake/sessions/n1 DELETE
 /api/instances/fake/auth/oauth POST
 /api/instances/fake/auth/complete POST
+/api/instances/fake/auth/cancel POST
 /api/instances/fake/auth/logout POST
 /api/threads/t1/steer POST
 /api/threads/t1/interrupt POST

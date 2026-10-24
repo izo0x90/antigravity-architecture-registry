@@ -170,12 +170,7 @@ pub async fn probe(launcher: &Arc<dyn AcpLauncher>, profile: &Arc<Profile>) -> R
             let wait = Duration::from_secs(profile_for.settings.sign_in.as_ref().map_or(0, |s| s.wait_s));
             let _ = tokio::time::timeout(wait, opened.sign_in.wait_for(Option::is_some)).await;
         }
-        // One that doesn't say: signed in when its login is kept where it keeps it.
-        let sign_in = opened.sign_in.borrow().clone().or_else(|| {
-            let kept = profile_for.settings.login.kept.as_ref()?;
-            let signed_in = profile_for.places.path(kept).is_file();
-            Some(SignIn { status: if signed_in { harness_contracts::AuthStatus::SignedIn } else { harness_contracts::AuthStatus::SignedOut }, account: None })
-        });
+        let sign_in = opened.sign_in.borrow().clone();
         let (auth_methods, logins) = auth_methods(&opened.init);
         let info = opened.init.agent_info.as_ref();
         Ok(AcpProbe {

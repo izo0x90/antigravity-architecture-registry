@@ -29,35 +29,90 @@ pub fn catalog(project: &Path) -> Result<Catalog, PackError> {
     Catalog::load(&distribution(), &Places::of_user(project)?)
 }
 
-/// An instance's own launch, from the harness overrides (`harnesses.toml`).
+/// An instance's own settings, from the harness overrides (`harnesses.toml`):
+/// its own launch (a program), where its home is, or both.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct OwnLaunch {
-    program: String,
+struct OwnSettings {
+    program: Option<String>,
     #[serde(default)]
     args: Vec<String>,
     #[serde(default)]
     env: BTreeMap<String, String>,
     #[serde(default)]
     env_remove: Vec<String>,
+    /// `native` (its own folders), `kept` (`.nah/harness/<instance>/`), or a
+    /// folder (the project's when relative).
+    home: Option<String>,
 }
 
-/// The instances' own launches, by instance, and the file each came from:
-/// the override files in order, a later one's entry replacing an earlier one's.
-fn own_launches(catalog: &Catalog) -> Result<BTreeMap<String, (Launch, PathBuf)>, PackError> {
-    let mut out = BTreeMap::new();
+/// What the override files say of an instance: its own launch and the file
+/// it came from, and its home (`None`: its own folders).
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Own {
+    launch: Option<(Launch, PathBuf)>,
+    home: Option<PathBuf>,
+}
+
+/// The instances' own settings, by instance: the override files in order,
+/// each setting a later file gives replacing an earlier one's. Every name
+/// must be one of `instances`.
+fn own_settings(catalog: &Catalog, instances: &[String]) -> Result<BTreeMap<String, Own>, PackError> {
+    let mut out: BTreeMap<String, Own> = BTreeMap::new();
     for file in &catalog.harness_overrides {
         let text = match std::fs::read_to_string(file) {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(PackError::Config(format!("{}: {e}", file.display()))),
         };
-        let entries: BTreeMap<String, OwnLaunch> = toml::from_str(&text).map_err(|e| PackError::Config(format!("{}: {e}", file.display())))?;
+        let wrong = |why: String| PackError::Config(format!("{}: {why}", file.display()));
+        let entries: BTreeMap<String, OwnSettings> = toml::from_str(&text).map_err(|e| wrong(e.to_string()))?;
         for (instance, own) in entries {
-            out.insert(instance, (Launch { program: own.program, args: own.args, env: own.env.into_iter().collect(), env_remove: own.env_remove }, file.clone()));
+            if !instances.contains(&instance) {
+                return Err(wrong(format!("there's no harness named {instance} (the harnesses: {})", instances.join(", "))));
+            }
+            let entry = out.entry(instance.clone()).or_default();
+            match own.program {
+                Some(program) => entry.launch = Some((Launch { program, args: own.args, env: own.env.into_iter().collect(), env_remove: own.env_remove }, file.clone())),
+                None if !own.args.is_empty() || !own.env.is_empty() || !own.env_remove.is_empty() => return Err(wrong(format!("{instance}: a launch's args or env without its program"))),
+                None => {}
+            }
+            if let Some(home) = own.home {
+                entry.home = home_of(&catalog.project, &instance, &home).map_err(|why| wrong(format!("{instance}: {why}")))?;
+            }
         }
     }
     Ok(out)
+}
+
+/// Where an instance's home is, from its `home` setting (`None`: its own
+/// folders). A folder of its own: not the project's, nor one above it.
+fn home_of(project: &Path, instance: &str, home: &str) -> Result<Option<PathBuf>, String> {
+    let dir = match home {
+        "native" => return Ok(None),
+        "kept" => project.join(".nah/harness").join(instance),
+        "" => return Err("its home is empty: native, kept, or a folder".into()),
+        path => project.join(path),
+    };
+    let normal: PathBuf = dir.components().fold(PathBuf::new(), |mut at, part| {
+        match part {
+            std::path::Component::ParentDir => {
+                at.pop();
+            }
+            std::path::Component::CurDir => {}
+            part => at.push(part),
+        }
+        at
+    });
+    if project.starts_with(&normal) {
+        return Err(format!("its home {} would be the project's folder or one above it: give a folder of its own", normal.display()));
+    }
+    Ok(Some(normal))
+}
+
+/// Every harness instance the packs give.
+fn harness_instances(catalog: &Catalog) -> Vec<String> {
+    catalog.of_kind(nah_packs::Kind::Harness).filter_map(|pack| pack.manifest.provides.as_ref().map(|p| instance_of(pack, p))).collect()
 }
 
 /// The instance a harness pack is (its own name for it, else the pack's).
@@ -74,20 +129,21 @@ fn instance_of(pack: &nah_packs::Pack, provides: &nah_packs::Provides) -> String
 /// later one's left out, and logged.
 pub fn harness_launches(catalog: &Catalog) -> Vec<HarnessEntry> {
     let lock = Lock::read(&catalog.lock_path);
-    let own = own_launches(catalog);
+    let harnesses: Vec<(&nah_packs::Pack, &nah_packs::Provides)> = catalog.of_kind(nah_packs::Kind::Harness).filter_map(|pack| pack.manifest.provides.as_ref().map(|p| (pack, p))).collect();
+    let instances: Vec<String> = harnesses.iter().map(|(pack, provides)| instance_of(pack, provides)).collect();
+    let own = own_settings(catalog, &instances);
     let mut out: Vec<HarnessEntry> = Vec::new();
-    for pack in catalog.of_kind(nah_packs::Kind::Harness) {
-        let Some(provides) = &pack.manifest.provides else { continue };
-        let instance = instance_of(pack, provides);
+    for ((pack, provides), instance) in harnesses.into_iter().zip(instances) {
         if out.iter().any(|e| e.profile.instance.as_str() == instance) {
             tracing::warn!("harness packs name instance {instance} twice: {} is left out", pack.name());
             continue;
         }
-        let launch = match (&own, &lock) {
-            (Err(e), _) => HarnessLaunch::Unavailable { reason: e.to_string(), fix: Some("fix the file it names".into()) },
-            (Ok(own), _) if own.contains_key(&instance) => HarnessLaunch::Ready { launch: own[&instance].0.clone() },
-            (Ok(_), Err(e)) => HarnessLaunch::Unavailable { reason: format!("can't read the packs' lock: {e}"), fix: Some(format!("meta-harness pack install {}", pack.name())) },
-            (Ok(_), Ok(lock)) => pack_launch(catalog, lock, pack.name()).unwrap_or_else(|e| HarnessLaunch::Unavailable { reason: e.to_string(), fix: Some(format!("meta-harness pack install {}", pack.name())) }),
+        let mine = own.as_ref().ok().and_then(|own| own.get(&instance));
+        let launch = match (&own, mine.and_then(|m| m.launch.as_ref()), &lock) {
+            (Err(e), _, _) => HarnessLaunch::Unavailable { reason: e.to_string(), fix: Some("fix the file it names".into()) },
+            (Ok(_), Some((launch, _)), _) => HarnessLaunch::Ready { launch: launch.clone() },
+            (Ok(_), None, Err(e)) => HarnessLaunch::Unavailable { reason: format!("can't read the packs' lock: {e}"), fix: Some(format!("meta-harness pack install {}", pack.name())) },
+            (Ok(_), None, Ok(lock)) => pack_launch(catalog, lock, pack.name()).unwrap_or_else(|e| HarnessLaunch::Unavailable { reason: e.to_string(), fix: Some(format!("meta-harness pack install {}", pack.name())) }),
         };
         let profile = HarnessProfile {
             instance: InstanceId::new(&instance),
@@ -95,7 +151,7 @@ pub fn harness_launches(catalog: &Catalog) -> Vec<HarnessEntry> {
             display_name: provides.display_name.clone().unwrap_or_else(|| pack.name().to_owned()),
             settings: serde_json::to_value(&provides.settings).unwrap_or_default(),
         };
-        out.push(HarnessEntry { profile, launch });
+        out.push(HarnessEntry { profile, launch, home: mine.and_then(|m| m.home.clone()) });
     }
     out.sort_by(|a, b| a.profile.instance.cmp(&b.profile.instance));
     out
@@ -237,7 +293,7 @@ pub fn run(command: &Command, catalog: &Catalog) -> Result<String, PackError> {
         Command::Which(name) => {
             let pack = catalog.get(name)?;
             let (launch, from) = match (&pack.manifest.provides, &pack.manifest.server) {
-                (Some(provides), _) => match own_launches(catalog)?.remove(&instance_of(pack, provides)) {
+                (Some(provides), _) => match own_settings(catalog, &harness_instances(catalog))?.remove(&instance_of(pack, provides)).and_then(|own| own.launch) {
                     Some((launch, file)) => (launch, format!("{} for {}", file.display(), instance_of(pack, provides))),
                     None => {
                         let l = nah_packs::harness_launch(catalog, &lock, name)?;
