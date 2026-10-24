@@ -337,7 +337,7 @@ impl ChatStreamState {
         ui.horizontal(|ui| {
             let inserting = typing;
             let steerable = self.steerable();
-            let hint = if let Some(takes) = self.sign_in_takes() {
+            let hint = if let Some(takes) = self.sign_in_box() {
                 // Its key is the key bar's to say (views say no keys).
                 format!("Paste {} here and send it: it goes to the sign-in", takes.waiting.expects.unwrap_or_default())
             } else if inserting && steerable {

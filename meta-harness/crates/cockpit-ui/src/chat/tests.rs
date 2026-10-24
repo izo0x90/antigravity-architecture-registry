@@ -328,7 +328,11 @@ fn signing_in_shows_the_servers_sign_in_and_a_paste_that_was_not_taken() {
     // Pasted: being checked, then refused while it still waits.
     chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::FinishSignIn { instance: InstanceId::new("i"), answer: "4/abc".into() }, &net, &ctx);
     chat.read();
-    assert_eq!(send(&chat), "Send the prompt", "not taken again while it's checked");
+    // Still the sign-in's box; a second paste isn't sent while one is checked.
+    chat.ui.input.text = "again".into();
+    let (mut note, ctx2) = (None, egui::Context::default());
+    run_action(&mut chat, "chat.send", None, &net, &ctx2, &mut note);
+    assert!(std::mem::take(&mut chat.asks).is_empty(), "nothing sent while it's checked");
     assert_eq!(net.bodies.lock().unwrap().last().map(|(_, body)| body["id"].clone()), Some(serde_json::json!(7)), "the paste names its sign-in");
     assert!(net.answer("POST /api/instances/i/auth/complete", 400, &serde_json::json!({ "error": "that isn't the address" })));
     tick(&mut chat, &ctx, &net);
@@ -428,4 +432,21 @@ fn while_a_sign_in_waits_the_typing_box_is_its_and_its_link_is_copied_by_a_key()
     run_action(&mut chat, "chat.send", None, &net, &ctx, &mut note);
     let asked = std::mem::take(&mut chat.asks);
     assert!(matches!(asked.as_slice(), [crate::nav::Ask::Agents { act: Act::Prompt { message, .. }, .. }] if message.text == "hello"), "{asked:?}");
+}
+
+#[test]
+fn what_was_typed_to_the_agent_is_set_aside_while_a_sign_in_has_the_box() {
+    let mut chat = conversation();
+    chat.ui.input.text = "a half-written message".into();
+    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(7, 300))) });
+    chat.tend_sign_in_box();
+    assert!(chat.ui.input.text.is_empty(), "the box is the sign-in's, empty for it");
+    // What's pasted for it is never saved as a draft.
+    chat.ui.input.text = "http://127.0.0.1:4000/?code=4/abc".into();
+    chat.report_unsent();
+    assert!(!chat.asks.iter().any(|a| matches!(a, crate::nav::Ask::Draft { .. })), "{:?}", chat.asks);
+    // Over: the message comes back, the paste goes.
+    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(None) });
+    chat.tend_sign_in_box();
+    assert_eq!(chat.ui.input.text, "a half-written message");
 }

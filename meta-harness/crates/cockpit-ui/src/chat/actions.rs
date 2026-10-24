@@ -215,7 +215,7 @@ impl ActionProvider for ChatStreamState {
             out.push(Action::new("harness.skills", format!("{}'s skills", s.display_name), "What the harness can be told to do by name", C::ListSkills).param(Param::Choice(choices)));
         }
         // While the box is a sign-in's, nothing typed goes to the agent.
-        let to_agent = self.sign_in_takes().is_none();
+        let to_agent = self.sign_in_box().is_none();
         if let Some(view) = view
             && to_agent
             && view.running_turn().is_some()
@@ -271,7 +271,7 @@ impl ActionProvider for ChatStreamState {
             }
         }
         // Typed in: sending it (to the sign-in, while one waits for it).
-        out.push(match self.sign_in_takes() {
+        out.push(match self.sign_in_box() {
             Some(_) => Action::new("chat.send", "Finish signing in", "What's typed goes to the sign-in waiting for it, not the agent", C::Send).on_typing(Button, "Finish signing in", Some(icon::KEY)),
             None => Action::new("chat.send", "Send the prompt", "To this slot's session (one opens if there's none); #name hands it what a tag is on", C::Send).on_typing(Button, "Send", Some(icon::PAPER_PLANE_RIGHT)),
         }.focused().importance(crate::actions::PRIMARY).typed(crate::keymap::Sent::Send));
@@ -457,9 +457,10 @@ impl ActionProvider for ChatStreamState {
             ChatCommand::Send => {
                 let message = self.ui.input.take();
                 let instance = self.active_instance();
-                match (self.sign_in_takes(), instance) {
-                    // The box is the sign-in's: what's typed is the answer, never a message.
-                    (Some(_), Some(instance)) if !message.text.trim().is_empty() => self.act(Act::FinishSignIn { instance, answer: message.text }),
+                match (self.sign_in_box(), instance) {
+                    // The box is the sign-in's: what's typed is the answer, never
+                    // a message (and not twice while one is checked).
+                    (Some(now), Some(instance)) if !message.text.trim().is_empty() && !now.pasted.as_ref().is_some_and(|p| p.finishing) => self.act(Act::FinishSignIn { instance, answer: message.text }),
                     (Some(_), _) => {}
                     (None, _) if !message.text.is_empty() => self.send_prompt(message),
                     (None, _) => {}

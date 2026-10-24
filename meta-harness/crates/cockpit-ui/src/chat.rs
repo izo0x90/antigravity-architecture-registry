@@ -88,6 +88,10 @@ pub struct ChatView {
     pub(crate) drawing: Vec<Spot>,
     /// Where its typing box is, while it's typed in.
     pub(crate) typing: Option<Rect>,
+    /// What was typed to the agent, set aside while the box is a sign-in's
+    /// (the box is empty for it; this comes back when it ends, and is what
+    /// stays saved meanwhile: a pasted code never is).
+    pub(crate) set_aside: Option<(SlotId, harness_contracts::Message)>,
 }
 
 impl Default for ChatView {
@@ -102,6 +106,7 @@ impl Default for ChatView {
             spots: Vec::new(),
             drawing: Vec::new(),
             typing: None,
+            set_aside: None,
         }
     }
 }
@@ -237,11 +242,32 @@ impl ChatStreamState {
         Some(SignInNow { ran_out: left_s == Some(0), left_s, pasted, waiting })
     }
 
-    /// The sign-in under way, when what's typed goes to it: it shows what to
-    /// paste back, its time isn't up and a paste isn't being checked. Then
-    /// the typing box is the sign-in's.
-    fn sign_in_takes(&self) -> Option<SignInNow> {
-        self.sign_in_now().filter(|n| n.waiting.expects.is_some() && n.waiting.url.is_some() && !n.ran_out && !n.pasted.as_ref().is_some_and(|p| p.finishing))
+    /// The sign-in under way, while the typing box is its: it shows its link
+    /// and what to paste back, and its time isn't up.
+    fn sign_in_box(&self) -> Option<SignInNow> {
+        self.sign_in_now().filter(|n| n.waiting.expects.is_some() && n.waiting.url.is_some() && !n.ran_out)
+    }
+
+    /// The box is the sign-in's: what was typed to the agent is set aside
+    /// (and comes back when it ends); what was typed for the sign-in goes.
+    fn tend_sign_in_box(&mut self) {
+        // Another slot shown meanwhile: its draft is as saved (nothing was
+        // reported while it was aside); it's that slot's to take back.
+        if self.ui.set_aside.as_ref().is_some_and(|(slot, _)| *slot != self.ui.slot) {
+            self.ui.set_aside = None;
+            // What's in the box was typed for the sign-in: not this slot's.
+            self.ui.input.take();
+        }
+        match (self.sign_in_box().is_some(), self.ui.set_aside.is_some()) {
+            (true, false) => self.ui.set_aside = Some((self.ui.slot.clone(), self.ui.input.take())),
+            (false, true) => {
+                self.ui.input.take();
+                if let Some((_, draft)) = self.ui.set_aside.take() {
+                    self.ui.input.restore(&draft);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn thread(&self) -> Option<Ref<'_, ThreadView>> {
