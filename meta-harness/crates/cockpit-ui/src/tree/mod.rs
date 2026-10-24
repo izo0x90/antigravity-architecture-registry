@@ -466,7 +466,7 @@ impl ActionProvider for TreeBuffer {
     fn actions(&self) -> Vec<Action> {
         let mut out = self.moves();
         if !self.search_filter.is_empty() {
-            out.push(Action::new("tree.clear_filter", "Clear the filter", "Shows the whole outline again, not only what matched", TreeCommand::ClearFilter).focused().importance(crate::actions::MINOR).header(crate::actions::Style::Button, "", Some(egui_phosphor::regular::X)));
+            out.push(Action::new("tree.clear_filter", "Clear the filter", "Shows the whole outline again, not only what matched", TreeCommand::ClearFilter).focused().importance(crate::actions::MINOR));
         }
         out
     }

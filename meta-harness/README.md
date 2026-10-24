@@ -690,30 +690,35 @@ keeps its own place.
 Every buffer is drawn the same way by what holds it (a panel, the quick
 look): its top line, then its content. The top line is the panel's
 number and its menus first: the leader's groups about where it is
-(Buffer, Panels, Session, Account, the view's own "Graph actions"…),
-each its name and its one key, shown when something in it can be used
-there; tapped, the panel is focused and the menu opens, as `Space` and
-its letter would. Then a place for its busy mark, its name and what it
-says about itself, which grow and wrap after the menus and never move
-them. Under it, while there's something, a row of what needs you now
-(Connect, a sign-in's Copy link and Finish, Dismiss, Retry, Stop, an
-answer's Settle), then its settings. The which-key menu shows one key
-per entry under a path ("Space › Account ›"), each part tapped to go
-back there; a long press on any button says what it does and its keys,
-as hover does. The bottom line does the same: its keys first, then a search or
-a note. What you're on shows its own buttons under
-it, and only while you're on it: a review point's Reply, Accept and
-Reopen; a job's Approve or Retry; a card's Go into and go-tos; a request's
-answers (a list to pick from for a question, Allow and Deny for an
-approval); Send under the box you're typing in. They float in a box under
+(Buffer, Panels, Session, the view's own "Graph actions"…), each its
+name and the keys that open it ("Graph actions  Space ,"), shown when
+something in it can be used there; tapped, the panel is focused and the
+menu opens, as `Space` and its keys would. The groups that act on the
+whole screen are under the top bar's Menus button, the leader's own
+menu. Then a place for its busy mark, its name and what it says about
+itself, which grow and wrap after the menus and never move them, then
+its settings. The which-key menu shows one key per entry under a path
+("Space › Account"), the same path the top bar's mode says; a tap on an
+entry runs it or goes into it, a tap on a part of the path goes back
+there. A long press on any button, a finger held still, says what it
+does and its keys, as hover does. The bottom line does the same: its
+keys first, then a search or a note. What needs you is on what it's
+about: a chat's banners (signing in, an error, no session yet) have
+their buttons under them (Sign in, Copy link, Finish, Put away, Retry),
+an answer's Settle sits under the latest said, the graph's size note
+offers the levels that fit under it. What you're on shows its own
+buttons under it, and only while you're on it: a review point's Reply,
+Accept and Reopen; a job's Approve or Retry; a card's Go into and
+go-tos; a request's answers (a list to pick from for a question, Allow
+and Deny for an approval); Send under the box you're typing in. They float in a box under
 what you're on (over what's below it), or, switched with `Space l b` (or
 its button in the top bar; `[panels] item_buttons` sets where they start),
 sit in a row of their own along the bottom of each panel and the quick
 look, the buttons first and what they act on after them: kept whether
 there are any or not, so nothing is covered and nothing moves. Every button is an
 action: it shows its key beside it (on hover when there's no room) and
-runs the way its key does. The key bar, the action list (`:` and `?`), the leader menu,
-the palette and every button read one list of what can run where you are,
+runs the way its key does. The key bar, the action list (`:` and `?`), the leader menu
+and every button read one list of what can run where you are,
 so a key is shown wherever it runs and runs what it shows. A panel that
 isn't focused shows its buttons without keys (they run it once it is).
 
@@ -729,7 +734,7 @@ graph included:
   around them and pan as they move;
 - a click or tap on an item puts the cursor there; a double click or tap
   opens it (Enter; on the graph's empty space, the whole tree fits); a
-  long press lists what can be done with it (the palette; on the graph,
+  long press lists what can be done with it (the action list; on the graph,
   it selects the card and its controls show under it);
 - after moving by hand, the next key starts from what's on the screen.
 

@@ -753,7 +753,7 @@ impl ActionProvider for TerminalBuffer {
         out.push(Action::new("terminal.pick", "Show another terminal here", "Every terminal the server runs: pick one for this panel", C::Pick).param(crate::actions::Param::Choice(choices)).focused().importance(MINOR));
         out.push(Action::new("terminal.new", "Open a new terminal here", "Your shell, in the project's folder, shown in this panel", C::New).focused().importance(MINOR));
         if ended {
-            out.push(Action::new("terminal.restart", "Start its shell again", "A new start of your shell, in the same folder (what the last one showed goes)", C::Restart).focused().importance(PRIMARY).header(crate::actions::Style::Button, "Start again", Some(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)));
+            out.push(Action::new("terminal.restart", "Start its shell again", "A new start of your shell, in the same folder (what the last one showed goes)", C::Restart).focused().importance(PRIMARY).on_item(crate::actions::Style::Button, "Start again", Some(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)));
         }
         if has {
             out.push(Action::new("terminal.close", "Close the terminal (its shell ends)", "Its shell and what runs in it end; the terminal is forgotten", C::Close).focused().importance(MINOR));

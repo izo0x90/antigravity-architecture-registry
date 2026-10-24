@@ -3,6 +3,9 @@
 use super::*;
 use crate::hosted::{Status, Tone};
 
+/// The banners' name as a place (`here`).
+pub(crate) const BANNERS: &str = "banners";
+
 pub(super) fn mcp_label(server: &McpServer) -> String {
     match &server.transport {
         McpTransport::Http { url, .. } | McpTransport::Sse { url, .. } => format!("{} — {url}", server.name),
@@ -40,7 +43,7 @@ impl ChatStreamState {
         let ctx = ui.ctx().clone();
 
         ui.vertical(|ui| {
-            self.render_banners(ui);
+            let banners = self.render_banners(ui);
             self.render_plan(ui);
 
             let scroll_height = (ui.available_height() - 105.0).max(50.0);
@@ -61,6 +64,9 @@ impl ChatStreamState {
                 ctx.request_repaint();
             }
             self.ui.spots = std::mem::take(&mut self.ui.drawing).into_iter().filter(|s| s.rect.intersects(stream.inner_rect)).collect();
+            // The banners: where you are while nothing else waits (their
+            // ways out are under them).
+            self.ui.banners = banners;
             feedback.register_inspectable(ui, &format!("{host}:chat:stream"), stream.inner_rect);
             ui.separator();
 
@@ -72,9 +78,12 @@ impl ChatStreamState {
         });
     }
 
-    pub(super) fn render_banners(&mut self, ui: &mut egui::Ui) {
-        // What it says; its ways out (Dismiss, Retry, signing in) are its
-        // actions, on its top line.
+    /// The banners: what the chat says to you now (a notice, an error, a
+    /// sign-in, no session yet). Their ways out (Put away, Retry, the
+    /// sign-in's steps, New session) are its actions, under them while
+    /// they're where you are. Where they were drawn.
+    pub(super) fn render_banners(&mut self, ui: &mut egui::Ui) -> Option<Rect> {
+        let top = ui.cursor().top();
         let (notice, now) = (self.agents().notice().cloned(), self.sign_in_now());
         if let Some(notice) = notice {
             banner(ui, colors().info_bg, colors().focus, |ui| {
@@ -95,8 +104,16 @@ impl ChatStreamState {
                 ui.label(RichText::new(format!("Not taken: {why}")).size(crate::theme::look().text_label).color(colors().text));
             });
         }
-        let starting = instance.as_ref().is_some_and(|s| self.agents().signing_in(&s.instance_id));
-        if (self.needs_login() || now.is_some() || starting || self.sign_in_end_to_say().is_some())
+        if self.thread().is_none() {
+            let said = match &instance {
+                Some(s) => format!("No session yet with {}: type below to start one.", s.display_name),
+                None => "Waiting for the server…".to_owned(),
+            };
+            banner(ui, colors().info_bg, colors().focus, |ui| {
+                ui.label(RichText::new(said).size(crate::theme::look().text_label).color(colors().text));
+            });
+        }
+        if self.signing_in_said()
             && let Some(snapshot) = instance
         {
             let look = crate::theme::look();
@@ -140,6 +157,8 @@ impl ChatStreamState {
                 }
             });
         }
+        let bottom = ui.cursor().top();
+        (bottom > top).then(|| Rect::from_min_max(Pos2::new(ui.min_rect().left(), top), Pos2::new(ui.max_rect().right(), bottom)))
     }
 
     /// How its last sign-in ended, when that's worth saying (it ran out or
@@ -151,6 +170,24 @@ impl ChatStreamState {
         }
         let ended = self.agents().sign_in_ended(&instance).cloned()?;
         matches!(ended.how, harness_contracts::SignInEnd::RanOut | harness_contracts::SignInEnd::Failed { .. }).then_some(ended)
+    }
+
+    /// The sign-in has a banner: one is needed, under way, starting, or
+    /// its end is worth saying.
+    pub(super) fn signing_in_said(&self) -> bool {
+        let starting = self.instance().is_some_and(|s| self.agents().signing_in(&s.instance_id));
+        self.needs_login() || self.sign_in_now().is_some() || starting || self.sign_in_end_to_say().is_some()
+    }
+
+    /// A banner shows (what `render_banners` draws).
+    pub(super) fn banners_shown(&self) -> bool {
+        let refused = self.sign_in_now().and_then(|n| n.pasted).is_some_and(|p| p.refused.is_some());
+        self.agents().notice().is_some() || self.error().is_some() || refused || self.thread().is_none() || (self.signing_in_said() && self.instance().is_some())
+    }
+
+    /// The banners are where you are (their ways out are under them).
+    pub(super) fn on_banners(&self) -> bool {
+        crate::hosted::Hosted::here(self).as_deref() == Some(BANNERS)
     }
 
     /// The harness offers sign-in and isn't signed in (a session refused
@@ -174,19 +211,8 @@ impl ChatStreamState {
 
     pub(super) fn render_stream(&mut self, ui: &mut egui::Ui) {
         let view = self.thread().map(|t| t.clone());
-        let Some(view) = view else {
-            let named = self.instance().map(|s| s.display_name.clone());
-            ui.add_space(crate::theme::look().space_xxl);
-            ui.vertical_centered(|ui| {
-                ui.label(RichText::new("No session yet").strong().size(crate::theme::look().text_heading).color(colors().accent));
-                let hint = match named {
-                    Some(name) => format!("{name} • type below or Connect to start a session"),
-                    None => "Waiting for the server…".into(),
-                };
-                ui.label(RichText::new(hint).size(crate::theme::look().text_label).color(colors().muted));
-            });
-            return;
-        };
+        // No session yet: its banner says so.
+        let Some(view) = view else { return };
         let mut index = 0;
         for turn in &view.turns {
             ui.horizontal(|ui| {
@@ -379,7 +405,14 @@ impl crate::hosted::Hosted for ChatStreamState {
 
     /// Following the latest, you're at what waits on you: its request.
     fn here(&self) -> Option<String> {
-        self.ui.cursor.is_none().then(|| self.pending_item()).flatten().map(|i| i.to_string())
+        if self.ui.cursor.is_some() {
+            return None;
+        }
+        self.pending_item().map(|i| i.to_string()).or_else(|| self.banners_shown().then(|| BANNERS.to_owned()))
+    }
+
+    fn drawn_at(&self, place: &str) -> Option<Rect> {
+        self.ui.banners.filter(|_| place == BANNERS)
     }
 
     fn busy(&self) -> Option<String> {

@@ -962,7 +962,7 @@ impl ActionProvider for CodeViewerState {
             out.push(Action::new("code.next_def", "Next definition", "The next function, type or module in this file", CodeCommand::Def { forward: true }).focused().group(Group::Navigate));
             out.push(Action::new("code.prev_def", "Previous definition", "The function, type or module before, in this file", CodeCommand::Def { forward: false }).focused().group(Group::Navigate));
         }
-        out.push(Action::new("code.deleted", "Show deleted lines in place", "Lines the comparison removed, struck through where they were", CodeCommand::Deleted).focused().param(Param::Toggle { on: self.show_deleted }).header(Style::Setting, "Deleted lines", None).group(Group::View).importance(MINOR));
+        out.push(Action::new("code.deleted", "Show deleted lines in place", "Lines the comparison removed, struck through where they were", CodeCommand::Deleted).focused().param(Param::Toggle { on: self.show_deleted }).setting("Deleted lines", None).group(Group::View).importance(MINOR));
         out.push(Action::new("code.reload", "Load the file again", "Reads the file from disk again (it changed outside)", CodeCommand::Reload).focused().group(Group::View).importance(MINOR));
         out.push(Action::new("code.copy", "Copy the file", "The whole file, to the clipboard", CodeCommand::Copy).focused().importance(MINOR));
         // Its file, read into the index again (from anywhere).
@@ -1045,10 +1045,10 @@ impl crate::hosted::Hosted for CodeViewerState {
         true
     }
 
-    /// Out of date with the index: reading it again, on its top line.
+    /// Out of date with the index: reading it again, under where you are.
     fn placed(&self) -> Vec<(String, crate::actions::Control)> {
         if self.out_of_date && !self.lines.is_empty() {
-            vec![("index.file".to_owned(), crate::actions::Control::new(crate::actions::At::Header, Style::Button, "Re-read it", None))]
+            vec![("index.file".to_owned(), crate::actions::Control::new(crate::actions::At::Item, Style::Button, "Re-read it", None))]
         } else {
             Vec::new()
         }

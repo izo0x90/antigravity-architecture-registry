@@ -27,33 +27,19 @@ impl CockpitApp {
         // A card over a panel: what the other buffers say about what it shows.
         let says = if here.at == Host::Look { self.others_say(kind) } else { Vec::new() };
         let shown = self.shown_at(here);
-        let groups = self.groups_of(&shown, here);
-        // A panel not focused says no keys on its controls.
-        let mine: Vec<Bound> = shown
-            .into_iter()
-            .filter(|b| b.layer == Layer::Panel)
-            .map(|mut b| {
-                if !is_focused {
-                    (b.keys, b.leader) = (Vec::new(), None);
-                }
-                b
-            })
-            .collect();
+        // A panel not focused says no keys (they don't run it until it is).
+        let groups: Vec<_> = self.groups(&shown, here).into_iter().map(|g| if is_focused { g } else { g.unkeyed() }).collect();
+        let mine: Vec<Bound> = shown.into_iter().filter(|b| b.layer == Layer::Panel).map(|b| if is_focused { b } else { b.unkeyed() }).collect();
         let buttons = self.item_buttons_now();
         let tagged = self.notes_named(here);
         let number = match here.at {
             Host::Panel(panel) => Some(panel),
             Host::Look => None,
         };
-        let top = crate::hosted::TopLine { number, focused: is_focused, groups: &groups, keyed: is_focused };
+        let top = crate::hosted::TopLine { number, focused: is_focused, groups: &groups };
         let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, at: here.at, note: &mut self.note, asked: &mut self.asked };
-        // A group tapped: its panel focused, its menu open.
-        if let Some(key) = crate::hosted::header(ui, self.desk.view(kind), &top, &mine, &tagged, &mut cx) {
-            if let Some(panel) = number {
-                self.desk.panels.focus(panel);
-            }
-            self.open_leader_at(vec![key]);
-        }
+        let line = crate::hosted::header(ui, self.desk.view(kind), &top, &mine, &tagged, &mut cx);
+        self.feedback.register_inspectable(ui, &format!("{}:top_line", here.at.name()), line);
         ui.separator();
         // The buttons of what you're on in a bar: their row kept along the
         // bottom (drawn there once everything is laid out), the buffer above.
@@ -75,6 +61,7 @@ impl CockpitApp {
                 egui::Rect::from_min_max(whole.min, egui::pos2(whole.right(), bar.top()))
             }
         };
+        self.contents.push((here.at, content));
         // It has the keyboard while typing is in its host (and no
         // developer window has it).
         let typing = self.input_mode == (InputMode::Insert { at: here.at }) && !self.feedback.is_modal_open && !self.feedback.is_issues_window_open && !self.feedback.is_inspecting;
@@ -151,12 +138,13 @@ impl CockpitApp {
             _ => {
                 let view = self.desk.view(kind);
                 let here = hosted.here().or_else(|| view.cursor_key());
-                (At::Item, view.spots().into_iter().find(|s| Some(&s.key) == here.as_ref()).map(|s| s.rect))
+                let spot = |key: &str| view.spots().into_iter().find(|s| s.key == key).map(|s| s.rect).or_else(|| hosted.drawn_at(key));
+                (At::Item, here.as_deref().and_then(spot))
             }
         };
         let anchor = anchor.map(|r| r.intersect(bounds)).filter(|r| r.is_positive());
-        let situation = self.situation();
-        let here: Vec<Bound> = self.bound_actions().into_iter().filter(|b| b.layer == Layer::On && b.action.at() == Some(at) && b.action.when.holds(&situation)).collect();
+        let where_ = self.here();
+        let here: Vec<Bound> = self.bound_actions().into_iter().filter(|b| b.layer == Layer::On && b.action.at() == Some(at) && self.applies(b, where_)).collect();
         if here.is_empty() {
             return;
         }
@@ -259,22 +247,28 @@ impl CockpitApp {
             Gesture::LongPress(p) | Gesture::Swipe { from: p, .. } => p,
         };
         let Some((panel, kind)) = self.view_at(ctx, at) else { return };
+        // On a view's content, or a note's mark beside it (on its top line, a
+        // finger held on a button says what it does, and that's all).
+        let on_mark = self.note_marks.iter().any(|(_, mark, _)| mark.contains(at));
+        if !on_mark && !self.contents.iter().any(|(_, content)| content.contains(at)) {
+            return;
+        }
         if self.quick_look.is_none() && self.desk.panels.focused() != panel {
             self.desk.panels.focus(panel);
             // Where you are moved: the list is gathered again.
-            self.frame_actions.borrow_mut().take();
+            self.forget_frame();
         }
         let own = self.desk.view(kind).own_pointer();
         match gesture {
             Gesture::Swipe { way, .. } => {
                 let bound = self.bound_actions();
-                let situation = self.situation();
+                let here = self.here();
                 // Where the view moves sideways, the finger moved it.
                 let sideways = [Move::Motion(Motion::HalfLeft), Move::Motion(Motion::HalfRight)].map(|m| m.id());
-                if bound.iter().any(|b| b.origin == Origin::View(kind) && sideways.contains(&b.action.id.as_str()) && b.action.when.holds(&situation)) {
+                if bound.iter().any(|b| b.origin == Origin::View(kind) && sideways.contains(&b.action.id.as_str()) && self.applies(b, here)) {
                     return;
                 }
-                let runs = |b: &&Bound| b.runs_on(way.name()) && b.action.when.holds(&situation);
+                let runs = |b: &&Bound| b.runs_on(way.name()) && self.applies(b, here);
                 // The closest one to where you are.
                 let found = bound.iter().filter(runs).min_by_key(|b| b.layer);
                 if let Some(b) = found {

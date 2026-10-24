@@ -65,6 +65,8 @@ pub(crate) enum TagEditing {
 /// view shares (moves, hints, search, folds, marks, the jump list, go-tos).
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ShellCommand {
+    /// A leader group's menu, opened (its key: a group's button, or picked).
+    Menu,
     FocusPanel(usize),
     CyclePanel(i32),
     ShowBuffer(BufferKind),
@@ -203,9 +205,15 @@ const NOTE_SECONDS: f64 = 4.0;
 /// Largest count a key takes (`999j`).
 const MAX_COUNT: u32 = 999;
 
-/// Which actions keys were given to: each one's view, name and aliases, in
-/// order, and the focused view (its actions get the view menu's letters).
-type KeyedActions = (BufferKind, Vec<(Origin, String, Vec<String>)>);
+/// Which actions keys were given to, and where: each one's view, name and
+/// aliases, in order (the view there gets the view menu's letters).
+type KeyedActions = (Here, Vec<(Origin, String, Vec<String>)>);
+
+/// How many places' keys are kept (the hosts on screen, and a few more).
+const KEPT_KEYS: usize = 8;
+
+/// The shell's action that opens a leader group's menu.
+const MENU: &str = "menu.open";
 
 /// Where a list of actions is gathered for: a view, and what holds it (a
 /// panel, or the quick look).
@@ -234,14 +242,17 @@ pub struct CockpitApp {
     confirming_shutdown: Option<String>,
     /// The shell's own state, kept on home.
     shell: desks::ShellKeeper,
-    /// The keys as last given out where each kind of view is, and the
-    /// actions they were given to (by view, name and aliases, in order):
-    /// keys are given out again only when those change. Labels and commands
-    /// are always the current ones.
+    /// The keys as last given out where each view is shown (a panel, the
+    /// quick look), and the actions they were given to (by view, name and
+    /// aliases, in order): keys are given out again only when those change.
+    /// Labels and commands are always the current ones.
     bound_cache: std::cell::RefCell<Vec<(KeyedActions, Vec<Keys>)>>,
     /// Within a frame, the actions as gathered once (dropped when one runs;
     /// none between frames, so the next one gathers them afresh).
     frame_actions: std::cell::RefCell<Option<Vec<Bound>>>,
+    /// Within a frame, each view's situation as worked out once (dropped
+    /// with the actions).
+    frame_situations: std::cell::RefCell<Vec<(BufferKind, std::rc::Rc<crate::actions::Situation>)>>,
     /// Drawing a frame now.
     in_frame: std::cell::Cell<bool>,
     /// How many times the actions were gathered (counted for the tests).
@@ -308,7 +319,13 @@ pub struct CockpitApp {
     /// the UI config says), and this frame's row kept for them by each host
     /// (the quick look, or a panel by its number) while they're in a bar.
     pub(crate) item_buttons: Option<crate::hosted::ItemButtons>,
+    /// Each host's content this frame (under its top line): where its
+    /// view takes gestures.
+    contents: Vec<(crate::keymap::Host, egui::Rect)>,
     item_bars: Vec<(crate::keymap::Host, egui::Rect)>,
+    /// How wide the top bar's left was last frame, its mode counted at its
+    /// shortest (its right gets the rest).
+    top_bar_needs: f32,
     /// The marks in the gutter of notes as drawn (each host's), with what
     /// they say.
     note_marks: Vec<(crate::keymap::Host, egui::Rect, String)>,
@@ -345,6 +362,7 @@ impl CockpitApp {
             shell: Default::default(),
             bound_cache: Default::default(),
             frame_actions: Default::default(),
+            frame_situations: Default::default(),
             in_frame: Default::default(),
             #[cfg(test)]
             gathered: Default::default(),
@@ -381,6 +399,8 @@ impl CockpitApp {
             panel_rects: Vec::new(),
             item_buttons: None,
             item_bars: Vec::new(),
+            top_bar_needs: 0.0,
+            contents: Vec::new(),
             note_marks: Vec::new(),
             noted: notes::Noted::default(),
             palette: crate::palette::Palette::default(),
@@ -519,6 +539,13 @@ impl eframe::App for CockpitApp {
 }
 
 impl CockpitApp {
+    /// Where you are moved, or something ran: what was gathered for the
+    /// frame (the actions, each view's situation) is gathered again.
+    pub(crate) fn forget_frame(&self) {
+        self.frame_actions.borrow_mut().take();
+        self.frame_situations.borrow_mut().clear();
+    }
+
     /// Before the first frame: the fonts it draws in (egui's own and the
     /// icons, until the config names font packs).
     pub fn start_fonts(&mut self, ctx: &egui::Context) {
@@ -527,12 +554,12 @@ impl CockpitApp {
 
     /// One UI frame.
     pub fn frame(&mut self, ctx: &egui::Context) {
-        self.frame_actions.borrow_mut().take();
+        self.forget_frame();
         self.serve_calls(ctx);
         self.in_frame.set(true);
         self.draw_frame(ctx);
         self.in_frame.set(false);
-        self.frame_actions.borrow_mut().take();
+        self.forget_frame();
         let status = self.desk.remote.waiting().then(|| self.remote_status());
         self.desk.remote.end_frame(ctx, status);
         self.desk.remote.flush();
@@ -546,6 +573,7 @@ impl CockpitApp {
         self.update_lifecycle(ctx);
         self.feedback.begin_frame();
         self.item_bars.clear();
+        self.contents.clear();
 
         egui::TopBottomPanel::top("cockpit_top_panel").show(ctx, |ui| {
             self.render_top_bar(ui);

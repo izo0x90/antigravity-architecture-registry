@@ -290,11 +290,10 @@ pub(crate) fn waiting(id: u64, left_s: i64) -> harness_contracts::SignInWaiting 
     }
 }
 
-/// The chat's buttons on its top line, by id.
-/// What its top lines offer: its settings, and its notice row (what needs
-/// you now).
-fn on_top(chat: &Fed) -> Vec<String> {
-    chat.actions().into_iter().filter(|a| a.control.as_ref().is_some_and(|c| matches!(c.at, crate::actions::At::Header | crate::actions::At::Notice))).map(|a| a.id).collect()
+/// What's under its banners (their ways out, while they're where you
+/// are), by id.
+fn on_banners(chat: &Fed) -> Vec<String> {
+    chat.actions().into_iter().filter(|a| a.at() == Some(crate::actions::At::Item)).map(|a| a.id).collect()
 }
 
 /// The server's answers reach the agents (as each frame).
@@ -310,19 +309,19 @@ fn signing_in_shows_the_servers_sign_in_and_a_paste_that_was_not_taken() {
     chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(None) });
     let status: Vec<(String, Option<String>)> = crate::hosted::Hosted::status(&chat.chat).into_iter().map(|s| (s.text, s.detail)).collect();
     assert!(status.iter().any(|(_, detail)| detail.as_deref().is_some_and(|d| d.contains("/work/p/.nah/harness/i"))), "where its home is: {status:?}");
-    assert!(on_top(&chat).contains(&"auth.login".to_owned()), "signed out: Sign in");
+    assert!(on_banners(&chat).contains(&"auth.login".to_owned()), "signed out: Sign in");
 
     // Asked for: not again until it's answered.
     chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::SignIn { instance: InstanceId::new("i"), method: "oauth-personal".into() }, &net, &ctx);
     chat.read();
-    assert!(!on_top(&chat).contains(&"auth.login".to_owned()), "one sign-in at a time");
+    assert!(!on_banners(&chat).contains(&"auth.login".to_owned()), "one sign-in at a time");
     assert!(chat.agents().signing_in(&InstanceId::new("i")), "said while it starts");
 
     // The server's sign-in under way (any device sees it): open it, paste back.
     chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(7, 300))) });
     assert!(net.answer("POST /api/instances/i/auth/oauth-personal", 200, &serde_json::json!(waiting(7, 300))));
     tick(&mut chat, &ctx, &net);
-    let top = on_top(&chat);
+    let top = on_banners(&chat);
     assert!(top.contains(&"auth.page".to_owned()) && top.contains(&"auth.copy".to_owned()) && top.contains(&"auth.cancel".to_owned()), "{top:?}");
 
     // Pasted: being checked, then refused while it still waits.
@@ -347,27 +346,27 @@ fn signing_in_shows_the_servers_sign_in_and_a_paste_that_was_not_taken() {
     assert!(net.answer("POST /api/instances/i/auth/complete", 502, &serde_json::json!({ "error": "the sign-in failed: bad code" })));
     tick(&mut chat, &ctx, &net);
     assert!(chat.error().is_some_and(|e| e.contains("bad code")), "{:?}", chat.error());
-    assert!(on_top(&chat).contains(&"auth.login".to_owned()), "sign in again");
+    assert!(on_banners(&chat).contains(&"auth.login".to_owned()), "sign in again");
 }
 
 #[test]
 fn a_sign_in_that_stopped_waiting_offers_a_new_one_and_says_how_it_ended() {
     let mut chat = conversation();
     chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(3, -1))) });
-    let top = on_top(&chat);
+    let top = on_banners(&chat);
     assert!(top.contains(&"auth.login".to_owned()) && !top.contains(&"auth.complete".to_owned()) && !top.contains(&"auth.page".to_owned()), "{top:?}");
     // The server ends it, saying how: every device reads the same.
     let mut over = signed_out_harness(None);
     over.auth.ended = Some(Box::new(harness_contracts::SignInEnded { id: 3, how: harness_contracts::SignInEnd::RanOut }));
     chat.apply(ClientEvent::InstanceUpdated { snapshot: over });
     assert_eq!(chat.agents().sign_in_ended(&InstanceId::new("i")).map(|e| e.how.clone()), Some(harness_contracts::SignInEnd::RanOut));
-    assert!(on_top(&chat).contains(&"auth.login".to_owned()));
+    assert!(on_banners(&chat).contains(&"auth.login".to_owned()));
     // Said whatever the status (signed in, switching account, say), until put away.
     let mut unknown = signed_out_harness(None);
     unknown.auth.status = harness_contracts::AuthStatus::Unknown;
     unknown.auth.ended = Some(Box::new(harness_contracts::SignInEnded { id: 5, how: harness_contracts::SignInEnd::Failed { reason: "bad code".into() } }));
     chat.apply(ClientEvent::InstanceUpdated { snapshot: unknown.clone() });
-    let top = on_top(&chat);
+    let top = on_banners(&chat);
     assert!(chat.sign_in_end_to_say().is_some() && top.contains(&"auth.end.dismiss".to_owned()) && top.contains(&"auth.login".to_owned()), "{top:?}");
     // Signed in since (another way): nothing to say.
     let mut since = unknown.clone();
@@ -378,5 +377,5 @@ fn a_sign_in_that_stopped_waiting_offers_a_new_one_and_says_how_it_ended() {
     let (ctx, net) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"));
     chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::PutSignInEndAway { id: 5 }, &net, &ctx);
     chat.read();
-    assert!(chat.sign_in_end_to_say().is_none() && !on_top(&chat).contains(&"auth.end.dismiss".to_owned()));
+    assert!(chat.sign_in_end_to_say().is_none() && !on_banners(&chat).contains(&"auth.end.dismiss".to_owned()));
 }

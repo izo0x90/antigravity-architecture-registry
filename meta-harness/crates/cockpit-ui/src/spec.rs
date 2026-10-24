@@ -904,8 +904,9 @@ impl ActionProvider for SpecState {
             let mut out = crate::nav::list_moves();
             if !self.floating {
                 out.push(
-                    f("spec.pin", if self.pinned { "Unpin (follow what you're on)" } else { "Pin this card" }, "Pinned, it stays on this card while you move elsewhere", S::Pin)
-                        
+                    f("spec.pin", "Pinned", "Pinned, it stays on this card while you move elsewhere; else it follows what you're on", S::Pin)
+                        .param(Param::Toggle { on: self.pinned })
+                        .setting("Pinned", Some(egui_phosphor::regular::PUSH_PIN))
                         .group(Group::View)
                         .importance(MINOR),
                 );
@@ -919,8 +920,9 @@ impl ActionProvider for SpecState {
         ]);
         if !self.floating {
             out.push(
-                f("spec.pin", if self.pinned { "Unpin (follow what you're on)" } else { "Pin this component" }, "Pinned, it stays on this card while you move elsewhere", S::Pin)
-                    
+                f("spec.pin", "Pinned", "Pinned, it stays on this card while you move elsewhere; else it follows what you're on", S::Pin)
+                    .param(Param::Toggle { on: self.pinned })
+                    .setting("Pinned", Some(egui_phosphor::regular::PUSH_PIN))
                     .group(Group::View)
                     .importance(MINOR),
             );
@@ -930,7 +932,6 @@ impl ActionProvider for SpecState {
         if self.source.plan().is_some() {
             out.push(
                 f("spec.mark_reviewed", "Mark the plan reviewed (later changes are highlighted)", "From now on, what changes in the plan is marked as new", S::MarkReviewed)
-                    
                     .importance(MINOR),
             );
             // Always there: with no open points it says so.
@@ -941,12 +942,12 @@ impl ActionProvider for SpecState {
         out.push(
             f("spec.section", "Go to a section", "Pick one of the card's parts", S::Section)
                 .param(Param::Choice(Section::ALL.iter().enumerate().map(|(i, s)| Choice::new(i.to_string(), s.title()).current(*s == self.current)).collect()))
-                .header(Style::Setting, "Section", None)
+                .setting("Section", None)
                 .group(Group::Navigate)
                 .importance(MINOR),
         );
         if self.out_of_date && self.detail.as_ref().is_some_and(|d| d.code.is_some()) {
-            out.push(f("spec.reread", "Read this code again (it changed since)", "The index reads its file again, so the card is up to date", S::Reread).notice("Re-read", None).importance(MINOR));
+            out.push(f("spec.reread", "Read this code again (it changed since)", "The index reads its file again, so the card is up to date", S::Reread).on_item(crate::actions::Style::Button, "Re-read", None).importance(MINOR));
         }
         out
     }

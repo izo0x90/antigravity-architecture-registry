@@ -209,7 +209,7 @@ fn what_comes_and_goes_on_the_top_and_bottom_lines_never_moves_a_button() {
     app.desk.graph_mut().select(Some("rust:a::step".into()));
     frame(&ctx, &mut app, vec![]);
     let before = frame(&ctx, &mut app, vec![]);
-    let (group, key) = (drawn_at(&before, "Buffer  b").expect("a group's button"), drawn_at(&before, "f Jump to").expect("a key on the bar"));
+    let (group, key) = (drawn_at(&before, "Buffer  Space b").expect("a group's button"), drawn_at(&before, "f Jump to").expect("a key on the bar"));
     let reread = drawn_at(&before, "Space I r").expect("the top bar's re-read button");
     // Something waits on you: the bell counts it, and the tray an update.
     for (id, kind) in [("q:1", harness_contracts::NotificationKind::Question), ("turn:1", harness_contracts::NotificationKind::TurnFinished)] {
@@ -223,7 +223,7 @@ fn what_comes_and_goes_on_the_top_and_bottom_lines_never_moves_a_button() {
     frame(&ctx, &mut app, vec![]);
     let after = frame(&ctx, &mut app, vec![]);
     assert!(texts(&after).contains("a long thing to say") && texts(&after).contains("a note on the bottom line"), "both said");
-    assert_eq!(drawn_at(&after, "Buffer  b"), Some(group), "the top line's buttons stay put");
+    assert_eq!(drawn_at(&after, "Buffer  Space b"), Some(group), "the top line's buttons stay put");
     assert_eq!(drawn_at(&after, "f Jump to"), Some(key), "the bottom line's keys stay put");
     assert_eq!(drawn_at(&after, "Space I r"), Some(reread), "the top bar's buttons stay put when the bell counts");
 }

@@ -87,7 +87,7 @@ fn a_card_unpinned_catches_up_with_what_the_user_is_on() {
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.desk.spec().target.as_ref().map(ComponentId::as_str), Some("rust:a::step"), "pinned: it stays");
     focus(&ctx, &mut app, BufferKind::Spec);
-    from_outside(&ctx, &mut app, r#"{"op":"run","id":"spec.pin"}"#).unwrap();
+    from_outside(&ctx, &mut app, r#"{"op":"run","id":"spec.pin","value":"false"}"#).unwrap();
     assert!(!app.desk.spec().pinned);
     assert_eq!(app.desk.spec().target.as_ref().map(ComponentId::as_str), Some("rust:a::save"), "unpinned: on what the user is on");
 }

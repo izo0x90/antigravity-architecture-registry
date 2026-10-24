@@ -102,7 +102,7 @@ fn the_quick_looks_own_actions_are_offered_with_their_keys() {
     let bar: Vec<String> = app.bar_keys(&bound).iter().map(|b| b.action.id.clone()).collect();
     assert!(bar.contains(&"quicklook.to_panel".to_owned()) && bar.contains(&"quicklook.toggle".to_owned()), "{bar:?}");
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("Quick look  q"), "its group, on its top line, with its key: {text}");
+    assert!(text.contains("Quick look  Space q"), "its group, on its top line, with the keys that open it: {text}");
     let text = everything(&ctx, &mut app, "quick");
     assert!(text.contains("Quick look") && text.contains("Close the quick look"), "{text}");
 }

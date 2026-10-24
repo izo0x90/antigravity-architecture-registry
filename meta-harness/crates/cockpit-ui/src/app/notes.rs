@@ -334,7 +334,7 @@ impl CockpitApp {
                 // (The actions now offered are made again: they're of the mark.)
                 let one = (ids.len() == 1).then(|| ids[0].to_string());
                 self.desk.discussions_here = ids;
-                self.frame_actions.borrow_mut().take();
+                self.forget_frame();
                 self.run_by_id("discuss.open", one, ui.ctx());
             } else if response.hovered() {
                 response.on_hover_text(said.clone());

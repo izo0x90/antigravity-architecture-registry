@@ -418,22 +418,27 @@ impl ActionProvider for DiscussionView {
             out.push(f("discussion.cancel", "Stop writing", "What's written stays in the box", Command::Cancel).importance(PRIMARY).on_typing(Style::Button, "Stop", None));
         }
         let open = d.status != DiscussionStatus::Settled;
+        // Settling and reopening: under the latest said, while you're on it.
+        let on_latest = self.cursor > 0 && self.cursor + 1 == self.stops();
+        let under = |action: Action, caption: &str, icon: &'static str| if on_latest { action.on_item(Style::Button, caption, Some(icon)) } else { action };
         out.push(f("discussion.reply", "Reply", "Say something in it (it stays where it stands)", Command::Reply).importance(if open { PRIMARY } else { MINOR }).when(if open { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
         // Answered, or asked of you (once you've said your answer).
         let asks_you = d.asked == harness_contracts::USER && d.status == DiscussionStatus::Open;
         let settles = d.status == DiscussionStatus::Answered || asks_you;
-        out.push(
+        out.push(under(
             f("discussion.settle", if asks_you { "Settle it (your answer's said)" } else { "Settle it (accept its answer)" }, "Settled: it holds nothing any more (a plan's approval)", Command::Settle)
                 .importance(if settles { PRIMARY } else { MINOR })
-                .when(if settles { crate::actions::When::Always } else { crate::actions::When::Unavailable })
-                .notice("Settle", Some(icon::CHECK)),
-        );
-        out.push(
+                .when(if settles { crate::actions::When::Always } else { crate::actions::When::Unavailable }),
+            "Settle",
+            icon::CHECK,
+        ));
+        out.push(under(
             f("discussion.reopen", "Reopen it (say why)", "Open again: the agent asked answers again", Command::Reopen)
                 .importance(SECONDARY)
-                .when(if d.status != DiscussionStatus::Open { crate::actions::When::Always } else { crate::actions::When::Unavailable })
-                .notice("Reopen", Some(icon::ARROW_COUNTER_CLOCKWISE)),
-        );
+                .when(if d.status != DiscussionStatus::Open { crate::actions::When::Always } else { crate::actions::When::Unavailable }),
+            "Reopen",
+            icon::ARROW_COUNTER_CLOCKWISE,
+        ));
         // (A change request asks an agent slot: its answer names what it changed.)
         let question = d.kind == DiscussionKind::Question && open && d.asked != harness_contracts::USER;
         out.push(f("discussion.change", "Make it a change request", "Its answer has to name what changed (answered: say why it's open again)", Command::Change).importance(MINOR).when(if question { crate::actions::When::Always } else { crate::actions::When::Unavailable }));

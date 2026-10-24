@@ -14,7 +14,6 @@ use super::{Camera, GraphState, Load, NavChange};
 use crate::actions::{At, Control, RunCx, Style};
 use crate::hosted::{Status, Tone};
 use crate::feedback::FeedbackInspectorState;
-use crate::graph_config::ChipMode;
 use crate::graph_style::{LegendEntry, Swatch, style};
 use crate::theme::colors;
 use crate::touch::Gesture;
@@ -385,14 +384,6 @@ impl GraphState {
         }
     }
 
-    fn chips_shown(&self) -> bool {
-        match self.ui.chips.show {
-            ChipMode::Always => true,
-            ChipMode::Never => false,
-            ChipMode::Auto => self.fingers || self.canvas.width() < self.ui.chips.narrow_below,
-        }
-    }
-
     /// Where the graph is: the source, the view and way, the roots gone
     /// through (each a way back), what holds the root, how deep, what was
     /// cut, and how long it took.
@@ -421,6 +412,7 @@ impl GraphState {
                 ui.label(muted("›".into()));
                 ui.label(RichText::new(name(root)).size(look.text_body).strong().color(colors().text_strong));
             }
+            self.cut_note = None;
             if let Some(tree) = &self.tree {
                 if !tree.path.is_empty() {
                     ui.label(muted("· inside".into()));
@@ -438,9 +430,10 @@ impl GraphState {
                         text.push_str(" (out of time)");
                     }
                     let (glyph, _, color) = crate::status::look("stale");
-                    // Its fixes are actions: showing the levels that fit (on
-                    // the top line), going into the selected card (under it).
-                    ui.label(RichText::new(format!("{glyph} {text}")).size(look.text_body).color(color));
+                    // Its fixes are actions: showing the levels that fit
+                    // (under it, while no card is selected), going into the
+                    // selected card (under the card).
+                    self.cut_note = Some(ui.label(RichText::new(format!("{glyph} {text}")).size(look.text_body).color(color)).rect);
                 }
                 if let Some(ms) = tree.slow_ms {
                     ui.label(RichText::new(format!("· slow: {ms} ms")).size(look.text_body).color(colors().warn))
@@ -717,7 +710,7 @@ impl GraphState {
     }
 
     /// The legend: what each color, line and outline means, from the style
-    /// table, sized to its text and clear of the chips.
+    /// table, sized to its text.
     fn draw_legend(&self, painter: &egui::Painter) {
         let theme = colors();
         let entries: Vec<LegendEntry> = style().legend(&theme);
@@ -836,6 +829,9 @@ fn fit_text(painter: &egui::Painter, text: &str, font: &FontId, width: f32) -> O
     (lo > 0).then(|| format!("{}…", chars[..lo].iter().collect::<String>()))
 }
 
+/// The size note's name as a place (`here`).
+const CUT_NOTE: &str = "cut";
+
 impl crate::hosted::Hosted for GraphState {
     /// What it shows: the code, or a plan.
     fn title(&self) -> Status {
@@ -845,6 +841,16 @@ impl crate::hosted::Hosted for GraphState {
     /// Its canvas: a tap selects, a double tap goes in, two fingers move it.
     fn own_pointer(&self) -> bool {
         true
+    }
+
+    /// With no card selected and the answer cut, the size note (what fits
+    /// is under it).
+    fn here(&self) -> Option<String> {
+        (self.selection.is_none() && self.tree.as_ref().is_some_and(|t| t.cut.is_some())).then(|| CUT_NOTE.to_owned())
+    }
+
+    fn drawn_at(&self, place: &str) -> Option<Rect> {
+        self.cut_note.filter(|_| place == CUT_NOTE)
     }
 
     fn busy(&self) -> Option<String> {
@@ -873,20 +879,12 @@ impl crate::hosted::Hosted for GraphState {
         out
     }
 
-    /// On its top line: the jump list's back and forward, and (on touch or
-    /// narrow screens) the chips (reading changed code again is the top
-    /// bar's); under the
-    /// selected card, the actions for it (`[graph] context`).
+    /// Under the selected card, the actions for it (`[graph] context`).
     fn placed(&self) -> Vec<(String, Control)> {
-        let header = |icon: Option<&'static str>, caption: &str| Control::new(At::Header, Style::Button, caption, icon);
-        let mut out = vec![("nav.back".to_owned(), header(Some(egui_phosphor::regular::ARROW_LEFT), "")), ("nav.forward".to_owned(), header(Some(egui_phosphor::regular::ARROW_RIGHT), ""))];
-        if self.chips_shown() {
-            out.extend(self.ui.chips.actions.iter().filter(|id| !out.iter().any(|(o, _)| o == *id)).map(|id| (id.clone(), header(None, ""))).collect::<Vec<_>>());
+        match self.selection {
+            Some(_) => self.ui.context.iter().map(|id| (id.clone(), Control::new(At::Item, Style::Button, "", None))).collect(),
+            None => Vec::new(),
         }
-        if self.selection.is_some() {
-            out.extend(self.ui.context.iter().map(|id| (id.clone(), Control::new(At::Item, Style::Button, "", None))));
-        }
-        out
     }
 
 }

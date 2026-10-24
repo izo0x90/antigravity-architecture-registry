@@ -712,13 +712,6 @@ text = 8
 min_w = 160.0
 max_w = 400.0
 
-# On-screen chips: "auto" (narrow screens, or after a touch), "always" or "never".
-[graph.chips]
-show = "auto"
-narrow_below = 480.0
-size = 32.0
-actions = ["nav.back", "nav.forward", "graph.fit", "graph.zoom_in", "graph.zoom_out", "graph.view", "graph.flip", "nav.hint_open"]
-
 # The code view's syntax colours: a tree-sitter highlight capture (or its
 # first part) -> a theme color. Captures not listed keep the text color.
 [code.highlight]

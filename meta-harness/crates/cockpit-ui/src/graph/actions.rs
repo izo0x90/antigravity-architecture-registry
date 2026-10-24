@@ -18,7 +18,7 @@ use arch_search::{Found, Hit, SearchKind};
 
 use super::{GraphState, NavChange};
 use crate::net::NetResult;
-use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, Style};
+use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum GraphCommand {
@@ -76,7 +76,6 @@ impl GraphState {
 impl ActionProvider for GraphState {
     fn actions(&self) -> Vec<Action> {
         use GraphCommand as G;
-        use Style::Setting;
         let mut out = self.moves();
         let f = |id: &str, label: &str, detail: &str, c: GraphCommand| Action::new(id, label, detail, c).focused();
         let views = ViewKind::ALL
@@ -86,13 +85,13 @@ impl ActionProvider for GraphState {
                 Choice::new(v.name(), v.name().replace('_', " ")).detail(detail).current(*v == self.nav.view)
             })
             .collect();
-        out.push(f("graph.view", "Switch view (contains, calls, data flow)", "What the graph draws: what holds what, what calls what, or where data goes", G::SetView).param(Param::Choice(views)).header(Setting, "View", Some(egui_phosphor::regular::GRAPH)).group(Group::View).jump());
-        out.push(f("graph.plan", "Show the code, or one plan", "The code as it is, or a plan's components (built or not); every view reads from it", G::SetPlan).param(Param::Choice(self.source_choices())).header(Setting, "Source", None).group(Group::View).jump());
+        out.push(f("graph.view", "Switch view (contains, calls, data flow)", "What the graph draws: what holds what, what calls what, or where data goes", G::SetView).param(Param::Choice(views)).setting("View", Some(egui_phosphor::regular::GRAPH)).group(Group::View).jump());
+        out.push(f("graph.plan", "Show the code, or one plan", "The code as it is, or a plan's components (built or not); every view reads from it", G::SetPlan).param(Param::Choice(self.source_choices())).setting("Source", None).group(Group::View).jump());
         if self.nav.source != Source::Code {
-            out.push(f("graph.full_code", "Show the plan in the full code", "The plan's components among all the code's, not on their own", G::FullCode).param(Param::Toggle { on: self.nav.full_code }).header(Setting, "Full code", None).group(Group::View).jump());
+            out.push(f("graph.full_code", "Show the plan in the full code", "The plan's components among all the code's, not on their own", G::FullCode).param(Param::Toggle { on: self.nav.full_code }).setting("Full code", None).group(Group::View).jump());
         }
         if self.nav.only_changed || !self.changed.is_empty() {
-            out.push(f("graph.only_changed", "Show only what the changes touch", "Only the components the comparison changed (and what holds them)", G::OnlyChanged).param(Param::Toggle { on: self.nav.only_changed }).header(Setting, "Only changed", None).group(Group::View).importance(MINOR).jump());
+            out.push(f("graph.only_changed", "Show only what the changes touch", "Only the components the comparison changed (and what holds them)", G::OnlyChanged).param(Param::Toggle { on: self.nav.only_changed }).setting("Only changed", None).group(Group::View).importance(MINOR).jump());
         }
         out.push(f("graph.flip", self.flip_label(), "The other way round: what leads to it instead of what it leads to", G::Flip).group(Group::View).importance(SECONDARY).jump());
         out.push(f("graph.depth_less", "Show fewer levels", "One level less below the root", G::Depth(-1)).group(Group::View).importance(MINOR).jump());
@@ -113,10 +112,13 @@ impl ActionProvider for GraphState {
         // Too big to show whole: only the levels that fit.
         if let Some(cut) = self.tree.as_ref().and_then(|t| t.cut.as_ref()).filter(|c| c.shown < c.asked && c.shown > 0) {
             let delta = cut.shown as i32 - self.depth() as i32;
-            out.push(f("graph.fit_levels", &format!("Show only the {} levels that fit", cut.shown), "Too big to show whole: as many levels as the server lays out", G::Depth(delta)).notice(format!("Show {} levels", cut.shown), None).group(Group::View).importance(SECONDARY).jump());
+            let fit = f("graph.fit_levels", &format!("Show only the {} levels that fit", cut.shown), "Too big to show whole: as many levels as the server lays out", G::Depth(delta)).group(Group::View).importance(SECONDARY).jump();
+            // Under the size note while you're on it.
+            let on_note = crate::hosted::Hosted::here(self).is_some();
+            out.push(if on_note { fit.on_item(crate::actions::Style::Button, format!("Show {} levels", cut.shown), None) } else { fit });
         }
         if self.agent.is_some() {
-            out.push(f("graph.agent_return", "Return to where you were before the agent moved the view", "The view as it was before the agent's navigate", G::AgentReturn).notice("Return", Some(egui_phosphor::regular::ARROW_U_UP_LEFT)).group(Group::Navigate).importance(PRIMARY).jump());
+            out.push(f("graph.agent_return", "Return to where you were before the agent moved the view", "The view as it was before the agent's navigate", G::AgentReturn).on_item(crate::actions::Style::Button, "Return", Some(egui_phosphor::regular::ARROW_U_UP_LEFT)).group(Group::Navigate).importance(PRIMARY).jump());
         }
         // The path to the root: each step back along it.
         if let Some(root) = &self.nav.root {
@@ -127,7 +129,7 @@ impl ActionProvider for GraphState {
             if let Some(tree) = &self.tree {
                 steps.extend(tree.path.iter().map(|c| Choice::new(format!("into:{}", c.key), format!("inside {}", c.label)).detail(Some("Show this box".into()))));
             }
-            out.push(f("graph.path", "Go back along the path", "The roots you went in through: pick one to go back to it", G::Path).param(Param::Choice(steps)).header(Setting, "Path", None).group(Group::Navigate).importance(MINOR).jump());
+            out.push(f("graph.path", "Go back along the path", "The roots you went in through: pick one to go back to it", G::Path).param(Param::Choice(steps)).setting("Path", None).group(Group::Navigate).importance(MINOR).jump());
         }
         out.push(f("graph.legend", if self.legend_open { "Hide the legend" } else { "Show the legend" }, "What the graph's colours, shapes and badges mean", G::Legend).group(Group::View).importance(MINOR));
         out

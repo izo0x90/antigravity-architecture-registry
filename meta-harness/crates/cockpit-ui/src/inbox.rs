@@ -353,8 +353,8 @@ impl ActionProvider for InboxView {
         let act = |id: &str, label: &str, detail: &str, c: Command| Action::new(id, label, detail, c).focused().group(Group::Act);
         let mut out = self.moves();
         if self.at.is_some_and(|(_, of)| of > 1) || self.shown.is_none() && self.item.is_some() {
-            out.push(act("inbox.prev", "Previous", "The item before, in what waits on you", Command::Step(-1)).importance(SECONDARY).notice("", Some(icon::CARET_LEFT)));
-            out.push(act("inbox.next", "Next", "The next item, in what waits on you", Command::Step(1)).importance(PRIMARY).notice("", Some(icon::CARET_RIGHT)));
+            out.push(act("inbox.prev", "Previous", "The item before, in what waits on you", Command::Step(-1)).importance(SECONDARY));
+            out.push(act("inbox.next", "Next", "The next item, in what waits on you", Command::Step(1)).importance(PRIMARY));
         }
         let Some(shown) = &self.shown else { return out };
         // Under its request while you're on it.
@@ -365,14 +365,17 @@ impl ActionProvider for InboxView {
         for answer in shown.request.iter().flat_map(crate::request_card::answers) {
             out.push(answer.place(act(&answer.id, &answer.label, "Answers the agent's request this way", Command::Answer(answer.option.clone())).importance(PRIMARY), here));
         }
+        // Opening it and putting it away: under what it says while you're on it.
+        let on_says = self.parts().get(self.cursor) == Some(&Part::Says);
+        let under = |action: Action, caption: &str, icon: &'static str| if on_says { action.on_item(crate::actions::Style::Button, caption, Some(icon)) } else { action };
         if shown.notification.discussion.is_some() {
-            out.push(act("inbox.open_chat", "Open the discussion", "The discussion that waits on you", Command::OpenChat).importance(PRIMARY).notice("Open it", Some(icon::CHAT_CIRCLE_DOTS)));
+            out.push(under(act("inbox.open_chat", "Open the discussion", "The discussion that waits on you", Command::OpenChat).importance(PRIMARY), "Open it", icon::CHAT_CIRCLE_DOTS));
         } else if shown.notification.slot.is_some() {
-            out.push(act("inbox.open_chat", "Open its chat", "The agent's chat this came from", Command::OpenChat).importance(SECONDARY).notice("Open its chat", Some(icon::CHAT_TEARDROP_TEXT)));
+            out.push(under(act("inbox.open_chat", "Open its chat", "The agent's chat this came from", Command::OpenChat).importance(SECONDARY), "Open its chat", icon::CHAT_TEARDROP_TEXT));
         } else if shown.notification.terminal.is_some() {
-            out.push(act("inbox.open_chat", "Open its terminal", "The terminal this came from", Command::OpenChat).importance(SECONDARY).notice("Open its terminal", Some(icon::TERMINAL_WINDOW)));
+            out.push(under(act("inbox.open_chat", "Open its terminal", "The terminal this came from", Command::OpenChat).importance(SECONDARY), "Open its terminal", icon::TERMINAL_WINDOW));
         }
-        out.push(act("inbox.dismiss", "Put it away", "Off the list of what waits on you", Command::Dismiss).importance(MINOR).notice("Put away", Some(icon::ARCHIVE)));
+        out.push(under(act("inbox.dismiss", "Put it away", "Off the list of what waits on you", Command::Dismiss).importance(MINOR), "Put away", icon::ARCHIVE));
         out
     }
 

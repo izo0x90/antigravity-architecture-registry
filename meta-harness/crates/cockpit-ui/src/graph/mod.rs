@@ -160,10 +160,8 @@ pub struct GraphState {
     seen: crate::shared::Seen,
     canvas: Rect,
     inbox: Arc<Mutex<Vec<Reply>>>,
-    /// Behavior settings (chips, zoom), from the UI config.
+    /// Behavior settings (zoom, the card's controls), from the UI config.
     pub(crate) ui: GraphUi,
-    /// The pointer is a finger (the host says): its chips show.
-    fingers: bool,
     /// A flick gliding on (points a second), slowing as a list's does.
     fling: Vec2,
     /// Two fingers took part in what the pointer is doing (lifting them
@@ -171,6 +169,8 @@ pub struct GraphState {
     pinching: bool,
     /// The "+N" counts drawn this frame (click one to open its card).
     pub(crate) more_rects: Vec<(String, Rect)>,
+    /// Where the size note was drawn last frame (none: nothing was cut).
+    cut_note: Option<Rect>,
     /// The camera before a search started previewing matches.
     saved_view: Option<Camera>,
     pub legend_open: bool,
@@ -225,10 +225,10 @@ impl Default for GraphState {
             canvas: Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
             inbox: Arc::default(),
             ui: GraphUi::default(),
-            fingers: false,
             fling: Vec2::ZERO,
             pinching: false,
             more_rects: Vec::new(),
+            cut_note: None,
             saved_view: None,
             legend_open: false,
             note: None,
@@ -455,7 +455,6 @@ impl GraphState {
 
 impl crate::buffer::Buffer for GraphState {
     fn render(&mut self, ui: &mut egui::Ui, cx: &mut crate::actions::RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
-        self.fingers = drawing.fingers;
         self.draw(ui, drawing.feedback, drawing.leader_held, cx);
     }
 

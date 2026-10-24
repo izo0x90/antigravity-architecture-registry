@@ -1,35 +1,12 @@
 //! How the graph behaves (as opposed to how it looks, `graph_style`): touch
-//! gesture thresholds, on-screen chips, long-press actions and how much a
+//! gesture thresholds, long-press actions and how much a
 //! node card shows at each zoom. From the `[graph]` section of the UI config.
 
 use serde::Deserialize;
 
 
-/// When the on-screen chips show.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChipMode {
-    /// On narrow screens, or once a finger has touched the graph.
-    #[default]
-    Auto,
-    Always,
-    Never,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-pub struct Chips {
-    pub show: ChipMode,
-    /// Canvas width (points) below which the screen counts as narrow.
-    pub narrow_below: f32,
-    /// Smallest side of a chip (a comfortable touch target).
-    pub size: f32,
-    /// Action ids, in order.
-    pub actions: Vec<String>,
-}
-
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct GraphUi {
-    pub chips: Chips,
     /// Actions under the selected card, in order (those that apply).
     pub context: Vec<String>,
     /// Fitting never zooms out past this (text stays readable).
@@ -67,7 +44,6 @@ impl Default for GraphUi {
             graph: GraphUi,
         }
         toml::from_str::<File>(crate::config::DEFAULTS).map(|f| f.graph).unwrap_or(GraphUi {
-            chips: Chips::default(),
             context: Vec::new(),
             readable_zoom: 1.0,
             zoom_step: 1.2,
@@ -81,9 +57,6 @@ impl Default for GraphUi {
 
 impl GraphUi {
     pub fn check(&self) -> Result<(), String> {
-        if self.chips.size <= 0.0 {
-            return Err("graph.chips.size must be positive".into());
-        }
         if self.readable_zoom.is_nan() || self.readable_zoom <= 0.0 || self.zoom_step.is_nan() || self.zoom_step <= 1.0 || self.min_text_px.is_nan() || self.min_text_px < 0.0 || self.details_kept == 0 {
             return Err("graph: readable_zoom > 0, zoom_step > 1, min_text_px >= 0 and details_kept >= 1".into());
         }

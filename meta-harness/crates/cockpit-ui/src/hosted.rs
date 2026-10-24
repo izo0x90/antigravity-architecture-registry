@@ -1,10 +1,10 @@
 //! What a buffer tells its host (a panel, the quick look) about itself, and
-//! the header the host draws from it. A buffer draws its content; its top
-//! line (its controls, what it's doing, its title) is the host's, the same
-//! for every buffer: its
-//! header buttons first, where nothing that comes and goes can push them;
-//! then a place kept for its busy mark; then its title and each status,
-//! wrapping after them (one line that wraps); its settings on a row under.
+//! the top line the host draws from it. A buffer draws its content; its top
+//! line is the host's, the same for every buffer: its menus first (the
+//! leader's groups about where it is), where nothing that comes and goes can
+//! push them; then a place kept for its busy mark; then its title and each
+//! status, wrapping after them (one line that wraps); its settings on a row
+//! under.
 
 use egui::RichText;
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ pub enum ItemButtons {
     Bar,
 }
 
-use crate::actions::{At, Bound, Control, RunCx, Style};
+use crate::actions::{At, Bound, Control, RunCx};
 
 pub use crate::actions::Tone;
 
@@ -71,9 +71,9 @@ pub trait Hosted {
     }
 
     /// Actions it shows (its own or the shell's, by id), with the control
-    /// it gives them here: the graph's back and forward on its top line, a
-    /// card's go-tos under it. Placed by it, they're its panel's (or, under
-    /// the item, what you're on).
+    /// it gives them here: a card's go-tos under it, re-reading a file
+    /// that changed under the line you're on. Under the item, they're what
+    /// you're on.
     fn placed(&self) -> Vec<(String, Control)> {
         Vec::new()
     }
@@ -81,6 +81,13 @@ pub trait Hosted {
     /// Where you are, when it isn't the cursor's item (a chat following
     /// the latest: what's waiting on you there).
     fn here(&self) -> Option<String> {
+        None
+    }
+
+    /// Where a place `here` names is drawn when it's no item (the chat's
+    /// banners, the graph's size note): items are found among the spots,
+    /// which hints label; these aren't.
+    fn drawn_at(&self, _place: &str) -> Option<egui::Rect> {
         None
     }
 
@@ -109,49 +116,52 @@ pub enum NoteMark {
     Discussions,
 }
 
-/// A group of the leader's, as a host's top line offers it: its key (after
-/// the leader) and its name.
+/// A group of the leader's, as a line offers it: its key (after the
+/// leader), its name, the keys that open it (empty: not said here), what it
+/// is (on hover, or a finger held on it), and what tapping it asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GroupButton {
     pub key: char,
     pub name: String,
-    /// What it is and how it's reached by keys (on hover, a long press).
+    pub keys: String,
     pub tip: String,
+    pub asks: (String, Option<String>),
+}
+
+impl GroupButton {
+    /// Drawn where its keys don't open it (a panel not focused): its keys
+    /// unsaid.
+    pub fn unkeyed(mut self) -> Self {
+        self.keys.clear();
+        self
+    }
 }
 
 /// What a host's top line starts with: the panel's number (none for the
-/// quick look) and whether it's focused, and its groups (`keyed`: their
-/// keys are said; a panel not focused says none).
+/// quick look), whether it's focused, and its groups.
 pub struct TopLine<'a> {
     pub number: Option<usize>,
     pub focused: bool,
     pub groups: &'a [GroupButton],
-    pub keyed: bool,
 }
 
 /// The panel's top line: its number, its groups as buttons (each its name
-/// and its one key; tapped, its menu opens: returned), the place for its
-/// busy mark, its title and status, the notes on what the cursor's on
-/// (each tag a solid tag in its colour and its name; its discussions a
-/// speech bubble and a few words). Under it, while there's something, the
-/// notice row (what needs you now: `bound`'s notice buttons), then its
-/// settings (`bound`: the panel's layer of where you are).
-pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, top: &TopLine<'_>, bound: &[Bound], notes: &[(NoteMark, String, egui::Color32)], cx: &mut RunCx<'_>) -> Option<char> {
+/// and the keys that open it; tapped, its menu opens, asked for as every
+/// control asks), the place for its busy mark, its title and status, the
+/// notes on what the cursor's on (each tag a solid tag in its colour and its
+/// name; its discussions a speech bubble and a few words); under it, its
+/// settings (`bound`: the panel's layer of where you are). Where the top
+/// line was drawn.
+pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, top: &TopLine<'_>, bound: &[Bound], notes: &[(NoteMark, String, egui::Color32)], cx: &mut RunCx<'_>) -> egui::Rect {
     let look = crate::theme::look();
-    let placed = |at: At, style: Style| bound.iter().filter(move |b| b.action.control.as_ref().is_some_and(|c| c.at == at && c.style == style));
-    let mut tapped = None;
     // One line that wraps (a narrow panel, a phone): nothing overlaps.
     // The groups first: what follows them grows and wraps after them.
-    ui.horizontal_wrapped(|ui| {
+    let line = ui.horizontal_wrapped(|ui| {
         if let Some(number) = top.number {
             let colour = if top.focused { crate::theme::colors().focus } else { crate::theme::colors().faint };
             ui.label(RichText::new((number + 1).to_string()).strong().monospace().size(look.text_body).color(colour));
         }
-        for group in top.groups {
-            if group_button(ui, group, top.keyed) {
-                tapped = Some(group.key);
-            }
-        }
+        groups(ui, top.groups, cx);
         // The busy mark's place, kept whether it shows or not.
         let mark = egui::WidgetText::from(RichText::new(egui_phosphor::regular::HOURGLASS).size(look.text_label).color(Tone::Warn.color()));
         let galley = mark.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
@@ -172,25 +182,23 @@ pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, top: &TopLine<'_>, bound: &
             ui.add(egui::Label::new(RichText::new(name).size(look.text_small).color(*colour)).truncate());
         }
     });
-    if placed(At::Notice, Style::Button).next().is_some() {
-        ui.horizontal_wrapped(|ui| crate::actions::controls(ui, placed(At::Notice, Style::Button), cx));
+    let settings = || bound.iter().filter(|b| b.action.at() == Some(At::Settings));
+    if settings().next().is_some() {
+        ui.horizontal_wrapped(|ui| crate::actions::controls(ui, settings(), cx));
     }
-    if placed(At::Header, Style::Setting).next().is_some() {
-        ui.horizontal_wrapped(|ui| crate::actions::controls(ui, placed(At::Header, Style::Setting), cx));
-    }
-    tapped
+    line.response.rect
 }
 
-/// A group's button: its name, then its key (when keys are said); what's
-/// in it on hover or a long press. Whether it was tapped.
-fn group_button(ui: &mut egui::Ui, group: &GroupButton, keyed: bool) -> bool {
-    let look = crate::theme::look();
-    let mut job = egui::text::LayoutJob::default();
-    RichText::new(&group.name).size(look.text_body).append_to(&mut job, ui.style(), egui::FontSelection::Default, egui::Align::Center);
-    if keyed {
-        RichText::new(format!("  {}", group.key)).monospace().size(look.text_small).color(crate::theme::colors().key).append_to(&mut job, ui.style(), egui::FontSelection::Default, egui::Align::Center);
+/// Groups as buttons, each said as every control says itself (its name,
+/// then its keys when there's room); a tap asks for what it asks, as every
+/// control's does.
+pub fn groups(ui: &mut egui::Ui, groups: &[GroupButton], cx: &mut RunCx<'_>) {
+    for group in groups {
+        let text = crate::actions::caption_and_key(ui, &group.name, &group.keys, None);
+        if ui.button(text).on_hover_text(&group.tip).clicked() {
+            *cx.asked = Some(group.asks.clone());
+        }
     }
-    crate::actions::tip_on(ui.button(job), &group.tip).clicked()
 }
 
 /// What other buffers say about what a card shows (the quick look's,

@@ -154,7 +154,7 @@ fn the_look_has_the_keyboard_its_keys_move_and_label_its_parts_and_nothing_reach
     keys(&ctx, &mut app, "k");
     assert_eq!((selected(&app), app.desk.inbox().cursor_key().as_deref()), (before.as_str(), Some("0")), "k moves over its parts, not the graph under it");
     let under: Vec<String> = crate::actions::ActionProvider::actions(app.desk.inbox()).into_iter().filter(|a| a.at().is_some_and(|at| at == crate::actions::At::Item)).map(|a| a.id).collect();
-    assert!(under.is_empty(), "off its request, its answers aren't under anything: {under:?}");
+    assert_eq!(under, ["inbox.open_chat", "inbox.dismiss"], "off its request, its answers aren't under anything; on what it says, opening it and putting it away are");
     // f labels what's in it; the bar offers its keys.
     keys(&ctx, &mut app, "gg");
     frame(&ctx, &mut app, key("f"));

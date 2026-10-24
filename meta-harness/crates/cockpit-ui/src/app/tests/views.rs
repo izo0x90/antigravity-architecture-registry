@@ -236,9 +236,10 @@ fn indexing_shows_its_state_everywhere_and_can_be_run_from_the_cockpit() {
     app.desk.spec_mut().move_to("code#Header");
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("out of date") && text.contains("This code changed since it was indexed"), "{text}");
+    assert!(text.contains("Re-read"), "the spec offers to re-read it, under the code: {text}");
     focus(&ctx, &mut app, BufferKind::Graph);
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("2 out of date") && text.contains("Re-read"), "the graph offers to re-read: {text}");
+    assert!(text.contains("2 out of date"), "the graph's cards: {text}");
     // A failed run says so.
     app.desk.net.incoming.lock().unwrap().push(index_event(arch_graph::IndexStatus { state: arch_graph::IndexState::Failed, error: Some("disk".into()), ..Default::default() }));
     assert!(texts(&frame(&ctx, &mut app, vec![])).contains("indexing failed"));

@@ -24,12 +24,17 @@ impl CockpitApp {
         if let Some(rect) = self.panel_rects.get_mut(panel) {
             *rect = ui.min_rect();
         }
-        // Frame-level click-to-focus detection
+        // A click on it focuses it (one on what's over it, a menu or the
+        // action list, is theirs); where you are moved, what was gathered
+        // for the frame is gathered again.
         if ui.input(|i| i.pointer.primary_clicked())
             && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
             && ui.min_rect().contains(pos)
+            && ui.ctx().layer_id_at(pos) == Some(ui.layer_id())
+            && self.desk.panels.focused() != panel
         {
             self.desk.panels.focus(panel);
+            self.forget_frame();
         }
     }
 

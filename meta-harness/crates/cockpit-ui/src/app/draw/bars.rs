@@ -15,12 +15,12 @@ impl CockpitApp {
     /// the closest, and in a layer the panel's own before the moves it
     /// shares.
     pub(crate) fn bar_keys<'a>(&self, bound: &'a [Bound]) -> Vec<&'a Bound> {
-        let situation = self.situation();
-        let own = Origin::View(self.here().kind);
+        let here = self.here();
+        let own = Origin::View(here.kind);
         let mut keys: Vec<(usize, &Bound)> = bound
             .iter()
             .enumerate()
-            .filter(|(_, b)| b.layer < Layer::Everywhere && !b.key_hint().is_empty() && b.action.when.holds(&situation))
+            .filter(|(_, b)| b.layer < Layer::Everywhere && !b.key_hint().is_empty() && self.applies(b, here))
             .collect();
         keys.sort_by_key(|(i, b)| (b.action.importance, b.layer, b.origin != own, b.action.group, *i));
         keys.into_iter().take(self.config.keymap.bar.max).map(|(_, b)| b).collect()
@@ -119,9 +119,9 @@ impl CockpitApp {
         }
         let rows: Vec<(String, String)> = if waiting {
             let bound = self.bound_actions();
-            let situation = self.situation();
+            let here = self.here();
             let mut next = continuations(&bound, &self.pending_keys);
-            next.retain(|(b, _)| b.action.when.holds(&situation));
+            next.retain(|(b, _)| self.applies(b, here));
             // The closest to where you are first.
             next.sort_by_key(|(b, _)| b.layer);
             next.into_iter().map(|(b, rest)| (rest.iter().map(Chord::label).collect::<Vec<_>>().join(" "), b.action.label.clone())).collect()
@@ -155,14 +155,8 @@ impl CockpitApp {
     /// not), the layers' titles, and the keys that run nothing themselves
     /// (the mode's it was opened from, the pointer's and fingers').
     pub(in crate::app) fn sheet_of(&self, bound: &[Bound]) -> crate::sheet::Sheet {
-        let (situation, here) = (self.situation(), self.here());
-        let applies = bound
-            .iter()
-            .map(|b| match b.origin {
-                Origin::View(kind) if kind != here.kind => b.action.when != When::Unavailable,
-                _ => b.action.when.holds(&situation),
-            })
-            .collect();
+        let here = self.here();
+        let applies = bound.iter().map(|b| self.applies(b, here)).collect();
         let host = match here.at {
             crate::keymap::Host::Look => "Quick look".to_owned(),
             crate::keymap::Host::Panel(panel) => format!("Panel {}", panel + 1),

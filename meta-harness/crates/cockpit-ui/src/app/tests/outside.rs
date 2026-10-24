@@ -36,6 +36,12 @@ fn from_outside_the_screen_is_read_and_actions_run_clicked_and_keyed_as_the_user
     let mut tree = crate::graph::tests::sample_tree();
     tree.cut = Some(arch_graph::tree::Cut { reason: arch_graph::tree::CutReason::Budget, starts_left_out: 0, shown: 2, asked: 3, hidden: 7 });
     app.desk.graph_mut().set_tree(tree);
+    app.desk.graph_mut().select(None);
+    // What's clicked is what was read: with no card selected, the size
+    // note's fix is under it (measured unseen for a frame, then drawn).
+    frame(&ctx, &mut app, vec![]);
+    let read = from_outside(&ctx, &mut app, r#"{"op":"read"}"#).unwrap();
+    assert!(read["texts"].as_array().unwrap().iter().any(|t| t["text"].as_str().is_some_and(|t| t.starts_with("Show 2 levels"))), "{}", read["texts"]);
     let clicked = from_outside(&ctx, &mut app, r#"{"op":"click","text":"Show 2 levels"}"#).unwrap();
     assert!(clicked["clicked"].as_str().is_some_and(|c| c.starts_with("Show 2 levels")), "{clicked}");
     assert_eq!(app.desk.graph().nav.depth, Some(2), "clicked as the user would");

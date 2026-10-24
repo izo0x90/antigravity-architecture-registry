@@ -53,11 +53,18 @@ fn vim_sequences_and_leader_drive_the_graph_and_are_rebindable() {
 #[test]
 fn a_panels_top_line_offers_its_groups_and_a_tap_opens_one() {
     let (ctx, mut app) = app_with_graph();
-    let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("Graph actions  ,") && text.contains("Buffer  b"), "the focused panel's groups, with their keys: {text}");
-    assert!(text.lines().any(|l| l == "Buffer"), "a panel not focused: its groups without keys: {text}");
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    let text = texts(&output);
+    assert!(text.contains("Graph actions  Space ,") && text.contains("Buffer  Space b"), "the focused panel's groups, with the keys that open them: {text}");
+    // The other panel's: without keys (they don't run it until it's focused).
     let other = 1 - app.desk.panels.focused();
-    click_on(&ctx, &mut app, "Buffer");
+    let buffer = drawn_rects(&output, "Buffer").into_iter().find(|r| app.panel_rects[other].contains(r.center())).expect("the other panel's Buffer");
+    let tap = |pressed| egui::Event::PointerButton { pos: buffer.center(), button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    frame(&ctx, &mut app, vec![egui::Event::PointerMoved(buffer.center())]);
+    frame(&ctx, &mut app, vec![tap(true)]);
+    frame(&ctx, &mut app, vec![tap(false)]);
+    frame(&ctx, &mut app, vec![]);
     assert_eq!((app.input_mode, app.leader_path.clone(), app.desk.panels.focused()), (InputMode::Leader, vec!['b'], other), "its panel focused, its menu open");
     let top = format!("{} \u{203a}", app.config.keymap.leader.label());
     click_on(&ctx, &mut app, &top);
@@ -159,12 +166,13 @@ fn a_frame_gathers_the_actions_once_and_again_only_after_one_runs() {
     frame(&ctx, &mut app, vec![]);
     let before = app.gathered.get();
     frame(&ctx, &mut app, vec![]);
-    assert_eq!(app.gathered.get() - before, 1, "once for the key bar, the hints, the palette and the keys");
+    let panels = app.desk.panels.len();
+    assert_eq!(app.gathered.get() - before, panels, "once where you are (the key bar, the hints, the palette, the keys), and once for each other panel's top line");
     // A key that runs an action: gathered for the key, then once more
     // for what it left.
     let before = app.gathered.get();
     frame(&ctx, &mut app, key("j"));
-    assert!(app.gathered.get() - before <= 2, "{} times", app.gathered.get() - before);
+    assert!(app.gathered.get() - before <= panels + 1, "{} times", app.gathered.get() - before);
 }
 
 #[test]
@@ -308,10 +316,11 @@ fn the_leader_menu_opens_with_the_focused_views_own_menu() {
     app.input_mode = InputMode::Leader;
     frame(&ctx, &mut app, vec![]);
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("SPEC") && text.contains("All spec actions…"), "{text}");
+    assert!(text.lines().any(|l| l == "Spec") && text.contains("Spec actions…"), "{text}");
     frame(&ctx, &mut app, key(","));
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("LEADER > ALL SPEC ACTIONS") && text.contains("Unpin (follow what you're on)"), "{text}");
+    let path = format!("{} \u{203a} Spec actions", app.config.keymap.leader.label());
+    assert!(text.contains(&path) && text.contains("Pinned"), "the same path in the menu and the top bar's mode: {text}");
 }
 
 #[test]

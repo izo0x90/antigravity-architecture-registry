@@ -86,6 +86,8 @@ pub struct ChatView {
     /// Messages and links drawn last frame (and this one's, as drawn).
     pub(crate) spots: Vec<Spot>,
     pub(crate) drawing: Vec<Spot>,
+    /// Where the banners were drawn last frame (none: none showed).
+    pub(crate) banners: Option<Rect>,
     /// Where its typing box is, while it's typed in.
     pub(crate) typing: Option<Rect>,
     /// A sign-in has the typing box (see `tend_sign_in_box`).
@@ -102,6 +104,7 @@ impl Default for ChatView {
             link_pick: None,
             scrolling: Default::default(),
             spots: Vec::new(),
+            banners: None,
             drawing: Vec::new(),
             typing: None,
             sign_in_has_box: false,

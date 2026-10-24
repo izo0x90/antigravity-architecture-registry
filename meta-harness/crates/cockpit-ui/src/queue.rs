@@ -230,9 +230,9 @@ impl ActionProvider for QueueState {
         let mut out = self.moves();
         let running = matches!(self.status(), Some(QueueStatus::Running | QueueStatus::WaitingForUser | QueueStatus::Stopping));
         if running {
-            out.push(f("queue.stop", "Stop the queue (after the running job)", "The job running finishes; no other starts", Q::Stop).notice("Stop", Some(egui_phosphor::regular::STOP)).importance(MINOR));
+            out.push(f("queue.stop", "Stop the queue (after the running job)", "The job running finishes; no other starts", Q::Stop).importance(MINOR));
         } else if self.status() != Some(QueueStatus::Done) {
-            out.push(f("queue.start", "Start working through the plan", "Agents take the plan's components one job at a time, in order", Q::Start).notice("Start", Some(egui_phosphor::regular::PLAY)));
+            out.push(f("queue.start", "Start working through the plan", "Agents take the plan's components one job at a time, in order", Q::Start));
         }
         if let Some(job) = self.job() {
             // Always listed (the key sheet shows them); they apply to some jobs.

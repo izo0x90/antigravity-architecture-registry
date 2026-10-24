@@ -37,12 +37,34 @@ impl CockpitApp {
     }
 
     /// What `When` conditions are judged against, for the focused view.
-    pub fn situation(&self) -> Situation {
+    pub fn situation(&self) -> std::rc::Rc<Situation> {
         self.situation_of(self.focused_kind())
     }
 
-    /// The same, for the view of `kind` (where it is, focused or not).
-    pub fn situation_of(&self, kind: BufferKind) -> Situation {
+    /// The same, for the view of `kind` (where it is, focused or not):
+    /// worked out once a frame.
+    pub fn situation_of(&self, kind: BufferKind) -> std::rc::Rc<Situation> {
+        if let Some((_, kept)) = self.frame_situations.borrow().iter().find(|(k, _)| *k == kind) {
+            return kept.clone();
+        }
+        let situation = std::rc::Rc::new(self.situation_now(kind));
+        if self.in_frame.get() {
+            self.frame_situations.borrow_mut().push((kind, situation.clone()));
+        }
+        situation
+    }
+
+    /// Whether `bound` applies where it's offered (`here`): judged in its
+    /// own view (another view's, there; the shell's, where it's offered).
+    pub fn applies(&self, bound: &Bound, here: Here) -> bool {
+        let kind = match bound.origin {
+            Origin::View(kind) => kind,
+            Origin::Shell => here.kind,
+        };
+        bound.action.when.holds(&self.situation_of(kind))
+    }
+
+    fn situation_now(&self, kind: BufferKind) -> Situation {
         Situation {
             target: self.desk.view(kind).target(),
             searched: self.desk.searches.get(&kind).is_some_and(|q| !q.is_empty()),
@@ -59,7 +81,7 @@ impl CockpitApp {
         let target = self.desk.view(kind).target()?;
         let detail = self.desk.details.get(target.component()?, self.desk.shared.source.get())?;
         let ops = [GoTo::Uses, GoTo::Callers, GoTo::Callees, GoTo::Parent, GoTo::Members, GoTo::Implements, GoTo::Flows];
-        Some(ops.into_iter().filter(|op| !candidates(*op, detail).is_empty()).collect())
+        Some(ops.into_iter().filter(|op| crate::goto::reaches(*op, detail)).collect())
     }
 
     /// What the buffers show in common, read where it's kept: the desk's

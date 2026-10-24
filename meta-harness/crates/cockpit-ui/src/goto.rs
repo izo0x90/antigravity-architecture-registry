@@ -45,6 +45,16 @@ pub fn candidates(op: GoTo, detail: &ComponentDetail) -> Vec<Candidate> {
         .collect()
 }
 
+/// Whether a relational go-to reaches anything from `detail` (what
+/// `candidates` would list, without listing it).
+pub fn reaches(op: GoTo, detail: &ComponentDetail) -> bool {
+    if op == GoTo::Uses {
+        return detail.references.iter().any(|r| r.within.is_some());
+    }
+    let Some((kind, outgoing)) = op.relation() else { return false };
+    (if outgoing { &detail.outgoing } else { &detail.incoming }).iter().any(|r| r.kind == kind)
+}
+
 /// What a go-to is waiting for.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Wait {

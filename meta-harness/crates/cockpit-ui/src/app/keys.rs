@@ -57,6 +57,10 @@ impl CockpitApp {
         let leader_tapped = leader_released && self.leader_tap.release();
 
         match self.input_mode {
+            // A setting's list of choices, open over a panel, reads its own
+            // keys, whatever has them otherwise.
+            _ if egui::Popup::is_any_open(ctx) => {}
+
             // A field that takes every key: only the leave keys leave it
             // (a sequence's first key held until the next, or the wait).
             InputMode::Insert { at } if self.field_at(at) == crate::keymap::Field::Keys => {
@@ -80,8 +84,6 @@ impl CockpitApp {
             // The palette reads its own keys while open.
             InputMode::Palette => {}
 
-            // So does a setting's list of choices, open over a panel.
-            InputMode::Normal if egui::Popup::is_any_open(ctx) => {}
 
             // The shell reads typed keys (search, hint labels, marks).
             InputMode::Capture { .. } => {
@@ -152,8 +154,7 @@ impl CockpitApp {
                 // a field that just closed) gives it back: keys are commands.
                 release_keyboard(ctx);
                 if leader_tapped {
-                    self.leader_path.clear();
-                    self.input_mode = InputMode::Leader;
+                    self.open_menu(&[], ctx);
                     return;
                 }
                 if back && (!self.pending_keys.is_empty() || self.pending_count.is_some()) {

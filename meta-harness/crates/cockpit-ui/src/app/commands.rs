@@ -35,7 +35,12 @@ impl CockpitApp {
                 .group(Group::Act)
                 .importance(MINOR),
         );
-        actions.push(admin("palette.open".into(), "Command palette".into(), "Every action there is here, found by typing".into(), S::OpenPalette));
+        actions.push(admin("palette.open".into(), "Action list".into(), "What can be done here, found by typing".into(), S::OpenPalette));
+        // A menu of the leader's (each group's button opens its own).
+        let kind = self.focused_kind();
+        let menus = std::iter::once(self.config.keymap.view_menu).chain(self.config.keymap.groups.keys().filter_map(|k| (k.chars().count() == 1).then(|| k.chars().next()).flatten()));
+        let choices = menus.map(|key| Choice::new(key.to_string(), self.group_name(&[key], kind))).collect();
+        actions.push(Action::new(MENU, "Open a menu", "A group of actions, as the leader and its key open it", S::Menu).param(Param::Choice(choices)).group(Group::View).importance(MINOR));
         let index = |id: &str, label: &str, detail: &str, op: IndexOp| Action::new(id, label, detail, S::Index(op)).group(Group::Act).importance(MINOR);
         actions.push(index("index.changed", "Re-read the code that changed", "The index takes in the files changed since it last read them", IndexOp::Changed));
         actions.push(index("index.rebuild", "Rebuild the index from scratch", "Reads every file again (slow on a big project): when the index seems wrong", IndexOp::Rebuild));
@@ -152,7 +157,7 @@ impl CockpitApp {
         {
             return kept.clone();
         }
-        let bound = self.gather(self.here(), true);
+        let bound = self.gather(self.here());
         if self.in_frame.get() {
             *self.frame_actions.borrow_mut() = Some(bound.clone());
         }
@@ -164,7 +169,7 @@ impl CockpitApp {
     /// not focused says none on its controls: they don't run it until it
     /// is).
     pub(crate) fn shown_at(&self, here: Here) -> Vec<Bound> {
-        if here == self.here() { self.bound_actions() } else { self.gather(here, true) }
+        if here == self.here() { self.bound_actions() } else { self.gather(here) }
     }
 
     /// The list for `here`: every level of where you are, innermost first,
@@ -175,11 +180,9 @@ impl CockpitApp {
     /// offered it, or what you're on when its control is on the item. Each
     /// is placed (the panel's, its host's and the top bar's placements:
     /// how it shows, never its level) and bound to keys.
-    pub(super) fn gather(&self, here: Here, keyed: bool) -> Vec<Bound> {
+    pub(super) fn gather(&self, here: Here) -> Vec<Bound> {
         #[cfg(test)]
-        if keyed && here == self.here() {
-            self.gathered.set(self.gathered.get() + 1);
-        }
+        self.gathered.set(self.gathered.get() + 1);
         let kind = here.kind;
         let view = |k: BufferKind, all: bool| self.desk.view(k).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(k), a));
         let mut levels: Vec<(Layer, Origin, Action)> = Vec::new();
@@ -203,25 +206,30 @@ impl CockpitApp {
         }
         let tagged: Vec<Layer> = levels.iter().map(|(level, _, action)| if action.control.as_ref().is_some_and(|c| matches!(c.at, crate::actions::At::Item | crate::actions::At::Typing)) { Layer::On } else { *level }).collect();
         let actions: Vec<(Origin, Action)> = levels.into_iter().map(|(_, o, a)| (o, a)).collect();
-        let keys: Vec<Keys> = if keyed {
-            let keyed: KeyedActions = (kind, actions.iter().map(|(origin, a)| (*origin, a.id.clone(), a.aliases.clone())).collect());
-            let mut cache = self.bound_cache.borrow_mut();
-            let at = cache.iter().position(|((k, _), _)| *k == kind);
-            match at {
-                Some(at) if cache[at].0 == keyed => cache[at].1.clone(),
-                _ => {
-                    let keys: Vec<Keys> = self.bind_actions(actions.clone(), kind).into_iter().map(|b| (b.leader, b.keys, b.gestures)).collect();
-                    let kept = (keyed, keys.clone());
-                    match at {
-                        Some(at) => cache[at] = kept,
-                        None => cache.push(kept),
+        // The keys given out where it is, again only when its actions changed
+        // (compared as they are, nothing built to compare).
+        let mut cache = self.bound_cache.borrow_mut();
+        let at = cache.iter().position(|((h, _), _)| *h == here);
+        let same = |(_, kept): &KeyedActions| kept.len() == actions.len() && kept.iter().zip(&actions).all(|((o, id, aliases), (origin, a))| o == origin && *id == a.id && *aliases == a.aliases);
+        let keys: Vec<Keys> = match at {
+            Some(at) if same(&cache[at].0) => cache[at].1.clone(),
+            _ => {
+                let keys: Vec<Keys> = self.bind_actions(actions.clone(), kind).into_iter().map(|b| (b.leader, b.keys, b.gestures)).collect();
+                let kept = ((here, actions.iter().map(|(origin, a)| (*origin, a.id.clone(), a.aliases.clone())).collect()), keys.clone());
+                match at {
+                    Some(at) => cache[at] = kept,
+                    None => {
+                        // Where it was gathered lately (the hosts on screen).
+                        if cache.len() == KEPT_KEYS {
+                            cache.remove(0);
+                        }
+                        cache.push(kept);
                     }
-                    keys
                 }
+                keys
             }
-        } else {
-            vec![(None, Vec::new(), Vec::new()); actions.len()]
         };
+        drop(cache);
         actions.into_iter().zip(keys).zip(tagged).map(|(((origin, action), (leader, keys, gestures)), layer)| Bound { action, origin, leader, keys, gestures, layer }).collect()
     }
 
@@ -257,7 +265,7 @@ impl CockpitApp {
         for kind in BufferKind::ALL.into_iter().filter(|k| *k != focused) {
             // Their own actions; not their shared moves, which act where you are.
             for mut action in self.desk.view(kind).actions().into_iter().filter(|a| a.scope == Scope::Focused && a.command::<Move>().is_none()) {
-                action.label = format!("{}{} · {}", &kind.title()[..1], kind.title()[1..].to_lowercase(), action.label);
+                action.label = format!("{} · {}", kind.words(), action.label);
                 out.push(Bound { action, origin: Origin::View(kind), leader: None, keys: Vec::new(), gestures: Vec::new(), layer: Layer::Everywhere });
             }
         }
@@ -282,7 +290,7 @@ impl CockpitApp {
         self.take_asks(ctx);
         self.share_with_buffers();
         self.in_frame.set(drawing);
-        self.frame_actions.borrow_mut().take();
+        self.forget_frame();
     }
 
     pub(super) fn run_counted(&mut self, invocation: Invocation, count: Option<u32>, ctx: &egui::Context) {
@@ -449,6 +457,10 @@ impl CockpitApp {
                 self.sheet_mode = self.mode_keys();
                 self.open_palette(None);
                 self.palette.show_everything();
+            }
+            ShellCommand::Menu => {
+                let path: Vec<char> = value.as_deref().and_then(|v| v.chars().next()).into_iter().collect();
+                self.open_menu(&path, ctx);
             }
             ShellCommand::GoTo(op) => {
                 if let Some(number) = typed

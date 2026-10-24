@@ -152,8 +152,10 @@ impl CockpitApp {
             });
         });
         // A click outside closes it (a peek's key closes it when let go);
-        // not the click that opened it.
-        if ctx.input(|i| i.time > opened && i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p))) {
+        // not the click that opened it, nor one on what's over everything
+        // (its menus, the action list).
+        let outside = |p: egui::Pos2| !area.response.rect.contains(p) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background || l.id == area.response.layer_id.id);
+        if ctx.input(|i| i.time > opened && i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(outside)) {
             self.close_quick_look();
         }
     }
