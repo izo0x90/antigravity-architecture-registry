@@ -295,8 +295,15 @@ t = "Tags"
 
 "command.*" = { leader = "h #" }
 
+# Signing the harness in, every step: start, copy or open its link, paste
+# back (or just type it: the box is the sign-in's while one waits), cancel,
+# put away how it ended; sign out.
 "auth.login" = { leader = "a l" }
+"auth.copy" = { leader = "a y" }
+"auth.page" = { leader = "a p" }
 "auth.complete" = { leader = "a c" }
+"auth.cancel" = { leader = "a x" }
+"auth.end.dismiss" = { leader = "a d" }
 "auth.logout" = { leader = "a o" }
 
 # Answering the agent's requests, from any view.

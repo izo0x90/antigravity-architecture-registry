@@ -124,9 +124,9 @@ impl ChatStreamState {
                         }
                         said(ui, &now.waiting.instructions, colors().text);
                         if let Some(url) = &now.waiting.url {
-                            // Its address, to copy when the page can't open here.
-                            let mut shown = url.clone();
-                            ui.add(egui::TextEdit::singleline(&mut shown).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
+                            // Its address as text (all of it on hover): Copy link and
+                            // Open take it from here.
+                            ui.add(egui::Label::new(RichText::new(url).monospace().size(look.text_small).color(colors().muted)).truncate());
                         }
                         if let Some(left) = now.left_s {
                             said(ui, &format!("{} {}:{:02} left", icon::TIMER, left / 60, left % 60), colors().muted);
@@ -337,7 +337,10 @@ impl ChatStreamState {
         ui.horizontal(|ui| {
             let inserting = typing;
             let steerable = self.steerable();
-            let hint = if inserting && steerable {
+            let hint = if let Some(takes) = self.sign_in_takes() {
+                // Its key is the key bar's to say (views say no keys).
+                format!("Paste {} here and send it: it goes to the sign-in", takes.waiting.expects.unwrap_or_default())
+            } else if inserting && steerable {
                 "While it works: sending queues it next; adding puts it into what it's doing".to_owned()
             } else if inserting {
                 "Instructions… (/ for commands)".to_owned()

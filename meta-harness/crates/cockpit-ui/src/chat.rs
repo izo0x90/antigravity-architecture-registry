@@ -237,6 +237,13 @@ impl ChatStreamState {
         Some(SignInNow { ran_out: left_s == Some(0), left_s, pasted, waiting })
     }
 
+    /// The sign-in under way, when what's typed goes to it: it shows what to
+    /// paste back, its time isn't up and a paste isn't being checked. Then
+    /// the typing box is the sign-in's.
+    fn sign_in_takes(&self) -> Option<SignInNow> {
+        self.sign_in_now().filter(|n| n.waiting.expects.is_some() && n.waiting.url.is_some() && !n.ran_out && !n.pasted.as_ref().is_some_and(|p| p.finishing))
+    }
+
     fn thread(&self) -> Option<Ref<'_, ThreadView>> {
         Ref::filter_map(self.agents(), |a| a.thread_in(&self.ui.slot)).ok()
     }

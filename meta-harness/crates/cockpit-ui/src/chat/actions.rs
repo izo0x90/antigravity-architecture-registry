@@ -36,6 +36,7 @@ enum ChatCommand {
     Logout,
     CancelLogin,
     OpenLoginPage,
+    CopyLoginLink,
     OpenPage(String),
     Send,
     DismissNotice,
@@ -213,7 +214,10 @@ impl ActionProvider for ChatStreamState {
                 .collect();
             out.push(Action::new("harness.skills", format!("{}'s skills", s.display_name), "What the harness can be told to do by name", C::ListSkills).param(Param::Choice(choices)));
         }
+        // While the box is a sign-in's, nothing typed goes to the agent.
+        let to_agent = self.sign_in_takes().is_none();
         if let Some(view) = view
+            && to_agent
             && view.running_turn().is_some()
             && caps.turns.active_steering
             && !self.ui.input.text.trim().is_empty()
@@ -223,7 +227,7 @@ impl ActionProvider for ChatStreamState {
 
         // Harness commands; typing `/` and its start, those it matches show
         // under the box.
-        let typed = self.ui.input.text.strip_prefix('/').filter(|p| !p.contains(' '));
+        let typed = self.ui.input.text.strip_prefix('/').filter(|p| !p.contains(' ') && to_agent);
         if let Some(s) = snapshot {
             for command in &s.commands {
                 let param = match &command.input_hint {
@@ -247,8 +251,8 @@ impl ActionProvider for ChatStreamState {
             out.push(if again && (self.needs_login() || now.is_some() || self.sign_in_end_to_say().is_some()) { login.header(Setting, "Sign in", Some(icon::KEY)) } else { login });
             let hint = now.as_ref().and_then(|n| n.waiting.expects.clone()).unwrap_or_else(|| "what the sign-in page gave you".into());
             let complete = Action::new("auth.complete", "Finish signing in", "Paste what the sign-in page gave you", C::CompleteLogin).param(Param::Text { hint, start: String::new() });
-            let takes = now.as_ref().is_some_and(|n| n.waiting.expects.is_some() && !n.ran_out && !n.pasted.as_ref().is_some_and(|p| p.finishing));
-            out.push(if takes { complete.header(Button, "Finish signing in", Some(icon::KEY)) } else { complete });
+            // The typing box takes it while a sign-in waits (its Send says so).
+            out.push(complete);
             out.push(Action::new("auth.logout", "Sign out", "The harness forgets your sign-in on this machine", C::Logout));
         }
 
@@ -266,13 +270,17 @@ impl ActionProvider for ChatStreamState {
                 out.push(answer.place(Action::new(answer.id.clone(), answer.label.clone(), "Answers the agent's request this way", command).focused(), here));
             }
         }
-        // Typed in: sending it.
-        out.push(Action::new("chat.send", "Send the prompt", "To this slot's session (one opens if there's none); #name hands it what a tag is on", C::Send).focused().importance(crate::actions::PRIMARY).typed(crate::keymap::Sent::Send).on_typing(Button, "Send", Some(icon::PAPER_PLANE_RIGHT)));
+        // Typed in: sending it (to the sign-in, while one waits for it).
+        out.push(match self.sign_in_takes() {
+            Some(_) => Action::new("chat.send", "Finish signing in", "What's typed goes to the sign-in waiting for it, not the agent", C::Send).on_typing(Button, "Finish signing in", Some(icon::KEY)),
+            None => Action::new("chat.send", "Send the prompt", "To this slot's session (one opens if there's none); #name hands it what a tag is on", C::Send).on_typing(Button, "Send", Some(icon::PAPER_PLANE_RIGHT)),
+        }.focused().importance(crate::actions::PRIMARY).typed(crate::keymap::Sent::Send));
         // What the chat says on its own line, and its ways out.
         if let Some(now) = self.sign_in_now() {
             out.push(Action::new("auth.cancel", "Stop signing in", "The sign-in stops waiting; nothing else changes", C::CancelLogin).focused().importance(MINOR).header(Button, "Cancel sign-in", None));
             if now.waiting.url.is_some() && !now.ran_out {
-                out.push(Action::new("auth.page", "Open the sign-in page", "In a new tab", C::OpenLoginPage).focused().importance(crate::actions::PRIMARY).header(Button, "Open the sign-in page", Some(icon::ARROW_SQUARE_OUT)));
+                out.push(Action::new("auth.page", "Open the sign-in page", "In a new tab, here", C::OpenLoginPage).focused().importance(crate::actions::PRIMARY).header(Button, "Open the sign-in page", Some(icon::ARROW_SQUARE_OUT)));
+                out.push(Action::new("auth.copy", "Copy the sign-in link", "To open it somewhere else: another browser, another device", C::CopyLoginLink).focused().header(Button, "Copy link", Some(icon::COPY)));
             }
         }
         if let Some(ended) = self.sign_in_end_to_say().filter(|_| self.sign_in_now().is_none()) {
@@ -434,6 +442,12 @@ impl ActionProvider for ChatStreamState {
                 }
             }
             ChatCommand::OpenPage(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+            ChatCommand::CopyLoginLink => {
+                if let Some(url) = self.sign_in_now().and_then(|n| n.waiting.url) {
+                    ctx.copy_text(url);
+                    *cx.note = Some("Copied the sign-in link.".into());
+                }
+            }
             ChatCommand::OpenLoginPage => {
                 let url = self.sign_in_now().and_then(|n| n.waiting.url);
                 if let Some(url) = url {
@@ -442,8 +456,13 @@ impl ActionProvider for ChatStreamState {
             }
             ChatCommand::Send => {
                 let message = self.ui.input.take();
-                if !message.text.is_empty() {
-                    self.send_prompt(message);
+                let instance = self.active_instance();
+                match (self.sign_in_takes(), instance) {
+                    // The box is the sign-in's: what's typed is the answer, never a message.
+                    (Some(_), Some(instance)) if !message.text.trim().is_empty() => self.act(Act::FinishSignIn { instance, answer: message.text }),
+                    (Some(_), _) => {}
+                    (None, _) if !message.text.is_empty() => self.send_prompt(message),
+                    (None, _) => {}
                 }
             }
             ChatCommand::DismissNotice => self.act(Act::PutNoticeAway),

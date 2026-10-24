@@ -319,7 +319,7 @@ impl Steps {
                 let waiting = SignInWaiting {
                     id,
                     url: Some(link),
-                    instructions: format!("Open the link and sign in, then paste {expects} in Finish signing in."),
+                    instructions: format!("Open the link and sign in, then paste {expects} back."),
                     expects: Some(expects),
                     until_ms,
                 };
@@ -360,7 +360,7 @@ impl Steps {
                     let waiting = SignInWaiting {
                         id,
                         url: Some(link),
-                        instructions: "Open the link and sign in. The last page won't load: that's expected. Copy its address and paste it in Finish signing in.".into(),
+                        instructions: "Open the link and sign in. The last page won't load: that's expected. Copy its address and paste it back.".into(),
                         expects: Some("the address of the page that failed to load".into()),
                         until_ms,
                     };

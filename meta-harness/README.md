@@ -292,7 +292,13 @@ be three machines). The sign-in under way is the server's, from the moment
 it starts: every device shows it starting, then its link, the time left
 and Finish signing in, until it's taken, cancelled, started again or runs
 out; then how it ended. What's pasted back, or cancelled, names the
-sign-in it's for: a newer one isn't touched. Claude Code's page shows a code to
+sign-in it's for: a newer one isn't touched. Every step has its key, under
+Account: `Space a l` signs in, `Space a y` copies the link (to open it in
+another browser or on another device), `Space a p` opens it here,
+`Space a x` cancels, `Space a d` puts away how a failed one ended,
+`Space a o` signs out. While a sign-in waits, the chat's typing box is
+its: paste what the page gave back and send it (`Space a c` too); nothing
+typed then goes to the agent. Claude Code's page shows a code to
 paste back. Antigravity's ends on a page that fails to load (it goes to
 `127.0.0.1` on the device): paste that page's address within the time
 shown (5 minutes), and the server hands it to the waiting login, only to
