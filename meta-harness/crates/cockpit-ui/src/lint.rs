@@ -143,7 +143,7 @@ fn no_code_reads_or_names_a_key_the_keymap_doesnt_give_it() {
 }
 
 /// Where key text is made from bound actions.
-const KEY_TEXT_MAKERS: &[&str] = &["app/", "actions.rs", "palette.rs", "keymap/"];
+const KEY_TEXT_MAKERS: &[&str] = &["app/", "actions.rs", "palette.rs", "sheet.rs", "keymap/"];
 
 #[test]
 fn only_the_hosts_say_keys_and_only_from_a_bound_action() {

@@ -298,8 +298,9 @@ pub struct CockpitApp {
     /// A short note in the key bar (why something didn't happen), and since when.
     pub note: Option<String>,
     note_since: Option<f64>,
-    /// The key sheet (`?`) is open, with this filter.
-    pub key_sheet: Option<String>,
+    /// The keys of the mode the cockpit was in when the action list was
+    /// opened on everything (`?`): listed in it.
+    sheet_mode: Option<(&'static str, Vec<(String, &'static str)>)>,
     /// Where each panel was drawn last frame (hint labels stay inside theirs).
     panel_rects: Vec<egui::Rect>,
     /// Where the buttons of what you're on show, once changed here (else
@@ -375,7 +376,7 @@ impl CockpitApp {
             capture: None,
             note: None,
             note_since: None,
-            key_sheet: None,
+            sheet_mode: None,
             panel_rects: Vec::new(),
             item_buttons: None,
             item_bars: Vec::new(),
@@ -586,7 +587,6 @@ impl CockpitApp {
         self.render_hints(ctx);
         self.render_prefix_popup(ctx);
         self.render_which_key_hud(ctx);
-        self.render_key_sheet(ctx);
         self.render_palette(ctx);
         self.desk.frame_done();
     }

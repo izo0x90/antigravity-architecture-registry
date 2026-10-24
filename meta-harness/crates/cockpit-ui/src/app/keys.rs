@@ -144,9 +144,8 @@ impl CockpitApp {
                 }
             }
 
-            // A focused text field (e.g. a search box) gets its keys; the key
-            // sheet reads its own (Escape closes it and nothing else).
-            InputMode::Normal if text_input_focused(ctx) || self.key_sheet.is_some() => {}
+            // A focused text field (e.g. a search box) gets its keys.
+            InputMode::Normal if text_input_focused(ctx) => {}
 
             InputMode::Normal => {
                 // Anything else with keyboard focus (a button reached by Tab,

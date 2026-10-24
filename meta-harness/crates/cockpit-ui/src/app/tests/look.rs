@@ -54,10 +54,10 @@ fn the_quick_look_key_is_shown_wherever_keys_are_listed() {
     let bound = app.bound_actions();
     let bar: Vec<String> = app.bar_keys(&bound).iter().map(|b| format!("{} {}", b.key_hint(), b.action.id)).collect();
     assert!(bar.iter().any(|k| k.starts_with("q ") && k.ends_with(" quicklook.toggle")), "the key bar offers it on a card: {bar:?}");
-    app.key_sheet = Some(String::new());
-    let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("Quick look: the full card"), "the ? sheet lists it: {text}");
-    app.key_sheet = None;
+    let text = everything(&ctx, &mut app, "quick look");
+    assert!(text.contains("Quick look: the full card"), "the ? list has it: {text}");
+    app.palette.close();
+    app.input_mode = InputMode::Normal;
     let menu = leader_entries(&bound, &['q']);
     assert!(menu.iter().any(|e| matches!(e, LeaderEntry::Action { key: 'q', index } if bound[*index].action.id == "quicklook.toggle")), "Space q q opens it");
     // On nothing, it isn't offered.
@@ -103,7 +103,6 @@ fn the_quick_looks_own_actions_are_offered_with_their_keys() {
     assert!(bar.contains(&"quicklook.to_panel".to_owned()) && bar.contains(&"quicklook.toggle".to_owned()), "{bar:?}");
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("Open in a panel  Space q c"), "its control says its key: {text}");
-    app.key_sheet = Some("quick".into());
-    let text = texts(&frame(&ctx, &mut app, vec![]));
+    let text = everything(&ctx, &mut app, "quick");
     assert!(text.contains("Quick look") && text.contains("Close the quick look"), "{text}");
 }

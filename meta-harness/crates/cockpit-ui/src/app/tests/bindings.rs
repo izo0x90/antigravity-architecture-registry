@@ -184,49 +184,48 @@ fn keys_are_given_out_again_only_when_the_actions_change() {
     assert!(selected.iter().any(|b| b.action.id == "goto.code" && !b.keys.is_empty()), "the new go-to has its keys");
 }
 
+/// `?` is the action list on everything: every action, by where it acts
+/// (titled), every way to run each, faded where it doesn't apply and saying
+/// what it needs, then the pointer's and fingers' ways; searchable; its
+/// cycle key narrows it to what applies here.
 #[test]
-fn question_mark_lists_this_views_keys_grouped_and_searchable() {
+fn question_mark_lists_everything_by_section_faded_where_it_doesnt_apply() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Spec);
     frame(&ctx, &mut app, key("?"));
-    assert!(app.key_sheet.is_some());
+    assert!(app.palette.is_open(), "the action list");
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    // A section per layer of where you are: this panel first.
-    for expected in ["Keys", "Spec", "Navigate", "Go to", "Act", "g d", "Go to its code"] {
-        assert!(text.contains(expected), "{expected}: {text}");
-    }
-    // What each does, after its label, as the palette says it, and the
-    // filter finds a key by it (#39).
-    app.key_sheet = Some("on one sheet".into());
-    let text = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(text.contains("Every action and key") && text.contains("Tab: what applies here"), "{text}");
+    // Each found by what it says, under the title of where it acts (#39).
+    let text = everything(&ctx, &mut app, "on one sheet");
     assert!(text.contains("Keys for this buffer") && text.contains("Every key here and what it does, on one sheet"), "the description: {text}");
-    app.key_sheet = Some("next".into());
-    let text = texts(&frame(&ctx, &mut app, vec![]));
+    let text = everything(&ctx, &mut app, "next");
     for expected in ["Next discussion not settled", "J", "Next section"] {
         assert!(text.contains(expected), "{expected}: {text}");
     }
-    app.key_sheet = Some(String::new());
-    // Its panel's own and everywhere's follow (found by filtering).
-    app.key_sheet = Some("this panel".into());
+    let text = everything(&ctx, &mut app, "close this panel");
+    assert!(text.contains("Panel 2 · ") && text.contains("Close this panel"), "{text}");
+    let text = everything(&ctx, &mut app, "focus panel");
+    assert!(text.contains("Everywhere · ") && text.contains("Focus panel 1"), "{text}");
+    let text = everything(&ctx, &mut app, "fold");
+    assert!(text.contains("Fold the Overview section") && text.contains("z a"), "the spec's fold, in its words: {text}");
+    let text = everything(&ctx, &mut app, "long press");
+    assert!(text.contains("Pointer and touch") && text.contains("what can be done with it"), "{text}");
+    // One that doesn't apply here: listed, saying what it needs; not in
+    // what applies here.
+    let bound = app.bound_actions();
+    let applies = app.sheet_of(&bound).applies;
+    let idle = bound.iter().zip(&applies).find(|(b, applies)| !**applies && b.action.when.needs().is_some()).map(|(b, _)| b.action.label.clone()).expect("something that doesn't apply here");
+    let text = everything(&ctx, &mut app, &idle);
+    assert!(text.contains(&idle) && text.contains("Needs "), "{idle}: {text}");
+    frame(&ctx, &mut app, press(egui::Key::Tab, false));
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("Panel") && text.contains("Close this panel"), "{text}");
-    assert!(!text.contains("Next view"), "only this view's keys (and the shared ones)");
-    app.key_sheet = Some("focus panel".into());
-    let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("Everywhere") && text.contains("Focus panel 1"), "{text}");
-    assert!(text.find("Panel").is_none_or(|p| p < text.find("Everywhere").unwrap_or(0)), "what holds it before everywhere's");
-    app.key_sheet = Some("fold".into());
-    let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("View") && text.contains("Fold the Overview section") && text.contains("z a"), "the spec's fold, in its words: {text}");
-    app.key_sheet = Some("callee".into());
-    let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("Go to a callee") && !text.contains("Half a page down"), "{text}");
+    assert!(text.contains("Run an action") && !text.contains("Needs "), "what applies here: {text}");
     let selection = app.desk.graph_mut().selection.clone();
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
-    assert!(app.key_sheet.is_none());
+    assert!(!app.palette.is_open());
     frame(&ctx, &mut app, vec![]);
-    assert!(!text_input_focused(&ctx));
-    assert_eq!(app.desk.graph().selection, selection, "Escape closed the sheet and nothing else");
+    assert_eq!(app.desk.graph().selection, selection, "Escape closed it and nothing else");
 }
 
 #[test]

@@ -19,6 +19,18 @@ use crate::nav::Motion;
 use crate::theme::colors;
 use crate::viewport::{Go, Moved, Stop, Viewport};
 
+/// What a row is in its list.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RowKind {
+    /// Picked by Enter or a tap.
+    #[default]
+    Pick,
+    /// Read, not picked (a gesture, a key that runs nothing itself).
+    Inform,
+    /// A section's title: moves, the pointer and Enter pass it by.
+    Heading,
+}
+
 /// One row as it's drawn.
 #[derive(Clone, Debug, Default)]
 pub struct Row<'a> {
@@ -27,17 +39,18 @@ pub struct Row<'a> {
     pub colour: Option<(Color32, Mark)>,
     /// What it is now (a tick before it).
     pub current: bool,
-    pub detail: Option<&'a str>,
+    pub detail: Option<Cow<'a, str>>,
     /// Its keys, on the right.
     pub keys: Cow<'a, str>,
-    /// Shown but not picked here (an action that doesn't apply now).
-    pub unavailable: bool,
+    pub kind: RowKind,
+    /// Drawn faint: it doesn't apply where you are now.
+    pub faint: bool,
 }
 
 impl<'a> Row<'a> {
     /// A choice, as it's listed wherever choices are.
     pub fn of_choice(choice: &'a Choice) -> Self {
-        Self { label: &choice.label, colour: choice.colour, current: choice.current, detail: choice.detail.as_deref(), ..Self::default() }
+        Self { label: &choice.label, colour: choice.colour, current: choice.current, detail: choice.detail.as_deref().map(Cow::Borrowed), ..Self::default() }
     }
 }
 
@@ -119,6 +132,10 @@ impl PickList {
         let row_h = Self::row_height(ui, details);
         let stride = row_h + ui.spacing().item_spacing.y;
         self.highlight = self.highlight.min(len.saturating_sub(1));
+        // Never on a heading: the next row that isn't.
+        if len > 0 && row(self.highlight).kind == RowKind::Heading {
+            self.highlight = (self.highlight..len).chain(0..self.highlight).find(|i| row(*i).kind != RowKind::Heading).unwrap_or(self.highlight);
+        }
         // This frame's window and rows, before any move (not the last
         // frame's: a list just opened, or rows just come).
         self.viewport.margin = stride;
@@ -133,7 +150,8 @@ impl PickList {
             y
         });
         if let Some(motion) = moved.filter(|_| len > 0) {
-            self.go(motion, len, stride, now);
+            let stops: Vec<usize> = (0..len).filter(|i| row(*i).kind != RowKind::Heading).collect();
+            self.go(motion, &stops, stride, now);
         }
         let mut area = egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]).max_height(height).min_scrolled_height(height);
         if let Some(y) = self.viewport.wanted(now).map(|o| o.y).or(shown_at) {
@@ -160,12 +178,13 @@ impl PickList {
                 && moved.is_none()
                 && let Some((i, ..)) = laid.iter().find(|(_, _, r)| r.hovered())
                 && *i != self.highlight
+                && row(*i).kind != RowKind::Heading
             {
                 (self.highlight, self.chosen) = (*i, true);
             }
             for (i, rect, response) in laid {
                 let row = row(i);
-                if response.clicked() && !row.unavailable {
+                if response.clicked() && row.kind == RowKind::Pick {
                     picked = Some(i);
                 }
                 Self::paint(ui, rect, row, i == self.highlight);
@@ -175,7 +194,7 @@ impl PickList {
         if self.viewport.gliding() {
             ui.ctx().request_repaint();
         }
-        if enter && picked.is_none() && !row(self.highlight).unavailable {
+        if enter && picked.is_none() && row(self.highlight).kind == RowKind::Pick {
             picked = Some(self.highlight);
         }
         picked
@@ -185,19 +204,22 @@ impl PickList {
     /// one down from the last goes round to the first, one up from the
     /// first to the last (unless scrolled by hand since: then from what
     /// shows, as every view moves).
-    fn go(&mut self, motion: Motion, len: usize, stride: f32, now: f64) {
+    /// The rows it stops on are `rows` (all but the headings).
+    fn go(&mut self, motion: Motion, rows: &[usize], stride: f32, now: f64) {
+        let Some(last) = rows.len().checked_sub(1) else { return };
+        let at = rows.iter().position(|r| *r >= self.highlight).unwrap_or(last);
         let by_hand = self.viewport.by_hand;
         let go = match motion {
-            Motion::Down if self.highlight + 1 == len && !by_hand => Go::First,
-            Motion::Up if self.highlight == 0 && !by_hand => Go::Last,
+            Motion::Down if at == last && !by_hand => Go::First,
+            Motion::Up if at == 0 && !by_hand => Go::Last,
             _ => match Go::of(motion, 1) {
                 Some(go) => go,
                 None => return,
             },
         };
-        let stops: Vec<Stop> = (0..len).map(|i| Stop::new(i as f32 * stride, stride)).collect();
-        if let Some(moved) = self.viewport.go(&stops, Some(self.highlight), go) {
-            (self.highlight, self.chosen) = (moved.cursor, true);
+        let stops: Vec<Stop> = rows.iter().map(|i| Stop::new(*i as f32 * stride, stride)).collect();
+        if let Some(moved) = self.viewport.go(&stops, Some(at), go) {
+            (self.highlight, self.chosen) = (rows[moved.cursor], true);
             self.viewport.take(&moved, now, true);
         }
     }
@@ -212,14 +234,20 @@ impl PickList {
         let inner = rect.shrink2(egui::vec2(look.space_m, look.space_sm));
         let keys = ui.painter().layout_no_wrap(row.keys.into_owned(), egui::FontId::monospace(look.text_small), theme.key);
         let label_width = (inner.width() - keys.size().x - look.space_m).max(0.0);
-        let strong = if row.unavailable { theme.faint } else { theme.text_strong };
+        if row.kind == RowKind::Heading {
+            let title = egui::RichText::new(row.label).strong().size(look.text_label).color(theme.accent);
+            let galley = egui::WidgetText::from(title).into_galley(ui, Some(egui::TextWrapMode::Truncate), inner.width(), egui::TextStyle::Body);
+            ui.painter().galley(egui::pos2(inner.left(), inner.bottom() - galley.size().y), galley, theme.accent);
+            return;
+        }
+        let strong = if row.faint { theme.faint } else { theme.text_strong };
         let label: Cow<'_, str> = if row.current { format!("{} {}", egui_phosphor::regular::CHECK, row.label).into() } else { row.label.into() };
         let galley = crate::actions::choice_text(ui, &label, row.colour, look.text_label, strong).into_galley(ui, Some(egui::TextWrapMode::Truncate), label_width, egui::TextStyle::Body);
         ui.painter().galley(egui::pos2(inner.right() - keys.size().x, inner.top() + (galley.size().y - keys.size().y) / 2.0), keys, theme.key);
         let label_height = galley.size().y;
         ui.painter().galley(inner.left_top(), galley, strong);
         if let Some(detail) = row.detail.filter(|d| !d.is_empty()) {
-            let mut job = egui::text::LayoutJob::simple_singleline(detail.to_owned(), egui::FontId::proportional(look.text_small), theme.muted);
+            let mut job = egui::text::LayoutJob::simple_singleline(detail.into_owned(), egui::FontId::proportional(look.text_small), theme.muted);
             job.wrap = egui::text::TextWrapping::truncate_at_width(inner.width());
             ui.painter().galley(egui::pos2(inner.left(), inner.top() + label_height), ui.painter().layout_job(job), theme.muted);
         }
@@ -235,7 +263,7 @@ mod tests {
         ctx: egui::Context,
         list: PickList,
         len: usize,
-        unavailable: Option<usize>,
+        inform: Option<usize>,
         time: f64,
     }
 
@@ -248,8 +276,8 @@ mod tests {
     }
 
     impl Shown {
-        fn new(len: usize, unavailable: Option<usize>) -> Self {
-            Self { ctx: egui::Context::default(), list: PickList::default(), len, unavailable, time: 0.0 }
+        fn new(len: usize, inform: Option<usize>) -> Self {
+            Self { ctx: egui::Context::default(), list: PickList::default(), len, inform, time: 0.0 }
         }
 
         /// A frame a second after the last (a glide is over by then).
@@ -258,10 +286,10 @@ mod tests {
             let labels: Vec<String> = (0..self.len).map(|i| format!("row {i}")).collect();
             let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))), time: Some(self.time), events, ..Default::default() };
             let (mut picked, mut height) = (None, 0.0);
-            let (list, len, unavailable) = (&mut self.list, self.len, self.unavailable);
+            let (list, len, inform) = (&mut self.list, self.len, self.inform);
             let output = self.ctx.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let row = |i: usize| Row { label: &labels[i], unavailable: unavailable == Some(i), ..Row::default() };
+                    let row = |i: usize| Row { label: &labels[i], kind: if inform == Some(i) { RowKind::Inform } else { RowKind::Pick }, ..Row::default() };
                     let top = ui.cursor().top();
                     picked = list.show(ui, Listing { id: "test_list", height: 120.0, len, details: false, empty: "Nothing here" }, moved, enter, row);
                     height = ui.cursor().top() - top;
@@ -329,7 +357,7 @@ mod tests {
     }
 
     /// The pointer moving over a row moves the highlight; Enter and a tap
-    /// pick it; a row that doesn't apply is shown and highlighted but not
+    /// pick it; a row that only informs is shown and highlighted but not
     /// picked; with no rows, a note in their place and the same height.
     #[test]
     fn the_pointer_and_a_tap_pick_as_the_keys_do_and_an_empty_list_keeps_its_height() {
@@ -344,7 +372,7 @@ mod tests {
         shown.point(three);
         let tapped = shown.frame(vec![tap(three, true), tap(three, false)], None, false).picked;
         let entered = shown.frame(vec![], None, true).picked;
-        assert_eq!((shown.list.highlight(), tapped, entered), (3, None, None), "a row that doesn't apply: highlighted, not picked");
+        assert_eq!((shown.list.highlight(), tapped, entered), (3, None, None), "a row that only informs: highlighted, not picked");
 
         let mut empty = Shown::new(0, None);
         let frame = empty.frame(vec![], Some(Motion::Down), true);

@@ -9,6 +9,7 @@ use egui::{Frame, RichText, Stroke};
 use crate::actions::{Bound, Choice, Invocation, Origin, Param};
 use crate::keymap::KeymapConfig;
 use crate::pick_list::Listing;
+use crate::sheet::{Item, Line, Listed, Sheet};
 use crate::theme::colors;
 
 #[derive(Clone, Debug)]
@@ -43,6 +44,9 @@ pub struct Palette {
     /// the frame it changed, or before its answers came): it's taken once
     /// the rows are of what's typed.
     enter_waiting: bool,
+    /// The action list shows everything (`?`), not only what applies
+    /// where you are (`:`); its cycle key switches.
+    everything: bool,
     /// The query a search's rows were of last frame (they changed: the
     /// highlight starts again), and whether rows of what's typed have come
     /// since this search opened (until then none are shown: rows of a query
@@ -125,7 +129,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions, filter: String::new(), list: Default::default(), ask: None, enter_waiting: false, rows_of: None, answered: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None }
+        Self { open: false, stage: Stage::Actions, filter: String::new(), list: Default::default(), ask: None, enter_waiting: false, everything: false, rows_of: None, answered: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None }
     }
 }
 
@@ -159,6 +163,12 @@ impl Palette {
             Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } if self.open => Some(&action.action.id),
             _ => None,
         }
+    }
+
+    /// The action list shows everything (every action, faded where it
+    /// doesn't apply, and the keys that run nothing themselves): `?`.
+    pub fn show_everything(&mut self) {
+        self.everything = true;
     }
 
     /// Opens with the list already filtered (e.g. "index." for the index actions).
@@ -301,7 +311,7 @@ impl Palette {
     }
 
     /// Renders the palette; returns an invocation when the user picks something.
-    pub fn render(&mut self, ctx: &egui::Context, actions: &[Bound], keymap: &KeymapConfig) -> Option<Invocation> {
+    pub fn render(&mut self, ctx: &egui::Context, actions: &[Bound], sheet: &Sheet, keymap: &KeymapConfig) -> Option<Invocation> {
         if !self.open {
             return None;
         }
@@ -358,6 +368,11 @@ impl Palette {
             Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => action.action.cycle.as_ref().and_then(|id| actions.iter().find(|b| b.action.id == *id && b.origin == action.origin)),
             Stage::Actions => None,
         };
+        // The action list's cycle key: everything, or what applies here.
+        if cycled && matches!(stage, Stage::Actions) {
+            self.everything = !self.everything;
+            self.list.reset();
+        }
         // Cycled: it runs, and the picker stays (its top line says the new).
         let cycling = cycled && cycle.is_some();
         if let Some(bound) = cycle.filter(|_| cycled) {
@@ -378,6 +393,7 @@ impl Palette {
                     .show(ui, |ui| {
                         ui.set_width(width - 20.0);
                         let title = match &stage {
+                            Stage::Actions if self.everything => "Every action and key".to_owned(),
                             Stage::Actions => "Run an action".to_owned(),
                             Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => action.action.about.clone().unwrap_or_else(|| action.action.label.clone()),
                         };
@@ -439,34 +455,31 @@ impl Palette {
                         match &stage {
                             Stage::Actions => {
                                 // `:42` goes to line (or row) 42 of the focused view.
-                                let line = self.filter.trim().parse::<usize>().ok().filter(|n| *n > 0).and_then(|n| actions.iter().find(|b| b.action.id == "nav.line").map(|b| (n, b)));
-                                let mut listed: Vec<&Bound> = actions.iter().collect();
-                                // The closest to where you are first, then by name.
-                                listed.sort_by(|a, b| (a.layer, &a.action.label).cmp(&(b.layer, &b.action.label)));
-                                let group = |b: &Bound| b.leader.as_ref().filter(|l| l.len() > 1).and_then(|l| keymap.group_label(&l[..1])).unwrap_or("");
-                                let fingerprint: Vec<(&str, &str, &str, &str)> = listed.iter().map(|b| (b.action.id.as_str(), b.action.label.as_str(), b.action.detail.as_str(), group(b))).collect();
-                                let haystacks = || fingerprint.iter().map(|(id, label, detail, group)| format!("{label} {id} {group} {detail}")).collect();
-                                let ranked: Vec<&Bound> = self.ranked.of(&self.filter, &fingerprint, haystacks).iter().map(|i| listed[*i]).collect();
+                                let line = self.filter.trim().parse::<usize>().ok().filter(|n| *n > 0 && !self.everything).and_then(|n| actions.iter().find(|b| b.action.id == "nav.line").map(|b| (n, b)));
+                                let listed = Listed::of(actions, sheet, self.everything);
+                                let fingerprint = listed.fingerprint();
+                                let haystacks = || (0..listed.len()).map(|e| listed.haystack(e, keymap)).collect();
+                                let lines = listed.lines(self.ranked.of(&self.filter, (&fingerprint, self.everything), haystacks));
                                 let first = usize::from(line.is_some());
-                                let len = ranked.len() + first;
+                                let len = lines.len() + first;
                                 let line_label = line.map(|(n, _)| format!("Go to line {n}"));
                                 // `:N` first when typed, then the actions.
                                 let row = |i: usize| match (&line_label, i) {
                                     (Some(label), 0) => crate::pick_list::Row { label, keys: ":N".into(), ..Default::default() },
-                                    _ => {
-                                        let bound = ranked[i - first];
-                                        crate::pick_list::Row { label: &bound.action.label, detail: Some(&bound.action.detail), keys: bound.key_hint().into(), ..Default::default() }
-                                    }
+                                    _ => listed.row(lines[i - first]),
                                 };
                                 let listing = Listing { id: "palette_actions", height: list_height, len, details: true, empty: "No matching actions" };
                                 if let Some(i) = self.list.show(ui, listing, moved, enter, row) {
                                     match (line, i) {
                                         (Some((n, bound)), 0) => picked = Some(invocation(bound, Some(n.to_string()))),
                                         _ => {
-                                            let bound = ranked[i - first];
-                                            match bound.action.param {
-                                                Param::None => picked = Some(invocation(bound, None)),
-                                                _ => next_stage = Some(((*bound).clone(), true)),
+                                            if let Line::Entry(e) = lines[i - first]
+                                                && let Item::Action { bound, .. } = listed.item(e)
+                                            {
+                                                match bound.action.param {
+                                                    Param::None => picked = Some(invocation(bound, None)),
+                                                    _ => next_stage = Some(((*bound).clone(), true)),
+                                                }
                                             }
                                         }
                                     }
@@ -537,6 +550,9 @@ impl Palette {
                         // waits for the new ones, and says so.
                         if self.enter_waiting {
                             keys.insert(0, "Looking…".to_owned());
+                        }
+                        if matches!(stage, Stage::Actions) {
+                            keys.insert(keys.len() - 1, format!("{}: {}", keymap.list.cycle_label(), if self.everything { "what applies here" } else { "everything" }));
                         }
                         if let Some(bound) = cycle {
                             keys.insert(keys.len() - 1, format!("{}: {}", keymap.list.cycle_label(), bound.action.label));

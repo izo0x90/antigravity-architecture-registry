@@ -467,7 +467,13 @@ impl CockpitApp {
                     None => self.note = Some(if command == ShellCommand::Back { "Nothing to go back to." } else { "Nothing to go forward to." }.into()),
                 }
             }
-            ShellCommand::Keys => self.key_sheet = Some(String::new()),
+            // The action list on everything, with the keys of the mode it
+            // was opened from.
+            ShellCommand::Keys => {
+                self.sheet_mode = self.mode_keys();
+                self.open_palette(None);
+                self.palette.show_everything();
+            }
             ShellCommand::GoTo(op) => {
                 if let Some(number) = typed
                     && !self.land_in(number)

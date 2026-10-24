@@ -226,6 +226,15 @@ fn ctrl(ctx: &egui::Context, app: &mut CockpitApp, key: egui::Key) {
 }
 
 /// The calls sent to the server since last asked ("POST /api/…").
+/// The action list on everything (`?`), filtered: what it draws.
+fn everything(ctx: &egui::Context, app: &mut CockpitApp, filter: &str) -> String {
+    app.palette.open_with(filter);
+    app.palette.show_everything();
+    app.input_mode = InputMode::Palette;
+    frame(ctx, app, vec![]);
+    texts(&frame(ctx, app, vec![]))
+}
+
 fn sent(app: &CockpitApp) -> Vec<String> {
     std::mem::take(&mut *app.desk.net.sent.lock().unwrap())
 }

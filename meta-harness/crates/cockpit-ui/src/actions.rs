@@ -289,6 +289,23 @@ impl When {
             Self::Unavailable => false,
         }
     }
+
+    /// What it needs, in words (none: it always applies, or its view says
+    /// why when it's run).
+    pub fn needs(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Always | Self::Unavailable => return None,
+            Self::Target => "something under the cursor",
+            Self::Component => "a component under the cursor",
+            Self::Code => "code under the cursor",
+            Self::Named => "a line that names a component",
+            Self::Searched => "a search to step through",
+            Self::Back => "somewhere to go back to",
+            Self::Forward => "somewhere to go forward to",
+            Self::Marked => "a mark set",
+            Self::Reaches(_) => "something it leads to from here",
+        })
+    }
 }
 
 /// Importance: shown first in the key bar, listed first in the key sheet.

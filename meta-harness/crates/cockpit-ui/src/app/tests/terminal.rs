@@ -526,14 +526,15 @@ fn not_typing_it_moves_by_command_and_copies_one_s_output_or_runs_it_again() {
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert_eq!(inputs(&app)[inputs(&app).len() - 2..], [text("make test"), named(TermKey::Enter, false)]);
     // Something typed at the prompt, the cursor after it, or back at its
-    // start (Home): not run over it, nor into it.
+    // start (Home): not run over it, nor into it (found where everything
+    // is, `?`: it doesn't apply here; run, it says why).
     let mut typed = command(3, 1023, None, "");
     (typed.output, typed.input_col) = (None, 0);
     for (screen, how) in [(at_prompt("rm -rf out", vec![typed]), "the cursor moved on"), (at_prompt("rm -rf out", vec![waiting.clone()]), "the cursor at its start")] {
         app.desk.terminal_mut().arrive(vec![screen]);
         frame(&ctx, &mut app, vec![]);
         let before = inputs(&app).len();
-        keys(&ctx, &mut app, ":");
+        keys(&ctx, &mut app, "?");
         keys(&ctx, &mut app, "run the command again");
         frame(&ctx, &mut app, press(egui::Key::Enter, false));
         assert_eq!(inputs(&app).len(), before, "{how}");

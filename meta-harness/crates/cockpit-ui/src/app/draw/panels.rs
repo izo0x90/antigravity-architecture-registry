@@ -62,7 +62,8 @@ impl CockpitApp {
                 self.open_palette(Some(action));
             }
         }
-        let picked = self.palette.render(ctx, &bound, &self.config.keymap);
+        let sheet = self.sheet_of(&bound);
+        let picked = self.palette.render(ctx, &bound, &sheet, &self.config.keymap);
         // A trigger in what's written there: its picker, what it picks put after it.
         if let Some(pick) = self.palette.take_trigger().and_then(|c| self.triggered(c)) {
             self.palette.hold_for(&pick);

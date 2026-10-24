@@ -663,15 +663,19 @@ you are is a stack of levels offering actions the same way: what you're
 on, the buffer, what holds it (its panel, or the quick look), everywhere;
 the go-tos ask the view they'd land in whether it can show what you're
 on. Pausing on a prefix (`g`, `z`, `[`, `]`, `m`, `'`) lists what can
-follow, and `?` lists every key where you are: a section for what you're
-on, this buffer, what holds it (the quick look, the panel) and
-everywhere, each action with every way to run it (keys, leader path,
-gesture), the mode's keys first while typing or in the palette, and the
-pointer and touch grammar. `Space` opens the
-leader menu (the focused view's entries first), and `:` opens the command
-palette (`:42` goes to line 42). The palette and its pickers move with
-`Ctrl+J`/`Ctrl+K` (or `Ctrl+N`/`Ctrl+P`, or the arrows) and pick with
-`Enter`.
+follow. `Space` opens the leader menu (the focused view's entries
+first), and `:` opens the action list: what applies where you are,
+fuzzy-matched as you type (`:42` goes to line 42). `?` opens the same
+list on everything: every action, faded where it doesn't apply (saying
+what it needs), each with every way to run it (keys, leader path,
+gesture), under a title for where it acts (what you're on, this buffer,
+what holds it, everywhere), then the keys of the mode you were in and
+the pointer and touch grammar. Tab switches between the two. The list
+and its pickers move as every view does: `Ctrl+J`/`Ctrl+K` (or
+`Ctrl+N`/`Ctrl+P`, or the arrows) one at a time, going round at the
+ends, `Ctrl+D`/`Ctrl+U` half a page, `Ctrl+Home`/`Ctrl+End` to the first
+and last; `Enter` or a tap picks. A panel's setting picker (View,
+Source, ...) is the same list.
 
 A buffer reaches past itself only by asking, and every ask is done the
 one way whichever buffer asked: showing something in another buffer is
@@ -699,7 +703,7 @@ sit in a row of their own along the bottom of each panel and the quick
 look, the buttons first and what they act on after them: kept whether
 there are any or not, so nothing is covered and nothing moves. Every button is an
 action: it shows its key beside it (on hover when there's no room) and
-runs the way its key does. The key bar, the `?` sheet, the leader menu,
+runs the way its key does. The key bar, the action list (`:` and `?`), the leader menu,
 the palette and every button read one list of what can run where you are,
 so a key is shown wherever it runs and runs what it shows. A panel that
 isn't focused shows its buttons without keys (they run it once it is).
