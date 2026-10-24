@@ -1,7 +1,8 @@
 //! A pack's manifest (`pack.toml`): what it is, the external tool it manages
 //! and the versions of that tool it supports, how to install it on each
 //! platform and how to check it, and, by kind, how to start it (a language
-//! server), what it provides (a harness) or the files describing a language.
+//! server), what it provides (a harness), the files describing a language,
+//! or a font's faces (the cockpit's text, drawn in the browser).
 //! Everything is checked when the pack is loaded, so a bad pack never gets
 //! as far as an install.
 
@@ -30,6 +31,9 @@ pub struct Manifest {
     /// Languages: the files describing the language.
     #[serde(default)]
     pub language: Option<LanguageFiles>,
+    /// Fonts: the family and its faces' files.
+    #[serde(default)]
+    pub font: Option<FontFiles>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -51,6 +55,8 @@ pub enum Kind {
     Language,
     /// A language server (LSP): exact links for a language.
     Server,
+    /// A font the cockpit can draw its text in.
+    Font,
 }
 
 impl Kind {
@@ -59,6 +65,7 @@ impl Kind {
             Kind::Harness => "harness",
             Kind::Language => "language",
             Kind::Server => "server",
+            Kind::Font => "font",
         }
     }
 }
@@ -330,6 +337,29 @@ pub struct LanguageFiles {
     pub server: Option<String>,
 }
 
+/// A font's faces: files the install keeps (its `holds`).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FontFiles {
+    /// Its name, in words.
+    pub family: String,
+    /// The regular face (TTF or OTF), a path in the install folder.
+    pub regular: String,
+    #[serde(default)]
+    pub bold: Option<String>,
+}
+
+impl FontFiles {
+    /// A face's file by its style (`regular`, `bold`).
+    pub fn face(&self, style: &str) -> Option<&str> {
+        match style {
+            "regular" => Some(&self.regular),
+            "bold" => self.bold.as_deref(),
+            _ => None,
+        }
+    }
+}
+
 /// Placeholders a server contract may use.
 pub const SERVER_PLACEHOLDERS: [&str; 4] = ["root", "cache", "dest", "tool_version"];
 /// Placeholders a check may use.
@@ -363,16 +393,28 @@ impl Manifest {
                 _ => Ok(()),
             }
         };
-        let (tool, install, server, provides, language) = match p.kind {
-            Kind::Harness => (true, true, false, true, false),
-            Kind::Server => (true, true, true, false, false),
-            Kind::Language => (false, false, false, false, true),
+        let (tool, install, server, provides, language, font) = match p.kind {
+            Kind::Harness => (true, true, false, true, false, false),
+            Kind::Server => (true, true, true, false, false, false),
+            Kind::Language => (false, false, false, false, true, false),
+            Kind::Font => (true, true, false, false, false, true),
         };
         has(self.tool.is_some(), "tool", tool)?;
         has(!self.install.is_empty(), "install", install)?;
         has(self.server.is_some(), "server", server)?;
         has(self.provides.is_some(), "provides", provides)?;
         has(self.language.is_some(), "language", language)?;
+        has(self.font.is_some(), "font", font)?;
+        // A font's faces are what its install keeps, on every platform.
+        if let Some(font) = &self.font {
+            for (i, install) in self.install.iter().enumerate() {
+                for face in std::iter::once(&font.regular).chain(&font.bold) {
+                    if !install.holds.contains(face) {
+                        return Err(fail(format!("install[{i}]: holds doesn't keep the face {face}")));
+                    }
+                }
+            }
+        }
 
         let mut known: BTreeSet<&str> = ["dest", "platform"].into_iter().collect();
         if let Some(tool) = &self.tool {

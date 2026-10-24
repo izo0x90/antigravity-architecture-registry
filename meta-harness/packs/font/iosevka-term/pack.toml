@@ -1,0 +1,24 @@
+[pack]
+name = "iosevka-term"
+kind = "font"
+version = "1.0.0"
+description = "Iosevka Term: narrow, crisp, the classic terminal face of riced desktops; fits more in narrow panels (large: about 11 MB a face)."
+
+# The font's release (SIL Open Font License).
+[tool]
+name = "Iosevka Term"
+version = "34.9.1"
+supports = ">=34.0.0, <35.0.0"
+
+# A font is the same on every platform: its release, two faces kept.
+[[install]]
+platforms = ["linux-x86_64", "linux-arm64", "linux-arm64-16k", "macos-arm64", "macos-x86_64"]
+holds = ["IosevkaTerm-Regular.ttf", "IosevkaTerm-Bold.ttf"]
+
+[[install.steps]]
+download = { url = "https://github.com/be5invis/Iosevka/releases/download/v34.9.1/PkgTTF-IosevkaTerm-34.9.1.zip", sha256 = "3bd57a66a7f1e429a131d3bc35f4d0f3a8eb722f2fe8f59f595e424bda9a33c9", unpack = "zip", extract = ["IosevkaTerm-Regular.ttf", "IosevkaTerm-Bold.ttf"], timeout_s = 600 }
+
+[font]
+family = "Iosevka Term"
+regular = "IosevkaTerm-Regular.ttf"
+bold = "IosevkaTerm-Bold.ttf"

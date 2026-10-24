@@ -6,7 +6,6 @@ impl CockpitApp {
     pub fn update_lifecycle(&mut self, ctx: &egui::Context) {
         if !self.initialized {
             self.initialized = true;
-            ctx.set_fonts(crate::theme::font_definitions());
 
             self.home.connect_ws(ctx.clone());
 
@@ -28,6 +27,9 @@ impl CockpitApp {
         }
         self.desk.shared.settings.set(crate::shared::Settings::of(&self.config));
         self.desk.shared.user.set(self.config.user.name.clone());
+        if let Some(note) = self.fonts.tend(&self.config.fonts, &self.home, ctx) {
+            self.note = Some(note);
+        }
         if std::mem::take(&mut self.theme_dirty) {
             crate::theme::set(self.config.theme.clone(), ctx);
             crate::graph_style::set(self.config.graph_style.clone());

@@ -7,6 +7,7 @@ pub mod buffer;
 pub mod card;
 pub mod chat;
 pub mod code;
+pub mod fonts;
 pub mod panels;
 pub mod config;
 pub mod conversation;

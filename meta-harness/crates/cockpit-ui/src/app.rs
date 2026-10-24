@@ -276,6 +276,8 @@ pub struct CockpitApp {
     config_reply: Arc<Mutex<Option<NetResult<Option<String>>>>>,
     /// The config changed and its theme still needs applying.
     theme_dirty: bool,
+    /// The faces text is drawn in, as the config names them.
+    fonts: crate::fonts::Fonts,
     pub input_mode: InputMode,
     /// The mode the palette was opened from: closed without a pick, it
     /// goes back to typing when that's where it came from.
@@ -361,6 +363,7 @@ impl CockpitApp {
             config_error,
             config_reply: Arc::default(),
             theme_dirty: true,
+            fonts: Default::default(),
             input_mode: InputMode::Normal,
             palette_from: InputMode::Normal,
             leader_tap: TapTracker::default(),

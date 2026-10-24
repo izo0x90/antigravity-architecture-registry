@@ -1,0 +1,24 @@
+[pack]
+name = "maple-mono"
+kind = "font"
+version = "1.0.0"
+description = "Maple Mono: rounded and friendly, with a bit of character."
+
+# The font's release (SIL Open Font License).
+[tool]
+name = "Maple Mono"
+version = "7.9.0"
+supports = ">=7.9.0, <8.0.0"
+
+# A font is the same on every platform: its release, two faces kept.
+[[install]]
+platforms = ["linux-x86_64", "linux-arm64", "linux-arm64-16k", "macos-arm64", "macos-x86_64"]
+holds = ["MapleMono-Regular.ttf", "MapleMono-Bold.ttf"]
+
+[[install.steps]]
+download = { url = "https://github.com/subframe7536/maple-font/releases/download/v7.9/MapleMono-TTF.zip", sha256 = "3a35f8f0669bef3dded9df208cc4526a6f7573210e134816e9084a8981271d75", unpack = "zip", extract = ["MapleMono-Regular.ttf", "MapleMono-Bold.ttf"] }
+
+[font]
+family = "Maple Mono"
+regular = "MapleMono-Regular.ttf"
+bold = "MapleMono-Bold.ttf"

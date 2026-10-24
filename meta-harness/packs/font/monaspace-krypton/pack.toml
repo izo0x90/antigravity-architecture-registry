@@ -1,0 +1,24 @@
+[pack]
+name = "monaspace-krypton"
+kind = "font"
+version = "1.0.0"
+description = "Monaspace Krypton (GitHub): a mechanical, techy code face from the Monaspace family."
+
+# The font's release (SIL Open Font License).
+[tool]
+name = "Monaspace Krypton"
+version = "1.400.0"
+supports = ">=1.400.0, <2.0.0"
+
+# A font is the same on every platform: its release, two faces kept.
+[[install]]
+platforms = ["linux-x86_64", "linux-arm64", "linux-arm64-16k", "macos-arm64", "macos-x86_64"]
+holds = ["Static Fonts/Monaspace Krypton/MonaspaceKrypton-Regular.otf", "Static Fonts/Monaspace Krypton/MonaspaceKrypton-Bold.otf"]
+
+[[install.steps]]
+download = { url = "https://github.com/githubnext/monaspace/releases/download/v1.400/monaspace-static-v1.400.zip", sha256 = "ab66d71be751495f679727332a3345597943bd4d7beebca03f5cde04bf994de7", unpack = "zip", extract = ["Static Fonts/Monaspace Krypton/MonaspaceKrypton-Regular.otf", "Static Fonts/Monaspace Krypton/MonaspaceKrypton-Bold.otf"], timeout_s = 600 }
+
+[font]
+family = "Monaspace Krypton"
+regular = "Static Fonts/Monaspace Krypton/MonaspaceKrypton-Regular.otf"
+bold = "Static Fonts/Monaspace Krypton/MonaspaceKrypton-Bold.otf"

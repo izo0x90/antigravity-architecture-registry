@@ -118,6 +118,9 @@ pub struct CockpitState {
     pub state: Arc<nah_state::StateDb>,
     /// The cockpit, for agents driving it.
     pub remote: Arc<crate::remote::Remote>,
+    /// Where its packs are found from (the project, or where it runs): its
+    /// fonts are packs.
+    pub packs_at: std::path::PathBuf,
 }
 
 impl FromRef<CockpitState> for Arc<crate::remote::Remote> {
@@ -328,7 +331,7 @@ impl AppState {
         Ok(Self {
             server: ServerState { gate: gate.clone(), shutdown: stopping.clone() },
             home: HomeState { gate: gate.clone(), stopping: stopping.clone(), home },
-            cockpit: CockpitState { gate: gate.clone(), stopping: stopping.clone(), state: p.state, remote: p.remote },
+            cockpit: CockpitState { gate: gate.clone(), stopping: stopping.clone(), state: p.state, remote: p.remote, packs_at: p.arch.root().to_path_buf() },
             harness: HarnessState { gate: gate.clone(), stopping: stopping.clone(), registry: p.registry, sessions: p.sessions.clone(), slots: p.slots.clone(), hub: p.hub, tool_servers: p.tool_servers, root: p.arch.root().to_path_buf() },
             notify: NotifyState { gate: gate.clone(), notify: p.notify },
             terminals: p.terminals.map(|terminals| TerminalsState { gate: gate.clone(), stopping: stopping.clone(), terminals }),

@@ -348,11 +348,32 @@ mod tests {
     }
 }
 
-/// The cockpit's fonts: egui's defaults plus the phosphor icon font (also in
-/// monospace, after the first face, so icons show in code text too), and
-/// its filled style as a family of its own (`solid`).
-pub fn font_definitions() -> egui::FontDefinitions {
+/// Faces from font packs, by the family they lead.
+#[derive(Clone, Debug, Default)]
+pub struct Faces {
+    pub mono: Option<Face>,
+    pub text: Option<Face>,
+}
+
+/// One face: its pack's name and its file's bytes.
+#[derive(Clone, Debug)]
+pub struct Face {
+    pub name: String,
+    pub bytes: std::sync::Arc<Vec<u8>>,
+}
+
+/// The cockpit's fonts: egui's defaults, led by `faces` where given, plus
+/// the phosphor icon font (also in monospace, after the first face, so
+/// icons show in code text too), and its filled style as a family of its
+/// own (`solid`). egui's own stay after a pack's, for what it lacks.
+pub fn font_definitions(faces: &Faces) -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
+    for (face, family) in [(&faces.mono, egui::FontFamily::Monospace), (&faces.text, egui::FontFamily::Proportional)] {
+        if let Some(face) = face {
+            fonts.font_data.insert(face.name.clone(), egui::FontData::from_owned(face.bytes.as_ref().clone()).into());
+            fonts.families.entry(family).or_default().insert(0, face.name.clone());
+        }
+    }
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
     if let Some(font_keys) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
         font_keys.insert(1, "phosphor".into());
@@ -456,7 +477,7 @@ mod glyph_tests {
     #[test]
     fn every_character_the_ui_draws_has_a_glyph() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(super::font_definitions());
+        ctx.set_fonts(super::font_definitions(&Default::default()));
         let _ = ctx.run(Default::default(), |_| {});
         let mut missing = Vec::new();
         for (file, text) in SOURCES {
@@ -479,7 +500,7 @@ mod glyph_tests {
     #[test]
     fn card_widths_are_what_the_theme_draws() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(super::font_definitions());
+        ctx.set_fonts(super::font_definitions(&Default::default()));
         let _ = ctx.run(Default::default(), |_| {});
         let texts = ["CockpitApp", "fn · 12 more", "iiii", "WWWW", "AVATAR Tokyo", "arch_graph::tree::lay_out", "café → naïve", "ok ✅ done", "+6"];
         for size in [11.0, 14.0, 23.5] {

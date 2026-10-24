@@ -53,7 +53,7 @@ impl WebHandle {
                 canvas,
                 web_options,
                 Box::new(move |cc| {
-                    cc.egui_ctx.set_fonts(crate::theme::font_definitions());
+                    cc.egui_ctx.set_fonts(crate::theme::font_definitions(&Default::default()));
                     let mut app = CockpitApp::new(&origin, std::sync::Arc::new(alerts::Web));
                     if let Err(e) = page::install_page_door(app.page.wake(&cc.egui_ctx)) {
                         log::warn!("window.nah isn't there: {e:?}");

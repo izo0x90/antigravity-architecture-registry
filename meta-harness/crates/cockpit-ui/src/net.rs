@@ -295,6 +295,16 @@ impl NetClient {
         ctx: egui::Context,
         on_done: impl FnOnce(NetResult<T>) + Send + 'static,
     ) {
+        self.call_bytes(method, path, body, ctx, move |r| {
+            on_done(r.and_then(|bytes| {
+                let bytes: &[u8] = if bytes.is_empty() { b"null" } else { &bytes };
+                serde_json::from_slice::<T>(bytes).map_err(|e| NetError::other(format!("Bad response: {e}")))
+            }))
+        });
+    }
+
+    /// The same, the answer's bytes as they came (a font, say).
+    fn call_bytes(&self, method: &str, path: &str, body: Option<serde_json::Value>, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<u8>>) + Send + 'static) {
         #[cfg(test)]
         {
             self.sent.lock().unwrap().push(format!("{method} {path}"));
@@ -317,10 +327,7 @@ impl NetClient {
         request.headers.insert("Accept", "application/json");
         self.fetch(request, move |result| {
             let outcome = match result {
-                Ok(resp) if resp.ok => {
-                    let bytes: &[u8] = if resp.bytes.is_empty() { b"null" } else { &resp.bytes };
-                    serde_json::from_slice::<T>(bytes).map_err(|e| NetError::other(format!("Bad response: {e}")))
-                }
+                Ok(resp) if resp.ok => Ok(resp.bytes),
                 Ok(resp) => Err(http_error(&resp)),
                 Err(e) => Err(NetError::other(format!("Network error: {e}"))),
             };
@@ -333,11 +340,16 @@ impl NetClient {
     /// the server would: with `status` and `body`. False: none waits.
     #[cfg(test)]
     pub fn answer(&self, call: &str, status: u16, body: &serde_json::Value) -> bool {
+        self.answer_bytes(call, status, if body.is_null() { Vec::new() } else { serde_json::to_vec(body).unwrap() })
+    }
+
+    /// The same, with the body's bytes as they are (a font, say).
+    #[cfg(test)]
+    pub fn answer_bytes(&self, call: &str, status: u16, bytes: Vec<u8>) -> bool {
         let mut waiting = self.waiting.lock().unwrap();
         let Some(at) = waiting.iter().position(|(c, _)| c == call) else { return false };
         let (_, on_done) = waiting.remove(at);
         drop(waiting);
-        let bytes = if body.is_null() { Vec::new() } else { serde_json::to_vec(body).unwrap() };
         on_done(Ok(ehttp::Response { url: call.into(), ok: (200..300).contains(&status), status, status_text: String::new(), headers: ehttp::Headers::default(), bytes }));
         true
     }
@@ -561,6 +573,13 @@ impl NetClient {
     /// The user's UI config file (TOML), if the server has one.
     pub fn ui_config(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<Option<String>>) + Send + 'static) {
         self.call::<UiConfigFile>("GET", "/api/ui/config", None, ctx, move |r| on_done(r.map(|f| f.text)));
+    }
+
+    /// Font pack `name`'s face `style` (`regular`, `bold`), as the server
+    /// has it installed.
+    pub fn font_face(&self, name: &str, style: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<u8>>) + Send + 'static) {
+        let path = format!("{}/api/ui/fonts/{}/{}", self.prefix, urlencoding::encode(name), urlencoding::encode(style));
+        self.call_bytes("GET", &path, None, ctx, on_done);
     }
 
     /// The cockpit's state as it last saved it (none before it ever has).

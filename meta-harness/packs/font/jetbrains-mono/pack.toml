@@ -1,0 +1,24 @@
+[pack]
+name = "jetbrains-mono"
+kind = "font"
+version = "1.0.0"
+description = "JetBrains Mono: clean and tall, made for reading code; very common in modern setups."
+
+# The font's release (SIL Open Font License).
+[tool]
+name = "JetBrains Mono"
+version = "2.304.0"
+supports = ">=2.304.0, <3.0.0"
+
+# A font is the same on every platform: its release, two faces kept.
+[[install]]
+platforms = ["linux-x86_64", "linux-arm64", "linux-arm64-16k", "macos-arm64", "macos-x86_64"]
+holds = ["fonts/ttf/JetBrainsMono-Regular.ttf", "fonts/ttf/JetBrainsMono-Bold.ttf"]
+
+[[install.steps]]
+download = { url = "https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip", sha256 = "6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf", unpack = "zip", extract = ["fonts/ttf/JetBrainsMono-Regular.ttf", "fonts/ttf/JetBrainsMono-Bold.ttf"] }
+
+[font]
+family = "JetBrains Mono"
+regular = "fonts/ttf/JetBrainsMono-Regular.ttf"
+bold = "fonts/ttf/JetBrainsMono-Bold.ttf"

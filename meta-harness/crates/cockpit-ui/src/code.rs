@@ -1319,7 +1319,7 @@ pub(crate) mod tests {
     #[test]
     fn gutter_marks_sit_on_the_row_of_their_line() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::theme::font_definitions());
+        ctx.set_fonts(crate::theme::font_definitions(&Default::default()));
         let mut code = CodeViewerState::default();
         // Lines of different heights' worth of content, marks deep in the file.
         let text: String = (1..=40).map(|i| if i % 3 == 0 { format!("    let value_{i} = compute({i}); // a longer line\n") } else { format!("fn f{i}() {{}}\n") }).collect();
@@ -1342,7 +1342,7 @@ pub(crate) mod tests {
     #[test]
     fn opening_a_target_off_screen_scrolls_it_into_view_and_the_cursor_stays_visible() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::theme::font_definitions());
+        ctx.set_fonts(crate::theme::font_definitions(&Default::default()));
         let mut code = CodeViewerState::default();
         let text: String = (1..=900).map(|i| format!("fn line_{i}() {{}}\n")).collect();
         let frame = |code: &mut CodeViewerState| render(&ctx, code, 600.0).into_iter().map(|(t, _)| t).collect::<Vec<_>>();
@@ -1509,7 +1509,7 @@ pub(crate) mod tests {
     #[test]
     fn definitions_fold_and_symbols_on_screen_take_hints() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::theme::font_definitions());
+        ctx.set_fonts(crate::theme::font_definitions(&Default::default()));
         let mut code = sample();
         code.motion(Motion::Line(3), 1);
         code.fold(Fold::Close);

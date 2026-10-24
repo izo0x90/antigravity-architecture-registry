@@ -15,6 +15,7 @@ use crate::cockpit::{Needs, can};
 pub(crate) fn routes() -> Router<CockpitState> {
     Router::new()
         .route("/api/ui/config", get(ui_config_handler))
+        .route("/api/ui/fonts/{name}/{style}", get(font_face))
         .route("/api/ui/state", get(get_ui_state).put(put_ui_state))
         .route("/api/ui/drafts", get(get_drafts))
         .route("/api/ui/drafts/{slot}", put(put_draft))
@@ -77,6 +78,19 @@ async fn ui_config_handler(_: Needs<can::ViewRead>) -> Result<Json<serde_json::V
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Json(serde_json::json!({ "text": null }))),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("{}: {e}", path.display()) })))),
     }
+}
+
+/// An installed font pack's face, for the cockpit to draw its text in.
+async fn font_face(_: Needs<can::ViewRead>, State(state): State<CockpitState>, Path((name, style)): Path<(String, String)>) -> Result<impl axum::response::IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let said = |status: StatusCode, why: String| (status, Json(serde_json::json!({ "error": why })));
+    let at = state.packs_at.clone();
+    let file = tokio::task::spawn_blocking(move || crate::packs::catalog(&at).map_err(|e| e.to_string()).and_then(|catalog| crate::packs::font_face(&catalog, &name, &style)))
+        .await
+        .map_err(|e| said(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|why| said(StatusCode::NOT_FOUND, why))?;
+    let bytes = tokio::fs::read(&file).await.map_err(|e| said(StatusCode::NOT_FOUND, format!("{}: {e}", file.display())))?;
+    let kind = if file.extension().is_some_and(|e| e.eq_ignore_ascii_case("otf")) { "font/otf" } else { "font/ttf" };
+    Ok(([(axum::http::header::CONTENT_TYPE, kind)], bytes))
 }
 
 /// A one-time ticket to open a socket with (`/ws/events`, `/ws/cockpit`).

@@ -4,6 +4,7 @@
 /api/ui/state GET,HEAD,PUT
 /api/ui/drafts GET,HEAD
 /api/ui/drafts/s1 PUT
+/api/ui/fonts/jetbrains-mono/regular GET,HEAD
 /api/links/check POST
 /api/instances GET,HEAD
 /api/instances/fake/refresh POST

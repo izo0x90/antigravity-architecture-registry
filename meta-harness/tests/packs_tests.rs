@@ -344,3 +344,24 @@ fn a_stray_file_among_packs_is_an_error_and_update_covers_tools_found_on_path() 
     let out = run(&Command::Update(None), &catalog).unwrap();
     assert!(out.contains("fake-server is up to date"), "installed now: {out}");
 }
+
+#[test]
+fn a_font_pack_installed_serves_its_faces_and_one_not_says_how_to_get_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = Catalog::load(&distribution(), &places(dir.path())).unwrap();
+    // Every shipped font keeps the faces it names, on every platform.
+    for pack in catalog.of_kind(nah_packs::Kind::Font) {
+        let font = pack.manifest.font.as_ref().unwrap();
+        assert!(pack.manifest.install.iter().all(|i| i.holds.contains(&font.regular)), "{}", pack.name());
+    }
+    let err = meta_harness::packs::font_face(&catalog, "jetbrains-mono", "regular").unwrap_err();
+    assert!(err.contains("meta-harness pack install jetbrains-mono"), "{err}");
+    // Installed: the face is the file the pack kept.
+    let dest = catalog.root.join("jetbrains-mono/1.0.0");
+    let mut lock = Lock::default();
+    lock.packs.insert("jetbrains-mono".into(), Installed { pack_version: "1.0.0".into(), tool_version: Some("2.304.0".into()), platform: "linux-arm64".into(), dest: dest.clone(), sha256: vec![], installed_at: 0 });
+    lock.write(&catalog.lock_path).unwrap();
+    assert_eq!(meta_harness::packs::font_face(&catalog, "jetbrains-mono", "regular").unwrap(), dest.join("fonts/ttf/JetBrainsMono-Regular.ttf"));
+    assert!(meta_harness::packs::font_face(&catalog, "jetbrains-mono", "italic").unwrap_err().contains("no italic face"));
+    assert!(meta_harness::packs::font_face(&catalog, "rust", "regular").unwrap_err().contains("isn't a font"));
+}

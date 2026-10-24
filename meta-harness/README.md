@@ -223,6 +223,14 @@ knows kinds of steps, not tools. Every URL, version, path, checksum and
 platform name is in pack or config files. It installs into a staging
 folder, swaps it in, and records it in a lock file.
 
+Fonts are packs too (kind `font`): `meta-harness pack install
+jetbrains-mono` (or `iosevka-term`, `commit-mono`, `monaspace-neon`,
+`monaspace-krypton`, `geist-mono`, `maple-mono`) on the server the cockpit
+is opened from, then name it in the cockpit's config (`~/.config/nah/ui.toml`):
+`[fonts] mono = "jetbrains-mono"` (and `text` for the rest). Empty: egui's
+own faces. The server serves an installed face to the cockpit; one that
+can't be had is said, and egui's own is used.
+
 Packs come from `packs/index.toml`, in order: the ones shipped in the
 binary, then `<project>/.nah/packs/`, then `nah/packs/` in your config
 folder (`~/.config` on Linux). Any folder holding a `pack.toml` is a pack. A

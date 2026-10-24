@@ -53,6 +53,9 @@ pub struct UiConfig {
     pub code: CodeUi,
     pub panels: PanelsUi,
     pub changes: ChangesUi,
+    /// The faces text is drawn in.
+    #[serde(default)]
+    pub fonts: FontsUi,
     /// Every state's word, icon and colour.
     #[serde(default)]
     pub status: crate::status::Statuses,
@@ -82,6 +85,17 @@ impl Default for PanelsUi {
     fn default() -> Self {
         Self { max: 12, item_buttons: crate::hosted::ItemButtons::default() }
     }
+}
+
+/// The faces text is drawn in: font packs the UI server has installed, by
+/// name (`meta-harness pack install jetbrains-mono`); empty: egui's own.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FontsUi {
+    /// Code, terminals, keys: the monospace face.
+    pub mono: String,
+    /// Everything else.
+    pub text: String,
 }
 
 /// The changes view.
