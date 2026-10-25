@@ -283,7 +283,7 @@ impl ChatStreamState {
         let row = &shape.rows[shape.row_of(at)?];
         let view = self.thread()?;
         let run: Vec<&TurnItem> = row.run.map(|(a, b)| (a..=b).filter_map(|i| view.in_stream(i)).collect()).unwrap_or_default();
-        Some(self.ui.folds.here(row, &run, view.in_stream(at)?))
+        Some(self.ui.folds.here(row, &run, view.in_stream(row.first)?))
     }
 
     /// Whether request `id` (of `view`) waits on you.

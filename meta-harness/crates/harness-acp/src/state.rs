@@ -44,11 +44,18 @@ pub struct SessionState {
     /// A prompt's turn split by a message added to it: the turn it goes on
     /// in (its end ends that one).
     continues: HashMap<TurnId, TurnId>,
+    /// Where an update's `_meta` names the tool call whose sub-agent sent
+    /// it (a JSON pointer, its pack's); the item of the call whose
+    /// sub-agent sent the update being applied (none: the agent's own).
+    parent_call: Option<String>,
+    parent: Option<ItemId>,
     events: broadcast::Sender<AdapterEvent>,
 }
 
 impl SessionState {
-    pub fn new(thread: Thread) -> Self {
+    /// `parent_call`: where an update's `_meta` names the call whose
+    /// sub-agent sent it.
+    pub fn new(thread: Thread, parent_call: Option<String>) -> Self {
         let (events, _) = broadcast::channel(1024);
         Self {
             thread,
@@ -66,6 +73,8 @@ impl SessionState {
             replay_turn: None,
             replayed_message: None,
             continues: HashMap::new(),
+            parent_call,
+            parent: None,
             events,
         }
     }
@@ -311,7 +320,7 @@ impl SessionState {
             thread_id: self.thread.id.clone(),
             turn_id,
             native_id: native.map(NativeId::new),
-            parent_id: None,
+            parent_id: self.parent.clone(),
             ordinal: self.items.len() as u32,
             status,
             title,
@@ -358,6 +367,13 @@ impl SessionState {
     // ---- ACP updates ----
 
     pub fn apply(&mut self, update: &acp::SessionUpdate) {
+        // Whose it is: a sub-agent's (under the call that started it) or
+        // the agent's own. Another's than before ends what was streaming.
+        let parent = self.parent_of(update);
+        if parent != self.parent {
+            self.close_streams();
+            self.parent = parent;
+        }
         match update {
             acp::SessionUpdate::UserMessageChunk(chunk) => self.user_chunk(chunk),
             acp::SessionUpdate::AgentMessageChunk(chunk) => self.message_chunk(&chunk.content),
@@ -396,11 +412,26 @@ impl SessionState {
         }
     }
 
+    /// The item of the call whose sub-agent sent `update`, as its `_meta`
+    /// says (where its pack says to look), when that call is known.
+    fn parent_of(&self, update: &acp::SessionUpdate) -> Option<ItemId> {
+        let pointer = self.parent_call.as_deref()?;
+        let meta = match update {
+            acp::SessionUpdate::UserMessageChunk(chunk) | acp::SessionUpdate::AgentMessageChunk(chunk) | acp::SessionUpdate::AgentThoughtChunk(chunk) => chunk.meta.as_ref(),
+            acp::SessionUpdate::ToolCall(call) => call.meta.as_ref(),
+            acp::SessionUpdate::ToolCallUpdate(update) => update.meta.as_ref(),
+            _ => None,
+        }?;
+        let call = convert::pointer_in(meta, pointer)?.as_str()?;
+        self.tool_items.get(call).cloned()
+    }
+
     /// Only seen during history replay: a new user message starts a new replayed turn;
     /// consecutive chunks extend the same message (one with another id
     /// than the last, when the agent gives them, is another message).
+    /// A sub-agent's (its prompt, its call's input already) isn't one.
     fn user_chunk(&mut self, chunk: &acp::ContentChunk) {
-        if self.turn_running() {
+        if self.turn_running() || self.parent.is_some() {
             return; // the live prompt is already recorded by begin_turn
         }
         let text = match convert::content_block(&chunk.content) {
@@ -632,6 +663,11 @@ mod tests {
     use harness_contracts::{InstanceId, RuntimePolicy, ThreadId};
 
     fn state() -> SessionState {
+        nesting(None)
+    }
+
+    /// A state reading a sub-agent's parent call where `parent_call` says.
+    fn nesting(parent_call: Option<&str>) -> SessionState {
         SessionState::new(Thread {
             id: ThreadId::new("t"),
             instance_id: InstanceId::new("i"),
@@ -642,7 +678,7 @@ mod tests {
             model: None,
             controls: Default::default(),
             mcp_servers: Vec::new(),
-        })
+        }, parent_call.map(str::to_owned))
     }
 
     fn chunk(text: &str) -> acp::ContentChunk {
@@ -664,6 +700,49 @@ mod tests {
         assert!(matches!(by_turn(0).as_slice(), [ItemBody::UserMessage { text }, ItemBody::AssistantMessage { .. }] if text == "q1"));
         assert!(matches!(by_turn(1).as_slice(), [ItemBody::UserMessage { text }, ItemBody::AssistantMessage { .. }] if text == "q2 cont"));
         assert!(!s.turn_running());
+    }
+
+    /// `_meta` naming the call whose sub-agent sent an update, as the
+    /// Claude Code adapter stamps it.
+    fn by(call: &str) -> acp::Meta {
+        serde_json::from_value(serde_json::json!({ "claudeCode": { "parentToolUseId": call } })).unwrap()
+    }
+
+    /// A sub-agent's updates are items under the call that started it (its
+    /// pack says where their `_meta` names it); its streamed text doesn't
+    /// run into the agent's own; its prompt isn't a turn of yours. With no
+    /// pointer, or a call not known, nothing nests.
+    #[test]
+    fn a_sub_agents_work_nests_under_the_call_that_started_it() {
+        let mut s = nesting(Some("/claudeCode/parentToolUseId"));
+        let turn = s.begin_turn("look around");
+        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("Asking a helper. ")));
+        s.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("task-1", "Explore the parser")));
+        let task = s.tool_items["task-1"].clone();
+        s.apply(&acp::SessionUpdate::UserMessageChunk(chunk("its prompt").meta(by("task-1"))));
+        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("Reading it.").meta(by("task-1"))));
+        s.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("read-1", "Read parse.rs").meta(by("task-1"))));
+        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("Meanwhile, me.")));
+        s.apply(&acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new("read-1", acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed)).meta(by("task-1"))));
+        s.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("x", "Unknown parent").meta(by("nobody"))));
+        s.end_turn(&turn, TurnStatus::Completed, None);
+        let shown: Vec<(String, Option<&ItemId>)> = s.items.iter().skip(1).map(|i| (i.title.clone().or_else(|| i.body.said()).unwrap_or_default(), i.parent_id.as_ref())).collect();
+        assert_eq!(shown, [
+            ("Asking a helper. ".to_owned(), None),
+            ("Explore the parser".to_owned(), None),
+            ("Reading it.".to_owned(), Some(&task)),
+            ("Read parse.rs".to_owned(), Some(&task)),
+            ("Meanwhile, me.".to_owned(), None),
+            ("Unknown parent".to_owned(), None),
+        ]);
+        assert_eq!(s.turns.len(), 1, "its prompt isn't a turn");
+
+        let mut plain = state();
+        let turn = plain.begin_turn("look around");
+        plain.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("task-1", "Explore")));
+        plain.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("read-1", "Read").meta(by("task-1"))));
+        plain.end_turn(&turn, TurnStatus::Completed, None);
+        assert!(plain.items.iter().all(|i| i.parent_id.is_none()), "no pointer: nothing nests");
     }
 
     #[test]

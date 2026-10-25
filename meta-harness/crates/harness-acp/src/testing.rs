@@ -8,6 +8,9 @@
 //! - `[permission]`: asks to edit a file, then says which option it got;
 //! - `[question]`: asks two questions in a form, then says the answers;
 //! - `[hold]`: waits until [`MockAgent::release`];
+//! - `[sub-agent]`: starts a sub-agent with a tool call; the sub-agent's
+//!   message and call say whose they are in their `_meta`, where its
+//!   settings look (`parent_call`);
 //! - anything else: answers `echo: <prompt>`.
 //!
 //! A message steered in while a prompt runs is taken at once (as a real
@@ -53,6 +56,9 @@ pub struct MockSetup {
     /// error output, waits for the browser's callback on a local port, and,
     /// signed out, starts it when a session opens (and doesn't answer).
     pub loopback_login: bool,
+    /// Where its sub-agents' updates name the call that started them, in
+    /// their `_meta` (none: they don't say).
+    pub parent_call: Option<String>,
 }
 
 impl Default for MockSetup {
@@ -66,6 +72,7 @@ impl Default for MockSetup {
             load_session: false,
             sse: false,
             loopback_login: false,
+            parent_call: None,
         }
     }
 }
@@ -106,7 +113,7 @@ impl MockSetup {
         } else {
             acp::AuthMethod::Agent(acp::AuthMethodAgent::new("login", "Log in"))
         }];
-        Self { modes, declares, queues: settings.queueing.is_some(), auth_methods, signed_in, load_session: false, sse: true, loopback_login: false }
+        Self { modes, declares, queues: settings.queueing.is_some(), auth_methods, signed_in, load_session: false, sse: true, loopback_login: false, parent_call: settings.parent_call.clone() }
     }
 }
 
@@ -234,6 +241,9 @@ impl MockAgent {
         if text.contains("[tour]") {
             return tour(cx, &self.seen).await;
         }
+        if text.contains("[sub-agent]") {
+            return sub_agent(cx, self.setup.parent_call.as_deref());
+        }
         if text.contains("[permission]") {
             notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new("edit-1", "Edit main.rs").kind(acp::ToolKind::Edit).status(acp::ToolCallStatus::Pending)))?;
             let options = vec![
@@ -350,6 +360,21 @@ fn text(t: &str) -> acp::ContentChunk {
 
 fn say(cx: &ConnectionTo<Client>, words: &str) -> agent_client_protocol::Result<()> {
     notify(cx, acp::SessionUpdate::AgentMessageChunk(text(words)))
+}
+
+/// A sub-agent started by a tool call: its message and its call say whose
+/// they are where `parent_call` points in their `_meta`.
+fn sub_agent(cx: &ConnectionTo<Client>, parent_call: Option<&str>) -> agent_client_protocol::Result<()> {
+    notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new("task-1", "Explore the parser").status(acp::ToolCallStatus::InProgress)))?;
+    let meta = parent_call.map(|pointer| {
+        let mut meta = serde_json::json!({});
+        set(&mut meta, pointer, serde_json::json!("task-1"));
+        serde_json::from_value::<acp::Meta>(meta).expect("an object")
+    });
+    notify(cx, acp::SessionUpdate::AgentMessageChunk(text("Reading the parser.").meta(meta.clone())))?;
+    notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new("read-1", "Read parse.rs").kind(acp::ToolKind::Read).status(acp::ToolCallStatus::Completed).meta(meta)))?;
+    notify(cx, acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new("task-1", acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed))))?;
+    say(cx, "The helper read it.")
 }
 
 /// One of every kind of update, with a permission request in the middle.

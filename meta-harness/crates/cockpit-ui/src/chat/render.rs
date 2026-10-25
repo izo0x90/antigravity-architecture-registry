@@ -116,7 +116,7 @@ impl ChatStreamState {
                 egui::ScrollArea::vertical().id_salt(("chat_waiting", cx.at)).max_height(most).min_scrolled_height(most).auto_shrink([false, true]).show(ui, |ui| {
                     for (index, request) in &pending {
                         let on = index.is_some() && self.ui.cursor == *index;
-                        let rect = self.item_frame(ui, on, |chat, ui| {
+                        let rect = self.item_frame(ui, on, 0, |chat, ui| {
                             crate::request_card::render_request(ui, request, &mut chat.drafts);
                         });
                         if let Some(index) = index {
@@ -152,12 +152,14 @@ impl ChatStreamState {
     }
 
     /// An item as the chat draws it, in the stream or where what waits is
-    /// kept: in the column's width, filled while the cursor's on it
-    /// (`on`). Where it was drawn.
-    fn item_frame(&mut self, ui: &mut egui::Ui, on: bool, draw: impl FnOnce(&mut Self, &mut egui::Ui)) -> Rect {
+    /// kept: in the column's width (less a step in for each sub-agent it's
+    /// within, `depth`), filled while the cursor's on it (`on`). Where it
+    /// was drawn.
+    fn item_frame(&mut self, ui: &mut egui::Ui, on: bool, depth: usize, draw: impl FnOnce(&mut Self, &mut egui::Ui)) -> Rect {
         let fill = if on { colors().selection } else { Color32::TRANSPARENT };
         let look = crate::theme::look();
         Frame::NONE
+            .outer_margin(egui::Margin { left: (depth as f32 * look.space_l).min(f32::from(i8::MAX)) as i8, ..Default::default() })
             .fill(fill)
             .corner_radius(look.radius_s)
             .inner_margin(crate::theme::margin2(look.space_xs, look.space_hair))
@@ -330,14 +332,15 @@ impl ChatStreamState {
                     }
                 }
             }
-            let measure = Measure { span: row.last - row.first, folded: row.folded, open: !row.folded && rows::folds(item) && self.ui.folds.item_open(item), changed: (row.first..=row.last).map(|i| view.changed(i)).max().unwrap_or(0), width, text };
+            let opens = !row.folded && (rows::folds(item) || row.nested > 0);
+            let measure = Measure { span: row.last - row.first, folded: row.folded, open: opens && self.ui.folds.item_open(item), changed: (row.first..=row.last).map(|i| view.changed(i)).max().unwrap_or(0), width, text };
             let asks = matches!(item.body, ItemBody::Request { .. });
             let known = self.ui.heights.get(&item.id).filter(|(was, _)| *was == measure).map(|(_, height)| *height);
             let rect = match known {
                 Some(height) if !asks && !near.intersects(Rect::from_min_size(ui.cursor().min, Vec2::new(width, height))) => ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover()).0,
                 _ => {
                     let on = self.ui.cursor.is_some_and(|c| row.holds(c));
-                    let rect = self.item_frame(ui, on, |chat, ui| if row.folded { chat.render_run(ui, view, row) } else { chat.render_item(ui, view, item, row.first) });
+                    let rect = self.item_frame(ui, on, row.depth, |chat, ui| if row.folded { chat.render_run(ui, view, row) } else { chat.render_item(ui, view, item, row) });
                     self.ui.heights.insert(item.id.clone(), (measure, rect.height()));
                     rect
                 }
@@ -399,23 +402,31 @@ impl ChatStreamState {
         (line.response.rect, spot)
     }
 
-    /// The cursor on item `index` (a folded run holding it opened, so it's
-    /// a row of its own; on its first, the run), shown.
+    /// The cursor on item `index` (what hides it opened: a folded run
+    /// holding it, unless it's the run's first, and the calls whose
+    /// sub-agents it's within), shown.
     pub(super) fn put_cursor(&mut self, index: usize, show: crate::viewport::Show) {
-        let shape = self.shape();
-        let Some(last) = shape.rows.last().map(|r| r.last) else { return };
+        let Some(last) = self.shape().rows.last().map(|r| r.last) else { return };
         let index = index.min(last);
-        let Some(row) = shape.row_of(index).map(|r| &shape.rows[r]) else { return };
-        if row.folded
-            && row.first != index
-            && let Some(first) = self.thread().and_then(|v| v.in_stream(row.first).map(|i| i.id.clone()))
-        {
-            self.ui.folds.set_run(&first, rows::Set::Open);
+        // (Each pass opens one; one that doesn't open ends it.)
+        let mut opened = None;
+        loop {
+            let shape = self.shape();
+            let Some(row) = shape.row_of(index).map(|r| &shape.rows[r]) else { return };
+            if row.first == index || opened == Some((row.first, row.last)) {
+                break;
+            }
+            opened = Some((row.first, row.last));
+            let Some(first) = self.thread().and_then(|v| v.in_stream(row.first).map(|i| i.id.clone())) else { return };
+            if row.folded {
+                self.ui.folds.set_run(&first, rows::Set::Open);
+            } else {
+                self.ui.folds.set(&rows::Folding::Item { id: first, what: rows::Own::Work }, rows::Set::Open);
+            }
             // Laid out anew: shown once it's measured so.
             self.ui.scrolling.relaid();
         }
-        let shape = self.shape();
-        let Some(row) = shape.row_of(index) else { return };
+        let Some(row) = self.shape().row_of(index) else { return };
         self.ui.cursor = Some(index);
         self.ui.link_pick = None;
         self.ui.scrolling.show(row, show);
@@ -432,7 +443,9 @@ impl ChatStreamState {
         }
     }
 
-    pub(super) fn render_item(&mut self, ui: &mut egui::Ui, view: &ThreadView, item: &TurnItem, index: usize) {
+    /// The item `row` starts with, as its kind draws it.
+    pub(super) fn render_item(&mut self, ui: &mut egui::Ui, view: &ThreadView, item: &TurnItem, row: &rows::Row) {
+        let index = row.first;
         match &item.body {
             // Your messages and the agent's: as every conversation draws them.
             ItemBody::UserMessage { text } => crate::conversation::message(ui, &mut self.ui.markdown_cache, &crate::conversation::Message::new("user", text)),
@@ -466,13 +479,21 @@ impl ChatStreamState {
                         self.ui.drawing.push(Spot { key: format!("{index}:{n}"), rect: link.rect });
                     }
                 });
-                if !output.is_empty() {
-                    let open = self.ui.folds.item_open(item);
-                    ui.label(RichText::new(format!("{} output", crate::nav::fold_mark(open))).size(crate::theme::look().text_small).color(colors().muted));
-                    if open {
-                        for block in output {
-                            ui.label(RichText::new(block_detail(block)).monospace().size(crate::theme::look().text_small).color(colors().muted));
-                        }
+                // Its output, or what its sub-agent did (its items follow,
+                // open): folded unless opened.
+                let open = self.ui.folds.item_open(item);
+                let said = match (row.nested, output.is_empty()) {
+                    (0, true) => None,
+                    (0, false) => Some("output".to_owned()),
+                    (1, _) => Some("1 step by its sub-agent".to_owned()),
+                    (n, _) => Some(format!("{n} steps by its sub-agent")),
+                };
+                if let Some(said) = said {
+                    ui.label(RichText::new(format!("{} {said}", crate::nav::fold_mark(open))).size(crate::theme::look().text_small).color(colors().muted));
+                }
+                if open {
+                    for block in output {
+                        ui.label(RichText::new(block_detail(block)).monospace().size(crate::theme::look().text_small).color(colors().muted));
                     }
                 }
             }

@@ -152,11 +152,32 @@ impl ThreadView {
         true
     }
 
-    /// Item `item` (of the turn at `turn`) into the order shown: after its
-    /// turn's others.
+    /// Item `item` (of the turn at `turn`) into the order shown: a
+    /// sub-agent's (its parent shown, in its turn) after its parent's
+    /// others; else after its turn's others.
     fn place(&mut self, turn: usize, item: usize) {
-        let at = self.stream.partition_point(|(t, _)| *t <= turn);
+        let parent = self.items[item].parent_id.as_ref().and_then(|p| self.stream.iter().rposition(|(t, i)| *t == turn && self.items[*i].id == *p));
+        let at = match parent {
+            Some(parent) => {
+                let id = &self.items[self.stream[parent].1].id;
+                parent + 1 + self.stream[parent + 1..].iter().take_while(|(_, i)| self.descends(*i, id)).count()
+            }
+            None => self.stream.partition_point(|(t, _)| *t <= turn),
+        };
         self.stream.insert(at, (turn, item));
+    }
+
+    /// Whether item `item` (its place in `items`) is `ancestor`'s, at any
+    /// depth.
+    fn descends(&self, item: usize, ancestor: &ItemId) -> bool {
+        let mut at = self.items[item].parent_id.as_ref();
+        while let Some(parent) = at {
+            if parent == ancestor {
+                return true;
+            }
+            at = self.item_at.get(parent).and_then(|i| self.items[*i].parent_id.as_ref());
+        }
+        false
     }
 }
 
@@ -396,6 +417,25 @@ mod tests {
         assert_eq!(view.stream().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["a", "b", "c", "d"]);
         assert_eq!(view.items_of(&TurnId::new("two")).map(|i| i.id.as_str()).collect::<Vec<_>>(), ["c", "d"]);
         assert_eq!(view.in_stream(1).map(|i| i.id.as_str()), Some("b"));
+    }
+
+    /// A sub-agent's items follow the call that started it (after its
+    /// earlier ones, theirs too), whatever came between.
+    #[test]
+    fn a_sub_agents_items_follow_its_call() {
+        let mut store = Store::default();
+        store.apply(thread(ThreadStatus::Running), 0.0);
+        store.apply(turn("one", 1, TurnStatus::Running), 0.0);
+        let under = |id: &str, parent: &str| {
+            let ClientEvent::Session { event: AdapterEvent::ItemUpdated { mut item } } = in_turn(id, "one") else { unreachable!() };
+            item.parent_id = Some(ItemId::new(parent));
+            ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } }
+        };
+        for event in [in_turn("task", "one"), in_turn("other", "one"), under("a", "task"), in_turn("mine", "one"), under("b", "task"), under("a1", "a"), under("c", "task")] {
+            store.apply(event, 0.0);
+        }
+        let view = &store.threads[&ThreadId::new("t")];
+        assert_eq!(view.stream().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["task", "a", "a1", "b", "c", "other", "mine"]);
     }
 
     /// News from the agent is an update that came (each tenth of a second

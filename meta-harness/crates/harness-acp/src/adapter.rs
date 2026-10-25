@@ -65,7 +65,7 @@ impl AcpAdapter {
             mcp_servers: Vec::new(),
         };
         let shared = Arc::new(Shared {
-            state: Mutex::new(SessionState::new(thread)),
+            state: Mutex::new(SessionState::new(thread, self.profile.parent_call())),
             pending: Mutex::new(HashMap::new()),
             policy: Mutex::new(config.policy.clone()),
             profile: self.profile.clone(),

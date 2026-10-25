@@ -185,6 +185,17 @@ pub fn models_from_controls(controls: &[ConfigControl]) -> Option<Vec<ModelOptio
     })
 }
 
+/// What `pointer` (a JSON pointer) names in `meta` (none: nothing there).
+pub fn pointer_in<'a>(meta: &'a acp::Meta, pointer: &str) -> Option<&'a serde_json::Value> {
+    let path = pointer.strip_prefix('/')?;
+    let (key, rest) = path.split_once('/').map_or((path, None), |(key, rest)| (key, Some(rest)));
+    let value = meta.get(&key.replace("~1", "/").replace("~0", "~"))?;
+    match rest {
+        Some(rest) => value.pointer(&format!("/{rest}")),
+        None => Some(value),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,3 +207,4 @@ mod tests {
         assert_eq!(stop_reason(&acp::StopReason::Refusal), TurnStatus::Failed);
     }
 }
+

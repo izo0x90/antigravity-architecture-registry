@@ -274,7 +274,7 @@ impl ActionProvider for ChatStreamState {
         }
         // Its settings: how much of what the agent does it shows (what's
         // folded at first), what shows the agent at work.
-        let verbosity = super::rows::Verbosity::ALL.into_iter().map(|v| Choice::new(v.name(), v.name()).detail(Some(v.detail().into())).current(v == self.ui.folds.verbosity())).collect();
+        let verbosity = rows::Verbosity::ALL.into_iter().map(|v| Choice::new(v.name(), v.name()).detail(Some(v.detail().into())).current(v == self.ui.folds.verbosity())).collect();
         out.push(Action::new("chat.verbosity", "How much it shows", "Quiet: messages and what needs you; normal: calls folded into runs; everything: every call and its output", C::Verbosity).param(Param::Choice(verbosity)).setting("Shows", None).group(crate::actions::Group::View).importance(MINOR));
         let shown = crate::indicator::ALL.iter().map(|(name, _)| Choice::new(*name, *name).current(*name == self.ui.indicator.name())).collect();
         out.push(Action::new("chat.indicator", "Show the agent at work as…", "Beside the running turn's words: a heartbeat of its updates, or nothing", C::Indicator).param(Param::Choice(shown)).setting("At work", None).group(crate::actions::Group::View).importance(MINOR));
@@ -473,7 +473,7 @@ impl ActionProvider for ChatStreamState {
             // Its defaults change: what was folded or opened by hand starts
             // afresh (the same one: nothing changes).
             ChatCommand::Verbosity => {
-                if let Some(verbosity) = value.as_deref().and_then(super::rows::Verbosity::from_name) {
+                if let Some(verbosity) = value.as_deref().and_then(rows::Verbosity::from_name) {
                     self.ui.folds.set_verbosity(verbosity);
                 }
             }

@@ -3,9 +3,11 @@
 //! in one turn: tool calls, commands, file changes; quiet, everything
 //! between two messages), which is one row while folded ("Read 3 files,
 //! searched twice, ran 1 command"). A call's output, and reasoning, fold
-//! too. Folded or open is by default (the verbosity says), or as
-//! everything was set at once (`z R`, `z M`), or as set by hand, by item
-//! id: what's set holds as the stream grows and as calls end.
+//! too, and so does what a call's sub-agent did (its items follow the
+//! call, nested a level deeper). Folded or open is by default (the
+//! verbosity says), or as everything was set at once (`z R`, `z M`), or
+//! as set by hand, by item id: what's set holds as the stream grows and
+//! as calls end.
 
 use std::collections::BTreeMap;
 
@@ -13,13 +15,17 @@ use harness_contracts::{ItemBody, ItemId, ItemStatus, TurnItem};
 
 /// One row: the items it covers (their places in the stream, `first` to
 /// `last`); the run it's in (its first and last item), folded into this
-/// row or open, each of its items a row.
+/// row or open, each of its items a row; how deep it's nested (within how
+/// many calls' sub-agents); how many items its sub-agent's work holds
+/// (folded, they're in this row).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Row {
     pub first: usize,
     pub last: usize,
     pub run: Option<(usize, usize)>,
     pub folded: bool,
+    pub depth: usize,
+    pub nested: usize,
 }
 
 impl Row {
@@ -200,18 +206,21 @@ impl Folds {
     /// The runs in `items` (the stream, in order), first to last: items
     /// in a row in one turn that fold together (calls; quiet, reasoning
     /// too), two or more (quiet, even one).
-    pub(crate) fn runs(&self, items: &[&TurnItem]) -> Vec<(usize, usize)> {
+    /// (A call whose sub-agent did anything stands on its own; a run is
+    /// of one sub-agent's calls, or the agent's own.)
+    pub(crate) fn runs(&self, items: &[&TurnItem], nesting: &Nesting) -> Vec<(usize, usize)> {
         let quiet = self.verbosity == Verbosity::Quiet;
-        let joins = |item: &TurnItem| is_call(item) || quiet && matches!(item.body, ItemBody::Reasoning { .. });
+        let joins = |k: usize| (is_call(items[k]) || quiet && matches!(items[k].body, ItemBody::Reasoning { .. })) && nesting.end[k] == k;
+        let together = |a: usize, b: usize| items[a].turn_id == items[b].turn_id && items[a].parent_id == items[b].parent_id;
         let fewest = if quiet { 0 } else { 1 };
         let mut out = Vec::new();
         let mut i = 0;
         while i < items.len() {
             let mut end = i;
-            while joins(items[i]) && end + 1 < items.len() && joins(items[end + 1]) && items[end + 1].turn_id == items[i].turn_id {
+            while joins(i) && end + 1 < items.len() && joins(end + 1) && together(i, end + 1) {
                 end += 1;
             }
-            if joins(items[i]) && end - i >= fewest {
+            if joins(i) && end - i >= fewest {
                 out.push((i, end));
             }
             i = end + 1;
@@ -219,23 +228,37 @@ impl Folds {
         out
     }
 
-    /// What folds where the cursor is (item `at`, on `row`; `run`: the
-    /// items of the run it's in): the run, and the item's own fold while
-    /// it shows.
-    pub(crate) fn here(&self, row: &Row, run: &[&TurnItem], at: &TurnItem) -> Here {
+    /// What folds where the cursor is (on `row`, `first` its first item;
+    /// `run`: the items of the run it's in): the run, and the item's own
+    /// fold (its output, its reasoning, its sub-agent's work) while it
+    /// shows.
+    pub(crate) fn here(&self, row: &Row, run: &[&TurnItem], first: &TurnItem) -> Here {
         let run = row.run.and(Folding::of_run(run)).map(|run| (run, !row.folded));
-        let own = (!row.folded && folds(at)).then(|| (Folding::Item { id: at.id.clone(), reasoning: matches!(at.body, ItemBody::Reasoning { .. }) }, self.item_open(at)));
+        let what = match &first.body {
+            _ if row.nested > 0 => Own::Work,
+            ItemBody::Reasoning { .. } => Own::Reasoning,
+            _ => Own::Output,
+        };
+        let own = (!row.folded && (folds(first) || row.nested > 0)).then(|| (Folding::Item { id: first.id.clone(), what }, self.item_open(first)));
         Here { run, own }
     }
 }
 
 /// What a fold is: a run (its first item, how many it holds, whether
-/// they're all calls), or an item's own (its id; whether it's reasoning,
-/// else a call's output).
+/// they're all calls), or an item's own (its id, and what it folds).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Folding {
     Run { first: ItemId, calls: usize, only_calls: bool },
-    Item { id: ItemId, reasoning: bool },
+    Item { id: ItemId, what: Own },
+}
+
+/// What an item's own fold holds: a call's output, the reasoning, or what
+/// the call's sub-agent did (its output too).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Own {
+    Output,
+    Reasoning,
+    Work,
 }
 
 impl Folding {
@@ -248,8 +271,9 @@ impl Folding {
     pub(crate) fn words(&self) -> String {
         match self {
             Self::Run { calls, only_calls, .. } => run_words(*calls, *only_calls),
-            Self::Item { reasoning: true, .. } => "the reasoning".to_owned(),
-            Self::Item { reasoning: false, .. } => "its output".to_owned(),
+            Self::Item { what: Own::Reasoning, .. } => "the reasoning".to_owned(),
+            Self::Item { what: Own::Output, .. } => "its output".to_owned(),
+            Self::Item { what: Own::Work, .. } => "its sub-agent's work".to_owned(),
         }
     }
 }
@@ -275,6 +299,16 @@ pub(crate) struct Here {
 }
 
 impl Here {
+    /// What Enter unfolds: a folded run, or a sub-agent's folded work (a
+    /// row standing for several, as a run does).
+    pub(crate) fn unfolds(&self) -> Option<&Folding> {
+        match (&self.run, &self.own) {
+            (Some((run, false)), _) => Some(run),
+            (_, Some((own @ Folding::Item { what: Own::Work, .. }, false))) => Some(own),
+            _ => None,
+        }
+    }
+
     pub(crate) fn toggles(&self) -> Option<&(Folding, bool)> {
         match (&self.run, &self.own) {
             (Some(run @ (_, false)), _) => Some(run),
@@ -292,11 +326,39 @@ impl Here {
     }
 }
 
+/// How the stream's items nest: each one's depth (within how many calls'
+/// sub-agents), and its last descendant (itself: none). A sub-agent's
+/// items follow their call's (the store keeps them so).
+pub(crate) struct Nesting {
+    pub depth: Vec<usize>,
+    pub end: Vec<usize>,
+}
+
+/// How `items` (the stream, in order) nest.
+pub(crate) fn nesting(items: &[&TurnItem]) -> Nesting {
+    let mut nest = Nesting { depth: vec![0; items.len()], end: (0..items.len()).collect() };
+    // (The items it's within, innermost last: past its parent, done.)
+    let mut within: Vec<usize> = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        let keep = item.parent_id.as_ref().and_then(|p| within.iter().rposition(|w| items[*w].id == *p)).map_or(0, |at| at + 1);
+        for done in within.drain(keep..) {
+            nest.end[done] = i - 1;
+        }
+        nest.depth[i] = within.len();
+        within.push(i);
+    }
+    for top in within {
+        nest.end[top] = items.len() - 1;
+    }
+    nest
+}
+
 /// The rows of `items` (the stream, in order) as `folds` has them, and
 /// whether anything shown is folded or open: in one pass, each run met as
-/// the items reach it.
+/// the items reach it, a folded sub-agent's work in its call's row.
 pub(crate) fn shape(items: &[&TurnItem], folds: &Folds) -> Shape {
-    let mut runs = folds.runs(items).into_iter().peekable();
+    let nest = nesting(items);
+    let mut runs = folds.runs(items, &nest).into_iter().peekable();
     let mut shape = Shape { rows: Vec::with_capacity(items.len()), ..Shape::default() };
     let note = |open: bool, shape: &mut Shape| {
         shape.any_folded |= !open;
@@ -304,23 +366,31 @@ pub(crate) fn shape(items: &[&TurnItem], folds: &Folds) -> Shape {
     };
     let mut i = 0;
     while i < items.len() {
-        let run = runs.next_if(|(a, _)| *a == i);
-        let (a, b) = run.unwrap_or((i, i));
-        let open = run.is_none_or(|(a, b)| folds.run_open(&items[a..=b]));
-        if run.is_some() {
+        let depth = nest.depth[i];
+        if let Some((a, b)) = runs.next_if(|(a, _)| *a == i) {
+            let open = folds.run_open(&items[a..=b]);
+            note(open, &mut shape);
+            if open {
+                for (j, item) in items.iter().enumerate().take(b + 1).skip(a) {
+                    if self::folds(item) {
+                        note(folds.item_open(item), &mut shape);
+                    }
+                    shape.rows.push(Row { first: j, last: j, run: Some((a, b)), folded: false, depth, nested: 0 });
+                }
+            } else {
+                shape.rows.push(Row { first: a, last: b, run: Some((a, b)), folded: true, depth, nested: 0 });
+            }
+            i = b + 1;
+            continue;
+        }
+        let nested = nest.end[i] - i;
+        let open = folds.item_open(items[i]);
+        if self::folds(items[i]) || nested > 0 {
             note(open, &mut shape);
         }
-        if !open {
-            shape.rows.push(Row { first: a, last: b, run, folded: true });
-        } else {
-            for (j, item) in items.iter().enumerate().take(b + 1).skip(a) {
-                if self::folds(item) {
-                    note(folds.item_open(item), &mut shape);
-                }
-                shape.rows.push(Row { first: j, last: j, run, folded: false });
-            }
-        }
-        i = b + 1;
+        let last = if nested > 0 && !open { nest.end[i] } else { i };
+        shape.rows.push(Row { first: i, last, run: None, folded: false, depth, nested });
+        i = last + 1;
     }
     shape
 }
@@ -428,7 +498,7 @@ mod tests {
         let mut stream = vec![call(1, "a", ToolKind::Read), call(2, "a", ToolKind::Execute)];
         let mut folds = Folds::default();
         folds.set_run(&ItemId::new("i1"), Set::Open);
-        folds.set(&Folding::Item { id: ItemId::new("i2"), reasoning: false }, Set::Open);
+        folds.set(&Folding::Item { id: ItemId::new("i2"), what: Own::Output }, Set::Open);
         stream[1] = failed(stream[1].clone());
         let items: Vec<&TurnItem> = stream.iter().collect();
         assert!(shape(&items, &folds).rows.len() == 2 && folds.item_open(items[1]), "still open after it failed");
@@ -438,7 +508,7 @@ mod tests {
 
         let mut lone = vec![said(0, "a"), call(1, "a", ToolKind::Read)];
         let mut folds = Folds::default();
-        folds.set(&Folding::Item { id: ItemId::new("i1"), reasoning: false }, Set::Open);
+        folds.set(&Folding::Item { id: ItemId::new("i1"), what: Own::Output }, Set::Open);
         lone.push(call(2, "a", ToolKind::Read));
         let items: Vec<&TurnItem> = lone.iter().collect();
         assert_eq!(rows_of(&items, &folds), [(0, 0), (1, 1), (2, 2)], "the run it joined is open: its output still shows");
@@ -466,6 +536,31 @@ mod tests {
         let row = shape(&items, &folds).rows[0].clone();
         let here = folds.here(&row, &items, items[1]);
         assert!(here.own.is_none() && here.toggles().is_some_and(|(f, open)| f.words() == "the 2 calls" && !open), "folded: the run");
+    }
+
+    fn under(mut item: TurnItem, parent: u32) -> TurnItem {
+        item.parent_id = Some(ItemId::new(format!("i{parent}")));
+        item
+    }
+
+    /// A sub-agent's items follow its call's, a level deeper: folded by
+    /// default into the call's row ("its sub-agent's work"), each a row
+    /// once opened, its calls in runs of their own; a call with work of its
+    /// own doesn't join a run with its neighbours.
+    #[test]
+    fn a_sub_agents_work_folds_under_its_call() {
+        let stream = [said(0, "a"), call(1, "a", ToolKind::Read), call(2, "a", ToolKind::Other), under(said(3, "a"), 2), under(call(4, "a", ToolKind::Read), 2), under(call(5, "a", ToolKind::Read), 2), under(call(6, "a", ToolKind::Other), 5), call(7, "a", ToolKind::Read), said(8, "a")];
+        let items: Vec<&TurnItem> = stream.iter().collect();
+        let nest = nesting(&items);
+        assert_eq!((nest.depth.clone(), nest.end.clone()), (vec![0, 0, 0, 1, 1, 1, 2, 0, 0], vec![0, 1, 6, 3, 4, 6, 6, 7, 8]));
+        let mut folds = Folds::default();
+        let shape_of = |folds: &Folds| shape(&items, folds).rows.iter().map(|r| (r.first, r.last, r.depth, r.nested)).collect::<Vec<_>>();
+        assert_eq!(shape_of(&folds), [(0, 0, 0, 0), (1, 1, 0, 0), (2, 6, 0, 4), (7, 7, 0, 0), (8, 8, 0, 0)], "folded into its call's row; the calls around it alone");
+        let rows = shape(&items, &folds).rows;
+        let here = folds.here(&rows[2], &[], items[2]);
+        assert_eq!(here.unfolds().map(Folding::words).as_deref(), Some("its sub-agent's work"));
+        folds.set(here.unfolds().unwrap(), Set::Open);
+        assert_eq!(shape_of(&folds), [(0, 0, 0, 0), (1, 1, 0, 0), (2, 2, 0, 4), (3, 3, 1, 0), (4, 4, 1, 0), (5, 6, 1, 1), (7, 7, 0, 0), (8, 8, 0, 0)], "open: its items a level in; a call with work of its own alone");
     }
 
     /// Quiet: everything between two messages is one folded line, even one

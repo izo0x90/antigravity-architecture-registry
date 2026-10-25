@@ -351,3 +351,48 @@ fn the_live_line_stays_in_sight_through_a_long_turn() {
     let (live, again) = shown(&ctx, &mut app, 13.0);
     assert!(live.is_none() && again > 1.0, "out of sight, nothing asked: {live:?}, again in {again}");
 }
+
+/// A sub-agent's work is under the call that started it, folded ("2
+/// steps by its sub-agent"); Enter on the call unfolds it, its items a
+/// step in; folded again, a jump to one of them opens it.
+#[test]
+fn a_sub_agents_work_is_folded_under_its_call() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Chat);
+    let under = |mut event: ClientEvent| {
+        if let ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } } = &mut event {
+            item.parent_id = Some(harness_contracts::ItemId::new("i40"));
+        }
+        event
+    };
+    let read = |n: u32, path: &str| item(n, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations: vec![FileLocation { path: path.into(), line: None }] });
+    {
+        let mut agents = app.desk.shared.agents.get_mut();
+        agents.apply(titled(40, "Explore the parser", ItemBody::ToolCall { kind: ToolKind::Other, name: "Task".into(), input: None, output: vec![], locations: vec![] }));
+        agents.apply(under(item(41, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "the helper's words".into() }], streaming: false })));
+        agents.apply(item(42, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "mine, meanwhile".into() }], streaming: false }));
+        agents.apply(under(read(43, "src/helper_read.rs")));
+    }
+    let drawn = |ctx: &egui::Context, app: &mut CockpitApp| {
+        frame(ctx, app, vec![]);
+        let output = frame(ctx, app, vec![]);
+        drawn_texts(&output, app.panel_rects[app.desk.panels.focused()]).into_iter().filter(|(_, _, shows)| shows.is_positive()).map(|(text, rect, _)| (text, rect)).collect::<Vec<_>>()
+    };
+    let at = |texts: &[(String, egui::Rect)], said: &str| texts.iter().find(|(t, _)| t.contains(said)).map(|(_, r)| *r);
+    let texts = drawn(&ctx, &mut app);
+    assert!(at(&texts, "2 steps by its sub-agent").is_some() && at(&texts, "the helper's words").is_none() && at(&texts, "mine, meanwhile").is_some(), "folded under its call: {texts:?}");
+    app.desk.chat_mut().move_to("40");
+    assert!(app.bound_actions().iter().any(|b| b.action.label == "Unfold its sub-agent's work"), "Enter says it");
+    assert_eq!(app.desk.chat_mut().enter(), crate::nav::Step::Done);
+    let texts = drawn(&ctx, &mut app);
+    let (call, words) = (at(&texts, "Explore the parser").expect("the call"), at(&texts, "the helper's words").expect("its words, open"));
+    assert!(words.left() > call.left() && words.top() > call.top(), "a step in, under it: {call:?} {words:?}");
+    let ours = |text: &str| at(&texts, text).map(|r| r.top());
+    let mine = ours("mine, meanwhile").unwrap_or(f32::INFINITY);
+    assert!(ours("the helper's words") < ours("src/helper_read.rs") && ours("src/helper_read.rs").is_some_and(|read| read < mine), "its items follow it, before what came between");
+    app.desk.chat_mut().fold(crate::nav::Fold::Close);
+    assert!(at(&drawn(&ctx, &mut app), "the helper's words").is_none(), "folded again");
+    // (In the order shown, its read is 42nd: before what came between.)
+    app.desk.chat_mut().move_to("42");
+    assert!(at(&drawn(&ctx, &mut app), "src/helper_read.rs").is_some(), "a jump to its call opens it");
+}

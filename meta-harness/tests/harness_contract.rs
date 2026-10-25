@@ -3,7 +3,8 @@
 //! driver's; each of our modes it offers is one of its modes and back;
 //! permission requests are asked, answered and skipped as the mode says;
 //! messages sent while a turn runs all get answered, in order; what it
-//! declares (steering, questions, who it's signed in as, logins) works;
+//! declares (steering, questions, whose a sub-agent's work is, who it's
+//! signed in as, logins) works;
 //! its skill and tool-server places are all filled in; its home moves to
 //! a folder of the project's, all of it.
 
@@ -176,6 +177,32 @@ async fn what_it_declares_works() {
             until(&mut events, "the turn's end", ended(1)).await;
             let answer = serde_json::to_value(h.agent.seen().answers.unwrap()).unwrap();
             assert_eq!(answer, serde_json::json!({ "action": "accept", "content": { "question_0": "Redis" } }), "{}", h.name);
+        }
+        // Whose a sub-agent's work is, if it says: under the call that
+        // started it.
+        if settings.parent_call.is_some() {
+            let session = h.open(RuntimeMode::ApprovalRequired).await;
+            let mut events = session.events();
+            session.start_turn(say("[sub-agent]")).await.unwrap();
+            let mut items = std::collections::BTreeMap::new();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while let Some(event) = events.next().await {
+                    match event {
+                        AdapterEvent::ItemUpdated { item } => {
+                            items.insert(item.id.clone(), item);
+                        }
+                        event if ended(1)(&event) => break,
+                        _ => {}
+                    }
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("{}: the turn's end", h.name));
+            let titled = |title: &str| items.values().find(|i| i.title.as_deref() == Some(title)).unwrap_or_else(|| panic!("{}: {title}", h.name));
+            let task = titled("Explore the parser").id.clone();
+            assert_eq!(titled("Read parse.rs").parent_id.as_ref(), Some(&task), "{}: the sub-agent's call", h.name);
+            let said = items.values().find(|i| i.body.said().as_deref() == Some("Reading the parser.")).unwrap_or_else(|| panic!("{}: the sub-agent's words", h.name));
+            assert_eq!(said.parent_id.as_ref(), Some(&task), "{}: the sub-agent's words", h.name);
         }
         // Who it's signed in as, and its logins.
         let launcher: Arc<dyn AcpLauncher> = Arc::new(h.agent.clone());

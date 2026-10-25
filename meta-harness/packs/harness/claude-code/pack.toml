@@ -33,6 +33,8 @@ display_name = "Claude Code"
 # running turn.
 queueing = "/agentCapabilities/_meta/claudeCode/promptQueueing"
 steering = "/_meta/steering/supported"
+# Where a sub-agent's updates name the tool call that started it (its Task).
+parent_call = "/claudeCode/parentToolUseId"
 
 [provides.settings.modes]
 approval_required = "default"

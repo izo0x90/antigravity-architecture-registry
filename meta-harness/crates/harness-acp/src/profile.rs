@@ -154,6 +154,11 @@ impl Profile {
         caps
     }
 
+    /// Where an update's `_meta` names the call whose sub-agent sent it.
+    pub fn parent_call(&self) -> Option<String> {
+        self.settings.parent_call.clone()
+    }
+
     pub fn session_meta(&self) -> Option<acp::Meta> {
         (!self.settings.session_meta.is_empty()).then(|| self.settings.session_meta.clone())
     }

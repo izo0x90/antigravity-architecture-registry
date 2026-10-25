@@ -39,15 +39,15 @@ impl ChatStreamState {
         let mut out = crate::nav::list_moves();
         // Enter: a folded run opens; else the file it points to does.
         let here = self.here().unwrap_or_default();
-        out.push(match (&here.run, self.target()) {
-            (Some((run, false)), _) => Move::Enter.offer(format!("Unfold {}", run.words())),
-            (_, Some(Target::Message { link: Some((path, _)), .. })) => Move::Enter.offer(format!("Open {path}")),
+        out.push(match (here.unfolds(), self.target()) {
+            (Some(folded), _) => Move::Enter.offer(format!("Unfold {}", folded.words())),
+            (None, Some(Target::Message { link: Some((path, _)), .. })) => Move::Enter.offer(format!("Open {path}")),
             _ => Move::Enter.offer_if(false, "Open the file it points to"),
         });
         out.push(Move::Leave.offer_if(self.ui.cursor.is_some(), "Follow the latest again"));
         // Folding: the innermost fold under the cursor each key can act
         // on (its own, the run it's in); every one.
-        let words = |f: &super::rows::Folding| f.words();
+        let words = |f: &rows::Folding| f.words();
         let (toggle, open, close) = (here.toggles().map(|(f, open)| (words(f), !open)), here.opens().map(words), here.closes().map(words));
         out.extend(crate::nav::fold_here(crate::nav::FoldsHere { toggle: toggle.as_ref().map(|(w, folded)| (w.as_str(), *folded)), open: open.as_deref(), close: close.as_deref() }));
         let shape = self.shape();
@@ -248,10 +248,11 @@ impl Navigable for ChatStreamState {
         }
     }
 
-    /// A folded run opens; a message's file opens in the code view.
+    /// A folded run, or a sub-agent's folded work, opens; a message's file
+    /// opens in the code view.
     fn enter(&mut self) -> Step {
-        if let Some((super::rows::Folding::Run { first, .. }, false)) = self.here().and_then(|h| h.run) {
-            self.ui.folds.set_run(&first, rows::Set::Open);
+        if let Some(folded) = self.here().as_ref().and_then(rows::Here::unfolds) {
+            self.ui.folds.set(folded, rows::Set::Open);
             return Step::Done;
         }
         match self.target() {

@@ -33,6 +33,10 @@ pub struct AcpSettings {
     pub queueing: Option<String>,
     /// Where it says it takes steering (`_session/steering`).
     pub steering: Option<String>,
+    /// Where an update's `_meta` names the tool call whose sub-agent sent
+    /// it, by the call's id (a JSON pointer): its items nest under that
+    /// call's.
+    pub parent_call: Option<String>,
     /// How it reports who it's signed in as.
     pub sign_in: Option<SignInSettings>,
     /// Its logins: by a login command of its own, or run by itself.
