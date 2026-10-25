@@ -1,11 +1,13 @@
 //! What views ask the server to work out from text they hold (a code
 //! block's colours, a change's hunks), kept for every view that draws it:
-//! each asked once, many in one call (of a bounded size), kept (past a
-//! bound, the longest unused go first), a call that failed asked again
-//! after a while. Views find what's known and ask through `Ask` for what
-//! isn't; the shell sends what's asked once a frame.
+//! each asked once, many in one call (of a bounded size: one bigger than
+//! a call may be isn't asked, said too big), kept (past a bound, the
+//! longest unused go first), a call that failed asked again after a
+//! while. Views find what's known and ask through `Ask` for what isn't;
+//! the shell sends what's asked once a frame.
 
-use std::collections::{HashMap, VecDeque};
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -31,13 +33,18 @@ enum Known<A> {
     Got(Rc<A>),
     /// Its call failed, at this time: asked again after a while.
     Failed(f64),
+    /// Bigger than a call may be: never asked.
+    TooBig,
 }
 
 /// An answer, as a view finds it.
 pub enum Found<A> {
     Known(Rc<A>),
-    /// Not known yet; `asked` when it's on its way.
+    /// Not known yet; `asked` when it's on its way (or failed a moment
+    /// ago).
     Unknown { asked: bool },
+    /// Bigger than the server takes: not asked.
+    TooBig,
 }
 
 /// What came back, by question: its answer, or that the call failed.
@@ -53,9 +60,9 @@ pub struct Bounds {
 
 /// Questions `Q` asked of the server, answers `A` kept.
 pub struct Asked<Q, A> {
-    known: HashMap<Key, Known<A>>,
-    /// The questions known, the least recently asked first.
-    order: VecDeque<Key>,
+    /// Each question known, and when it was last used (by `used`).
+    known: HashMap<Key, (Known<A>, Cell<u64>)>,
+    used: Cell<u64>,
     /// Asked for and not sent yet: each with its key and size.
     wanted: Vec<(Key, Q, usize)>,
     mailbox: Mailbox<A>,
@@ -66,21 +73,30 @@ pub struct Asked<Q, A> {
 
 impl<Q, A> Asked<Q, A> {
     pub fn new(bounds: Bounds) -> Self {
-        Self { known: HashMap::new(), order: VecDeque::new(), wanted: Vec::new(), mailbox: Arc::default(), bounds, now: 0.0 }
+        Self { known: HashMap::new(), used: Cell::new(0), wanted: Vec::new(), mailbox: Arc::default(), bounds, now: 0.0 }
     }
 
+    /// What's known for `key` (used now: kept the longer).
     pub fn get(&self, key: Key) -> Found<A> {
-        match self.known.get(&key) {
-            Some(Known::Got(answer)) => Found::Known(answer.clone()),
-            Some(Known::Asked) => Found::Unknown { asked: true },
-            Some(Known::Failed(at)) => Found::Unknown { asked: self.now - at < RETRY_S },
-            None => Found::Unknown { asked: false },
+        let Some((known, used)) = self.known.get(&key) else { return Found::Unknown { asked: false } };
+        self.used.set(self.used.get() + 1);
+        used.set(self.used.get());
+        match known {
+            Known::Got(answer) => Found::Known(answer.clone()),
+            Known::Asked => Found::Unknown { asked: true },
+            Known::Failed(at) => Found::Unknown { asked: self.now - at < RETRY_S },
+            Known::TooBig => Found::TooBig,
         }
     }
 
     /// `question` (its key, its size), sent with the next call unless it's
-    /// known, on its way or wanted already.
+    /// known, on its way or wanted already; one bigger than a call may be,
+    /// known as too big.
     pub fn want(&mut self, key: Key, question: Q, size: usize) {
+        if size > self.bounds.call_bytes {
+            self.keep(key, Known::TooBig);
+            return;
+        }
         if let Found::Unknown { asked: false } = self.get(key)
             && !self.wanted.iter().any(|(k, ..)| *k == key)
         {
@@ -116,15 +132,16 @@ impl<Q, A> Asked<Q, A> {
         }
     }
 
-    /// `known` kept for `key`, as the most recently asked; past what's
-    /// kept, the least recently asked go.
+    /// `known` kept for `key`, used now; past what's kept, the longest
+    /// unused go (a tenth at a time).
     fn keep(&mut self, key: Key, known: Known<A>) {
-        if self.known.insert(key, known).is_none() {
-            self.order.push_back(key);
-        }
-        while self.order.len() > self.bounds.kept {
-            if let Some(oldest) = self.order.pop_front() {
-                self.known.remove(&oldest);
+        self.used.set(self.used.get() + 1);
+        self.known.insert(key, (known, Cell::new(self.used.get())));
+        if self.known.len() > self.bounds.kept {
+            let mut by_use: Vec<(u64, Key)> = self.known.iter().map(|(k, (_, used))| (used.get(), *k)).collect();
+            by_use.sort_unstable();
+            for (_, key) in by_use.into_iter().take(self.known.len() - self.bounds.kept + self.bounds.kept / 10) {
+                self.known.remove(&key);
             }
         }
     }
@@ -162,7 +179,7 @@ mod tests {
 
     /// Asked once, in calls of a bounded size; what came back kept, a
     /// failed call asked again only after a while; past what's kept, the
-    /// least recently asked go first.
+    /// longest unused go first; one too big for a call, never asked.
     #[test]
     fn what_is_asked_goes_in_bounded_calls_is_kept_and_a_failure_retried_later() {
         let mut asked: Asked<&str, usize> = Asked::new(SMALL);
@@ -187,9 +204,16 @@ mod tests {
         let mut again = Vec::new();
         asked.tick(100.0 + RETRY_S + 1.0, |questions, _| again.push(questions));
         assert_eq!(again, [vec!["c"]], "asked again after a while");
+        // ("c" used just now; the longest unused, "a" and "b", go.)
+        let _ = asked.get(key(&"c"));
         for q in ["d", "e", "f"] {
             asked.knows(key(&q), 0);
         }
-        assert!(matches!(asked.get(key(&"a")), Found::Unknown { asked: false }), "the least recently asked gone");
+        assert!(matches!(asked.get(key(&"a")), Found::Unknown { asked: false }), "the longest unused gone");
+        assert!(!matches!(asked.get(key(&"c")), Found::Unknown { asked: false }), "one used lately kept");
+        // Bigger than a call may be: never asked.
+        asked.want(key(&"huge"), "huge", 11);
+        asked.tick(200.0, |_, _| panic!("not asked"));
+        assert!(matches!(asked.get(key(&"huge")), Found::TooBig));
     }
 }

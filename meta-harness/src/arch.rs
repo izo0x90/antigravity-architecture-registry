@@ -143,16 +143,12 @@ struct CodeBlock {
     text: String,
 }
 
-/// The most text coloured in one ask (bytes, all its blocks): more is
-/// refused.
-const HIGHLIGHT_MOST: usize = 256 * 1024;
-
 /// Code blocks' colours, each as a file of its language is coloured (none:
 /// no language pack knows its fence), in the order asked.
 async fn code_highlight(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Json(ask): Json<HighlightAsk>) -> ArchResult<Vec<Option<arch_graph::code::Highlights>>> {
     let size: usize = ask.blocks.iter().map(|b| b.text.len()).sum();
-    if size > HIGHLIGHT_MOST {
-        return Err(ArchError(ServiceError::InvalidOp(format!("{size} bytes of code blocks is too much to colour at once (the most is {HIGHLIGHT_MOST})"))));
+    if size > arch_graph::code::HIGHLIGHT_MOST {
+        return Err(ArchError(ServiceError::InvalidOp(format!("{size} bytes of code blocks is too much to colour at once (the most is {})", arch_graph::code::HIGHLIGHT_MOST))));
     }
     Ok(Json(blocking(&state.arch, move |a| Ok(ask.blocks.iter().map(|b| a.highlight(&b.language, &b.text)).collect())).await?))
 }

@@ -18,6 +18,10 @@ pub struct Discussing {
     pub text: harness_contracts::Message,
 }
 
+/// What a search found (its items' keys, best first), as of which change
+/// of its view's items.
+pub type Found = (Option<u64>, Vec<String>);
+
 pub struct Desk {
     /// Its server's name (`here`: home's own).
     pub server: String,
@@ -55,9 +59,10 @@ pub struct Desk {
     pub searches: BTreeMap<BufferKind, String>,
     pub missed: BTreeMap<BufferKind, String>,
     /// What the last search in each kind of buffer found (its items' keys,
-    /// best first), as of it or its last step: the key bar says where the
-    /// cursor is among them.
-    pub found: BTreeMap<BufferKind, Vec<String>>,
+    /// best first), and as of which change of its items (`Navigable::
+    /// items_changed`): the key bar says where the cursor is among them,
+    /// found again once they change.
+    pub found: std::cell::RefCell<BTreeMap<BufferKind, Found>>,
     /// Go-tos: component details, and one under way or being picked.
     pub details: Details,
     pub pending_goto: Option<Pending>,
@@ -116,7 +121,7 @@ impl Desk {
             jumps: JumpList::default(),
             marks: BTreeMap::new(),
             searches: BTreeMap::new(),
-            found: BTreeMap::new(),
+            found: Default::default(),
             missed: BTreeMap::new(),
             details: Details::default(),
             pending_goto: None,

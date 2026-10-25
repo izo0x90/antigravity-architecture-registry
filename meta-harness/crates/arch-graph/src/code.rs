@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::ComponentId;
 
+/// The most code coloured in one ask (bytes, all its blocks): the server
+/// refuses more, the cockpit doesn't ask it.
+pub const HIGHLIGHT_MOST: usize = 256 * 1024;
+
 /// Coloured runs over a file: `[start byte, end byte, index into names]`,
 /// `names` being highlight capture names (`keyword`, `function.method`...).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

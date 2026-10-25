@@ -148,14 +148,14 @@ impl crate::buffer::Buffer for ChatStreamState {
         self.slot().map_or_else(|| "the agent's session".to_owned(), |s| format!("agent slot {}", s.name))
     }
 
-    /// What's picked for it: how much it shows, what shows the agent at
-    /// work.
+    /// What's picked for each chat: how much it shows, what shows the
+    /// agent at work.
     fn keep(&self) -> Option<serde_json::Value> {
-        self.ui.picked.kept()
+        (!self.ui.picked.is_empty()).then(|| serde_json::to_value(&self.ui.picked).ok()).flatten()
     }
 
     fn restore_kept(&mut self, kept: &serde_json::Value) {
-        self.ui.picked = Picked::from_kept(kept);
+        self.ui.picked = serde_json::from_value(kept.clone()).unwrap_or_default();
         self.settle();
     }
 }
@@ -165,8 +165,9 @@ impl ChatStreamState {
     /// it, else as the config says (a change of what it shows starts the
     /// folds afresh).
     pub(super) fn settle(&mut self) {
-        self.ui.folds.set_verbosity(self.ui.picked.shows.unwrap_or(self.settings.shows));
-        let kind = self.ui.picked.at_work.unwrap_or(self.settings.indicator);
+        let picked = self.ui.picked.get(&self.ui.slot).copied().unwrap_or_default();
+        self.ui.folds.set_verbosity(picked.shows.unwrap_or(self.settings.shows));
+        let kind = picked.at_work.unwrap_or(self.settings.indicator);
         if self.ui.indicator.kind() != kind {
             self.ui.indicator = crate::indicator::Shown::of(kind);
         }
@@ -194,21 +195,32 @@ impl Navigable for ChatStreamState {
 
     /// The code block picked (a hint), else the message (yours as you
     /// typed it), else the proposed plan.
+    fn copyable(&self) -> Option<&'static str> {
+        if let Some(Pick::Code(_)) = self.ui.pick {
+            return Some("the code block");
+        }
+        let view = self.thread()?;
+        match &view.in_stream(self.ui.cursor?)?.body {
+            ItemBody::UserMessage { .. } => Some("your message"),
+            ItemBody::AssistantMessage { .. } => Some("the message"),
+            ItemBody::ProposedPlan { .. } => Some("the plan"),
+            _ => None,
+        }
+    }
+
     fn copy_here(&self) -> Option<crate::nav::Copyable> {
-        use crate::nav::Copyable;
-        if let Some(Pick::Code(n)) = self.ui.pick
-            && let Some(code) = self.codes_here().into_iter().nth(n)
-        {
-            return Some(Copyable::new("the code block", code));
+        let what = self.copyable()?;
+        if let Some(Pick::Code(n)) = self.ui.pick {
+            return Some(crate::nav::Copyable::new(what, self.codes_here().into_iter().nth(n)?));
         }
         let view = self.thread()?;
         let item = view.in_stream(self.ui.cursor?)?;
-        match &item.body {
-            ItemBody::UserMessage { text, typed } => Some(Copyable::new("your message", crate::conversation::as_typed(text, typed.as_ref()).0)),
-            ItemBody::AssistantMessage { .. } => Some(Copyable::new("the message", item.body.said().unwrap_or_default())),
-            ItemBody::ProposedPlan { markdown, .. } => Some(Copyable::new("the plan", markdown.as_str())),
-            _ => None,
-        }
+        let text = match &item.body {
+            ItemBody::UserMessage { text, typed } => crate::conversation::as_typed(text, typed.as_ref()).0.to_owned(),
+            ItemBody::ProposedPlan { markdown, .. } => markdown.clone(),
+            body => body.said().unwrap_or_default(),
+        };
+        Some(crate::nav::Copyable::new(what, text))
     }
 
     /// Its settings, the desk's agents (read from now on), and how many
@@ -388,6 +400,13 @@ impl Navigable for ChatStreamState {
         if let Some((folding, set)) = set {
             self.ui.folds.set(folding, set);
         }
+    }
+
+    /// As of which event, in which view of its thread (a resync's new
+    /// one).
+    fn items_changed(&self) -> Option<u64> {
+        let view = self.thread()?;
+        Some(view.epoch().wrapping_mul(1 << 40) ^ view.activity)
     }
 
     fn items(&self) -> Vec<Item> {

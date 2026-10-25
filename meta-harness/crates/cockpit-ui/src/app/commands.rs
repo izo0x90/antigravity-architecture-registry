@@ -111,8 +111,8 @@ impl CockpitApp {
         ];
         // What the view has where you are (a selection, a block picked,
         // the item), copied.
-        if let Some(copied) = self.desk.view(here.kind).copy_here() {
-            out.push(Action::new("nav.copy", format!("Copy {}", copied.what), "To the clipboard: what you're on (a selection, a code block picked with f, else the item)", S::Copy).group(Group::Act).importance(SECONDARY).on_item(crate::actions::Style::Button, "Copy", Some(egui_phosphor::regular::COPY)));
+        if let Some(what) = self.desk.view(here.kind).copyable() {
+            out.push(Action::new("nav.copy", format!("Copy {what}"), "To the clipboard: what you're on (a selection, a code block picked with f, else the item)", S::Copy).group(Group::Act).importance(SECONDARY).on_item(crate::actions::Style::Button, "Copy", Some(egui_phosphor::regular::COPY)));
         }
         out.extend(self.tag_actions(here));
         out.extend(self.link_actions(here));

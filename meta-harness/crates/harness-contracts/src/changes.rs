@@ -216,6 +216,10 @@ pub struct DiffLine {
     pub text: String,
 }
 
+/// The most text compared in one ask (bytes, both sides of every pair):
+/// the server refuses more, the cockpit doesn't ask it.
+pub const TEXTS_MOST: usize = 1024 * 1024;
+
 /// A run of changed lines and the unchanged ones around them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hunk {

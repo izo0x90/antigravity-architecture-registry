@@ -10,6 +10,8 @@
 
 use egui::{Pos2, Rect, Stroke};
 
+use crate::config::IndicatorKind;
+
 /// How live the agent is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Liveness {
@@ -70,56 +72,22 @@ pub trait Indicator {
     fn draw(&mut self, spot: &egui::Painter, over: &egui::Painter, activity: &Activity, stage: &Stage, now: f64) -> Next;
 }
 
-/// The ones there are (the chat's setting picks one).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Kind {
-    #[default]
-    Heartbeat,
-    None,
-}
-
-impl crate::config::Named for Kind {
-    const WHAT: &'static str = "indicator";
-    const ALL: &'static [Self] = &[Self::Heartbeat, Self::None];
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Heartbeat => "heartbeat",
-            Self::None => "none",
-        }
-    }
-
-    fn words(self) -> &'static str {
-        match self {
-            Self::Heartbeat => "A heartbeat",
-            Self::None => "Nothing",
-        }
-    }
-
-    fn detail(self) -> &'static str {
-        match self {
-            Self::Heartbeat => "A trace that blips with each update, beside the running turn's words",
-            Self::None => "The words alone",
-        }
-    }
-}
-
 /// The one picked, and it (none: nothing shows).
 pub struct Shown {
-    kind: Kind,
+    kind: IndicatorKind,
     drawer: Option<Box<dyn Indicator>>,
 }
 
 impl Shown {
-    pub fn of(kind: Kind) -> Self {
+    pub fn of(kind: IndicatorKind) -> Self {
         let drawer: Option<Box<dyn Indicator>> = match kind {
-            Kind::Heartbeat => Some(Box::new(Heartbeat)),
-            Kind::None => None,
+            IndicatorKind::Heartbeat => Some(Box::new(Heartbeat)),
+            IndicatorKind::None => None,
         };
         Self { kind, drawer }
     }
 
-    pub fn kind(&self) -> Kind {
+    pub fn kind(&self) -> IndicatorKind {
         self.kind
     }
 
@@ -130,7 +98,7 @@ impl Shown {
 
 impl Default for Shown {
     fn default() -> Self {
-        Self::of(Kind::default())
+        Self::of(IndicatorKind::default())
     }
 }
 
@@ -228,7 +196,7 @@ mod tests {
         let dot = output.shapes.iter().find(|s| matches!(s.shape, egui::Shape::Circle(_))).expect("the breathing dot");
         assert!(spot.contains_rect(dot.shape.visual_bounding_rect()), "inside its spot: {:?} in {spot:?}", dot.shape.visual_bounding_rect());
         assert!(output.shapes.iter().all(|s| spot.expand(1.0).contains_rect(s.shape.visual_bounding_rect())), "all of it in its spot");
-        assert!(Shown::of(Kind::None).drawer().is_none() && Shown::of(Kind::Heartbeat).drawer().is_some());
+        assert!(Shown::of(IndicatorKind::None).drawer().is_none() && Shown::of(IndicatorKind::Heartbeat).drawer().is_some());
     }
 
     /// A blip where each update came: two far apart, two; ones closer than

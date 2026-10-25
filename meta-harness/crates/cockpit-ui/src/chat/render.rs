@@ -73,11 +73,12 @@ pub(super) enum Reveal {
 pub(super) const RUN: &str = "run";
 
 /// A file a call changed, as it's shown: compared (its hunks, what they
-/// add and remove), on its way, or written whole (no old text came with
-/// it: there's nothing to compare it with).
+/// add and remove), on its way, too big to compare here, or written whole
+/// (no old text came with it: there's nothing to compare it with).
 pub(super) enum Change {
     Compared(std::rc::Rc<Compared>),
     Comparing,
+    TooBig,
     Written,
 }
 
@@ -98,6 +99,9 @@ fn draw_folded_output(ui: &mut egui::Ui, open: bool, changes: &[(usize, &harness
             }
             [(_, diff, Change::Comparing)] => {
                 words(ui, format!("{} changed", diff.path));
+            }
+            [(_, diff, Change::TooBig)] => {
+                words(ui, format!("{} changed (too big to compare here)", diff.path));
             }
             _ if compared.len() == changes.len() => {
                 let (added, removed) = compared.iter().fold((0, 0), |(a, r), c| (a + c.added, r + c.removed));
@@ -133,6 +137,9 @@ fn draw_change(ui: &mut egui::Ui, diff: &harness_contracts::Diff, change: &Chang
         }
         Change::Comparing => {
             ui.label(RichText::new("Comparing…").size(look.text_small).color(colors().muted));
+        }
+        Change::TooBig => {
+            ui.label(RichText::new("Too big to compare here: the Changes view shows the turn's changes (g x).").size(look.text_small).color(colors().muted));
         }
         Change::Written => {
             ui.label(RichText::new(&diff.new_text).monospace().size(look.text_small).color(colors().muted));
@@ -600,6 +607,7 @@ impl ChatStreamState {
         let found = self.comparer.get().compared(old, &diff.new_text, context);
         match found {
             crate::asked::Found::Known(compared) => Change::Compared(compared),
+            crate::asked::Found::TooBig => Change::TooBig,
             crate::asked::Found::Unknown { asked } => {
                 if !asked {
                     self.changes_wanted.push(crate::comparer::Pair { old: old.to_owned(), new: diff.new_text.clone(), context });

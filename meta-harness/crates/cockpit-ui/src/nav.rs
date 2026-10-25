@@ -371,13 +371,13 @@ pub enum Fold {
 /// selection", "your message"), and its text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Copyable {
-    pub what: String,
+    pub what: &'static str,
     pub text: String,
 }
 
 impl Copyable {
-    pub fn new(what: impl Into<String>, text: impl Into<String>) -> Self {
-        Self { what: what.into(), text: text.into() }
+    pub fn new(what: &'static str, text: impl Into<String>) -> Self {
+        Self { what, text: text.into() }
     }
 
     /// What's said once it's copied: what, and how many lines.
@@ -882,8 +882,21 @@ pub trait Navigable {
     /// Everything search can find, in document order.
     fn items(&self) -> Vec<Item>;
 
-    /// What it has where you are to copy (a selection, a block picked,
-    /// the item; the host's one copy action copies it).
+    /// Which change of its items this is (the same: what search found in
+    /// them still holds); none: it doesn't say (read them again each
+    /// time).
+    fn items_changed(&self) -> Option<u64> {
+        None
+    }
+
+    /// What it has where you are to copy, in words, found cheaply (a
+    /// selection, a block picked, the item): the host's one copy action
+    /// offers it.
+    fn copyable(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// That, with its text (made only when it's copied).
     fn copy_here(&self) -> Option<Copyable> {
         None
     }

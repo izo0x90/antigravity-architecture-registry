@@ -1047,8 +1047,12 @@ impl crate::nav::DrawsThings for CodeViewerState {
 
 impl Navigable for CodeViewerState {
     /// The whole file.
+    fn copyable(&self) -> Option<&'static str> {
+        (!self.content.is_empty()).then_some("the file")
+    }
+
     fn copy_here(&self) -> Option<crate::nav::Copyable> {
-        (!self.content.is_empty()).then(|| crate::nav::Copyable::new("the file", self.content.clone()))
+        Some(crate::nav::Copyable::new(self.copyable()?, self.content.clone()))
     }
 
     /// A place in a file (a line, lines, a change, a message's file link),

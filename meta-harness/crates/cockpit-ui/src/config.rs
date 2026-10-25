@@ -128,17 +128,15 @@ impl Default for ChangesUi {
 /// receiving still, and quiet too long.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct ChatUi {
-    #[serde(deserialize_with = "named")]
     pub shows: Verbosity,
-    #[serde(deserialize_with = "named")]
-    pub indicator: crate::indicator::Kind,
+    pub indicator: IndicatorKind,
     pub receiving_s: f64,
     pub quiet_after_s: f64,
 }
 
 impl Default for ChatUi {
     fn default() -> Self {
-        Self { shows: Verbosity::default(), indicator: crate::indicator::Kind::default(), receiving_s: 1.5, quiet_after_s: 60.0 }
+        Self { shows: Verbosity::default(), indicator: IndicatorKind::default(), receiving_s: 1.5, quiet_after_s: 60.0 }
     }
 }
 
@@ -161,6 +159,64 @@ pub trait Named: Sized + Copy + PartialEq + 'static {
 pub fn named<'de, D: serde::Deserializer<'de>, T: Named>(to: D) -> Result<T, D::Error> {
     let name = String::deserialize(to)?;
     T::named(&name).ok_or_else(|| serde::de::Error::custom(format!("unknown {} `{name}` (there are: {})", T::WHAT, T::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", "))))
+}
+
+/// A setting's choice read and written by its name (`Named`), wherever
+/// it's kept: the config, the saved layout.
+macro_rules! by_name {
+    ($t:ty) => {
+        impl serde::Serialize for $t {
+            fn serialize<S: serde::Serializer>(&self, to: S) -> Result<S::Ok, S::Error> {
+                to.serialize_str($crate::config::Named::name(*self))
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for $t {
+            fn deserialize<D: serde::Deserializer<'de>>(from: D) -> Result<Self, D::Error> {
+                $crate::config::named(from)
+            }
+        }
+    };
+}
+pub(crate) use by_name;
+
+by_name!(Verbosity);
+by_name!(IndicatorKind);
+by_name!(crate::hosted::ItemButtons);
+
+/// What shows the agent at work (`crate::indicator`): the ones there
+/// are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IndicatorKind {
+    #[default]
+    Heartbeat,
+    None,
+}
+
+impl Named for IndicatorKind {
+    const WHAT: &'static str = "indicator";
+    const ALL: &'static [Self] = &[Self::Heartbeat, Self::None];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Heartbeat => "heartbeat",
+            Self::None => "none",
+        }
+    }
+
+    fn words(self) -> &'static str {
+        match self {
+            Self::Heartbeat => "A heartbeat",
+            Self::None => "Nothing",
+        }
+    }
+
+    fn detail(self) -> &'static str {
+        match self {
+            Self::Heartbeat => "A trace that blips with each update, beside the running turn's words",
+            Self::None => "The words alone",
+        }
+    }
 }
 
 /// How much of what the agent does a chat shows: messages and what

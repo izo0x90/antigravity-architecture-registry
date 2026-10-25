@@ -7,12 +7,10 @@
 //! under.
 
 use egui::RichText;
-use serde::{Deserialize, Serialize};
 
 /// Where a host shows the buttons of what you're on (the cursor's item,
 /// the box being typed in).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ItemButtons {
     /// In a box under the item (over what's below it), following it.
     #[default]
@@ -20,6 +18,32 @@ pub enum ItemButtons {
     /// In a row of their own along the host's bottom, kept whether there
     /// are any or not: nothing is covered and nothing moves.
     Bar,
+}
+
+impl crate::config::Named for ItemButtons {
+    const WHAT: &'static str = "place for the buttons";
+    const ALL: &'static [Self] = &[Self::Floating, Self::Bar];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Floating => "floating",
+            Self::Bar => "bar",
+        }
+    }
+
+    fn words(self) -> &'static str {
+        match self {
+            Self::Floating => "Floating",
+            Self::Bar => "A bar",
+        }
+    }
+
+    fn detail(self) -> &'static str {
+        match self {
+            Self::Floating => "In a box under the item, following it",
+            Self::Bar => "In a row along each panel's bottom: nothing covered, nothing moves",
+        }
+    }
 }
 
 use crate::actions::{At, Bound, Control, RunCx};

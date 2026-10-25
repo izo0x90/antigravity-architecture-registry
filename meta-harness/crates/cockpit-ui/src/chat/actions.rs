@@ -476,13 +476,13 @@ impl ActionProvider for ChatStreamState {
             // afresh (the same one: nothing changes).
             ChatCommand::Verbosity => {
                 if let Some(verbosity) = value.as_deref().and_then(Named::named) {
-                    self.ui.picked.shows = Some(verbosity);
+                    self.ui.picked.entry(self.ui.slot.clone()).or_default().shows = Some(verbosity);
                     self.settle();
                 }
             }
             ChatCommand::Indicator => {
                 if let Some(kind) = value.as_deref().and_then(Named::named) {
-                    self.ui.picked.at_work = Some(kind);
+                    self.ui.picked.entry(self.ui.slot.clone()).or_default().at_work = Some(kind);
                     self.settle();
                 }
             }

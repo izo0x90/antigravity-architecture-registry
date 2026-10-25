@@ -109,9 +109,10 @@ pub struct ChatView {
     /// What shows the agent at work (the setting's pick); where the running
     /// turn's line was drawn this frame.
     pub(crate) indicator: crate::indicator::Shown,
-    /// How much it shows and what shows the agent at work, as picked for
-    /// it (kept through a reload; none: the config's).
-    pub(crate) picked: Picked,
+    /// How much each chat (each slot's) shows and what shows the agent at
+    /// work there, as picked for it (kept through a reload; none: the
+    /// config's).
+    pub(crate) picked: std::collections::BTreeMap<SlotId, Picked>,
     pub(crate) live_at: Option<render::LiveAt>,
     /// How tall each row was last drawn (by its first item), and as what:
     /// a row out of sight takes that room without being drawn.
@@ -138,24 +139,11 @@ pub struct ChatView {
 }
 
 /// A chat's settings as picked for it (none: the config's).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub(crate) struct Picked {
     pub shows: Option<crate::config::Verbosity>,
-    pub at_work: Option<crate::indicator::Kind>,
-}
-
-impl Picked {
-    /// As kept: each by its name.
-    fn kept(self) -> Option<serde_json::Value> {
-        use crate::config::Named;
-        (self != Self::default()).then(|| serde_json::json!({ "shows": self.shows.map(Named::name), "at_work": self.at_work.map(Named::name) }))
-    }
-
-    fn from_kept(kept: &serde_json::Value) -> Self {
-        use crate::config::Named;
-        let named = |key: &str| kept.get(key).and_then(serde_json::Value::as_str);
-        Self { shows: named("shows").and_then(Named::named), at_work: named("at_work").and_then(Named::named) }
-    }
+    pub at_work: Option<crate::config::IndicatorKind>,
 }
 
 impl Default for ChatView {
@@ -172,7 +160,7 @@ impl Default for ChatView {
             epoch: None,
             shape: Default::default(),
             indicator: Default::default(),
-            picked: Picked::default(),
+            picked: std::collections::BTreeMap::new(),
             live_at: None,
             heights: Default::default(),
             pick: None,

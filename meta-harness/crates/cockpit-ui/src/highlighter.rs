@@ -17,7 +17,7 @@ use crate::config::CodeUi;
 
 /// Blocks kept at the most, in one call at the most, and their text in
 /// one call (bytes: the server's bound).
-const BOUNDS: Bounds = Bounds { kept: 1024, per_call: 64, call_bytes: 256 * 1024 };
+const BOUNDS: Bounds = Bounds { kept: 1024, per_call: 64, call_bytes: arch_graph::code::HIGHLIGHT_MOST };
 
 /// A block's colours, as a view finds them.
 pub enum Colours {
@@ -66,6 +66,8 @@ impl Highlighter {
         match self.asked.get(crate::asked::key(&(fence, text))) {
             Found::Known(colours) => Colours::Known(colours),
             Found::Unknown { asked } => Colours::Unknown { asked },
+            // (Too big to colour: plain.)
+            Found::TooBig => Colours::Known(self.plain.clone()),
         }
     }
 

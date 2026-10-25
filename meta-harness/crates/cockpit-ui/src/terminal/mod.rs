@@ -455,9 +455,16 @@ impl crate::nav::DrawsThings for TerminalBuffer {
 
 impl Navigable for TerminalBuffer {
     /// The selection (drag to select), else the cursor's line.
+    fn copyable(&self) -> Option<&'static str> {
+        match (&self.selection, self.cursor) {
+            (Some(_), _) => Some("the selection"),
+            (None, Some(_)) => Some("the line"),
+            (None, None) => None,
+        }
+    }
+
     fn copy_here(&self) -> Option<crate::nav::Copyable> {
-        let what = if self.selection.is_some() { "the selection" } else { "the line" };
-        self.selected_text().map(|text| crate::nav::Copyable::new(what, text))
+        Some(crate::nav::Copyable::new(self.copyable()?, self.selected_text()?))
     }
 
     fn take_asks(&mut self) -> Vec<Ask> {

@@ -12,7 +12,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use harness_contracts::changes::{ChangeList, Comparison, ComponentChangeList, ComponentChanges, FileChanges, Group, Point};
+use harness_contracts::changes::{ChangeList, Comparison, ComponentChangeList, ComponentChanges, FileChanges, Group, Point, TEXTS_MOST};
 use nah_changes::{Changes, ChangesError};
 use serde::Deserialize;
 
@@ -21,7 +21,8 @@ use crate::modules::ProjectState;
 
 pub(crate) fn routes() -> Router<ProjectState> {
     Router::new().route("/api/changes", get(list)).route("/api/changes/file", get(file)).route("/api/changes/components", get(components)).route("/api/changes/timeline", get(timeline))
-        .route("/api/changes/texts", post(texts))
+        // (Its body is the texts, JSON-escaped: room for them.)
+        .route("/api/changes/texts", post(texts).layer(axum::extract::DefaultBodyLimit::max(4 * TEXTS_MOST)))
         .route("/api/changes/stage", post(stage))
         .route("/api/changes/unstage", post(unstage))
 }
@@ -120,10 +121,6 @@ struct TextPair {
     #[serde(default)]
     context: Option<u32>,
 }
-
-/// The most text compared in one ask (bytes, both sides of every pair):
-/// more is refused.
-const TEXTS_MOST: usize = 2 * 1024 * 1024;
 
 /// Pairs of texts (a call's changes, as its harness gave them), each
 /// compared as a file's sides are, in the order asked. No repository

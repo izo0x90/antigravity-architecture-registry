@@ -11,7 +11,7 @@ use crate::asked::{Asked, Bounds, Found};
 
 /// Pairs kept at the most, in one call at the most, and their text in one
 /// call (bytes: the server's bound).
-const BOUNDS: Bounds = Bounds { kept: 512, per_call: 32, call_bytes: 2 * 1024 * 1024 };
+const BOUNDS: Bounds = Bounds { kept: 512, per_call: 32, call_bytes: harness_contracts::changes::TEXTS_MOST };
 
 /// Two texts to compare, and the unchanged lines shown around each change.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -483,7 +483,7 @@ fn a_chat_starts_as_the_config_says() {
     let config = crate::config::UiConfig::with_overrides("[chat]\nshows = \"quiet\"\nindicator = \"none\"").unwrap();
     chat.shared.settings.set(crate::shared::Settings::of(&config));
     chat.read();
-    assert_eq!((chat.ui.folds.verbosity(), chat.ui.indicator.kind()), (crate::config::Verbosity::Quiet, crate::indicator::Kind::None));
+    assert_eq!((chat.ui.folds.verbosity(), chat.ui.indicator.kind()), (crate::config::Verbosity::Quiet, crate::config::IndicatorKind::None));
 }
 
 /// A place restored before its thread's all here (the layout comes before
@@ -520,4 +520,20 @@ fn an_agent_silent_since_it_became_known_reads_quiet() {
     let activity = chat.activity(&view, 130.0);
     assert_eq!(activity.liveness, crate::indicator::Liveness::Quiet);
     assert!(chat.live_words(&activity).0.starts_with("No word for 2 min"), "{:?}", chat.live_words(&activity).0);
+}
+
+/// What's picked is each chat's: another slot's chat shows as the config
+/// says till picked for, and back on the first it's as picked.
+#[test]
+fn what_is_picked_is_each_chats_own() {
+    let mut chat = conversation();
+    chat.ui.picked.insert(SlotId::new(LEAD), crate::chat::Picked { shows: Some(crate::config::Verbosity::Quiet), at_work: None });
+    chat.read();
+    assert_eq!(chat.ui.folds.verbosity(), crate::config::Verbosity::Quiet);
+    chat.ui.slot = SlotId::new("coder");
+    chat.read();
+    assert_eq!(chat.ui.folds.verbosity(), crate::config::Verbosity::Normal, "another chat: the config's");
+    chat.ui.slot = SlotId::new(LEAD);
+    chat.read();
+    assert_eq!(chat.ui.folds.verbosity(), crate::config::Verbosity::Quiet, "back: as picked");
 }
