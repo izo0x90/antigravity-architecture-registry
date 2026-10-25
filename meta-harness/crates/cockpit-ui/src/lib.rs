@@ -34,6 +34,7 @@ pub mod viewport;
 pub mod net;
 pub mod palette;
 pub mod hosted;
+pub mod indicator;
 pub mod queue;
 pub mod quick_look;
 pub mod remote;

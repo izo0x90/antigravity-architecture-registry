@@ -37,6 +37,18 @@ pub(super) fn block_detail(block: &ContentBlock) -> String {
     }
 }
 
+/// What says a fold is folded or open.
+fn fold_mark(open: bool) -> &'static str {
+    if open { icon::CARET_DOWN } else { icon::CARET_RIGHT }
+}
+
+/// A folded run of calls: one line saying what it did.
+fn render_run(ui: &mut egui::Ui, words: &str, calls: usize) {
+    let line = format!("{} {words}", fold_mark(false));
+    ui.add(egui::Label::new(RichText::new(line).size(crate::theme::look().text_body).color(colors().muted)).truncate())
+        .on_hover_text(format!("{calls} calls, folded"));
+}
+
 /// The most of the chat's height what waits on you takes (it scrolls past
 /// that).
 const WAITING_SHARE: f32 = 0.4;
@@ -45,6 +57,8 @@ impl ChatStreamState {
     pub(crate) fn draw(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, typing: bool, cx: &mut RunCx<'_>) {
         let host = cx.at.name();
         let ctx = ui.ctx().clone();
+        let connected = cx.net.ws_state.lock().is_ok_and(|s| *s == crate::net::WsState::Open);
+        self.note_updates(ui.input(|i| i.time), connected);
 
         ui.vertical(|ui| {
             let banners = self.render_banners(ui);
@@ -263,36 +277,56 @@ impl ChatStreamState {
         let view = self.thread().map(|t| t.clone());
         // No session yet: its banner says so.
         let Some(view) = view else { return };
-        let mut index = 0;
-        for turn in &view.turns {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("Turn {}", turn.ordinal)).monospace().size(crate::theme::look().text_small).color(colors().faint));
-                if turn.status == TurnStatus::Queued {
-                    ui.label(RichText::new("QUEUED").size(crate::theme::look().text_tiny).color(colors().muted));
-                } else if !turn.status.is_terminal() {
-                    ui.label(RichText::new("RUNNING").size(crate::theme::look().text_tiny).color(colors().warn));
-                } else if let Some(f) = &turn.failure {
-                    ui.label(RichText::new(format!("failed: {}", f.message)).size(crate::theme::look().text_tiny).color(colors().error));
+        let items: Vec<&TurnItem> = view.turns.iter().flat_map(|t| view.items_of(&t.id)).collect();
+        let rows = rows::rows(&items, &self.ui.folds);
+        let mut turn: Option<&harness_contracts::TurnId> = None;
+        for row in &rows {
+            let item = items[row.first];
+            // Each turn under its line (what it is, how it went).
+            if turn != Some(&item.turn_id) {
+                if turn.is_some() {
+                    ui.add(egui::Separator::default().spacing(8.0));
                 }
-                if let Some(files) = self.turn_files.get(turn.id.as_str()).filter(|n| **n > 0) {
-                    let words = if *files == 1 { "1 file changed".to_owned() } else { format!("{files} files changed") };
-                    ui.label(RichText::new(format!("{} {words}", egui_phosphor::regular::GIT_DIFF)).size(crate::theme::look().text_tiny).color(colors().ok));
+                turn = Some(&item.turn_id);
+                if let Some(t) = view.turns.iter().find(|t| t.id == item.turn_id) {
+                    self.render_turn_line(ui, t);
                 }
-            });
-            for item in view.items_of(&turn.id) {
-                let rect = self.item_frame(ui, Some(index), |chat, ui| chat.render_item(ui, &view, item, index));
-                self.ui.item_rects.push(rect);
-                // A request waiting on you is a place where it's kept (its
-                // card); here, the line saying where it was asked.
-                let waiting = matches!(&item.body, ItemBody::Request { request_id } if view.request(request_id).is_some_and(|r| self.agents().waits(r)));
-                if !waiting {
-                    self.ui.drawing.push(Spot { key: index.to_string(), rect });
-                }
-                index += 1;
-                ui.add_space(crate::theme::look().space_xs);
             }
+            let rect = self.item_frame(ui, Some(row.first), |chat, ui| match &row.run {
+                Some(words) => render_run(ui, words, row.last - row.first + 1),
+                None => chat.render_item(ui, &view, item, row.first),
+            });
+            self.ui.item_rects.push(rect);
+            // A request waiting on you is a place where it's kept (its
+            // card); here, the line saying where it was asked.
+            let waiting = matches!(&item.body, ItemBody::Request { request_id } if view.request(request_id).is_some_and(|r| self.agents().waits(r)));
+            if !waiting {
+                self.ui.drawing.push(Spot { key: row.first.to_string(), rect });
+            }
+            ui.add_space(crate::theme::look().space_xs);
+        }
+        if turn.is_some() {
             ui.add(egui::Separator::default().spacing(8.0));
         }
+    }
+
+    /// A turn's line: its number, and whether it's queued, running (its
+    /// live line), failed, and what it changed.
+    fn render_turn_line(&mut self, ui: &mut egui::Ui, turn: &harness_contracts::Turn) {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("Turn {}", turn.ordinal)).monospace().size(crate::theme::look().text_small).color(colors().faint));
+            if turn.status == TurnStatus::Queued {
+                ui.label(RichText::new("QUEUED").size(crate::theme::look().text_tiny).color(colors().muted));
+            } else if !turn.status.is_terminal() {
+                self.render_live(ui);
+            } else if let Some(f) = &turn.failure {
+                ui.label(RichText::new(format!("failed: {}", f.message)).size(crate::theme::look().text_tiny).color(colors().error));
+            }
+            if let Some(files) = self.turn_files.get(turn.id.as_str()).filter(|n| **n > 0) {
+                let words = if *files == 1 { "1 file changed".to_owned() } else { format!("{files} files changed") };
+                ui.label(RichText::new(format!("{} {words}", egui_phosphor::regular::GIT_DIFF)).size(crate::theme::look().text_tiny).color(colors().ok));
+            }
+        });
     }
 
     /// The item at `index` in the stream (only it read out).
@@ -307,24 +341,34 @@ impl ChatStreamState {
         view.turns.iter().flat_map(|t| view.items_of(&t.id).cloned()).collect()
     }
 
+    /// The cursor on item `index` (a folded run holding it opened, so it's
+    /// a row of its own; its run's place when it's the first), shown.
     pub(super) fn put_cursor(&mut self, index: usize, show: crate::viewport::Show) {
-        let n = self.stream().len();
-        if n > 0 {
-            self.ui.cursor = Some(index.min(n - 1));
+        let Some(last) = self.rows().last().map(|r| r.last) else { return };
+        let index = index.min(last);
+        if let Some(run) = self.rows().into_iter().find(|r| r.run.is_some() && r.holds(index) && r.first != index)
+            && let Some(first) = self.item_at(run.first)
+        {
+            self.ui.folds.toggle_run(&first.id);
+        }
+        let rows = self.rows();
+        let Some(row) = rows.iter().position(|r| r.holds(index)) else { return };
+        self.ui.cursor = Some(rows[row].first);
+        self.ui.link_pick = None;
+        self.ui.scrolling.show(row, show);
+    }
+
+    /// Moves by the shared rules over the rows (following the latest: from
+    /// the newest).
+    pub(super) fn go(&mut self, go: crate::viewport::Go) {
+        let rows = self.rows();
+        let from = self.ui.cursor.and_then(|c| rows.iter().position(|r| r.holds(c))).or(rows.len().checked_sub(1));
+        if let Some(at) = self.ui.scrolling.go(rows.len(), from, go) {
+            self.ui.cursor = Some(rows[at].first);
             self.ui.link_pick = None;
-            self.ui.scrolling.show(index.min(n - 1), show);
         }
     }
 
-    /// Moves by the shared rules (following the latest: from the newest).
-    pub(super) fn go(&mut self, go: crate::viewport::Go) {
-        let n = self.stream().len();
-        let from = self.ui.cursor.or(n.checked_sub(1));
-        if let Some(at) = self.ui.scrolling.go(n, from, go) {
-            self.ui.cursor = Some(at);
-            self.ui.link_pick = None;
-        }
-    }
 
     pub(super) fn render_item(&mut self, ui: &mut egui::Ui, view: &ThreadView, item: &TurnItem, index: usize) {
         match &item.body {
@@ -336,13 +380,15 @@ impl ChatStreamState {
                 let under = content.iter().filter(|b| !matches!(b, ContentBlock::Text { .. })).map(block_summary).collect();
                 crate::conversation::message(ui, &mut self.ui.markdown_cache, &crate::conversation::Message { markdown: true, under, ..crate::conversation::Message::new(&by, &text) });
             }
+            // Reasoning, a call's output: folded unless opened (the fold
+            // keys, or its control under it while you're on it).
             ItemBody::Reasoning { text, streaming } => {
+                let open = self.ui.folds.item_open(item);
                 let label = if *streaming { format!("{} Thinking… ({} chars)", icon::BRAIN, text.len()) } else { format!("{} Reasoning ({} chars)", icon::BRAIN, text.len()) };
-                egui::CollapsingHeader::new(RichText::new(label).size(crate::theme::look().text_body).color(colors().special))
-                    .id_salt(item.id.as_str())
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(text).monospace().size(crate::theme::look().text_body).color(colors().muted));
-                    });
+                ui.label(RichText::new(format!("{} {label}", fold_mark(open))).size(crate::theme::look().text_body).color(colors().special));
+                if open {
+                    ui.label(RichText::new(text).monospace().size(crate::theme::look().text_body).color(colors().muted));
+                }
             }
             ItemBody::ToolCall { kind, name, output, locations, .. } => {
                 let (tag, color) = status_tag(item.status);
@@ -358,13 +404,13 @@ impl ChatStreamState {
                     }
                 });
                 if !output.is_empty() {
-                    egui::CollapsingHeader::new(RichText::new("output").size(crate::theme::look().text_small).color(colors().muted))
-                        .id_salt((item.id.as_str(), "out"))
-                        .show(ui, |ui| {
-                            for block in output {
-                                ui.label(RichText::new(block_detail(block)).monospace().size(crate::theme::look().text_small).color(colors().muted));
-                            }
-                        });
+                    let open = self.ui.folds.item_open(item);
+                    ui.label(RichText::new(format!("{} output", fold_mark(open))).size(crate::theme::look().text_small).color(colors().muted));
+                    if open {
+                        for block in output {
+                            ui.label(RichText::new(block_detail(block)).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                        }
+                    }
                 }
             }
             ItemBody::FileChange { path, .. } => {
@@ -374,7 +420,11 @@ impl ChatStreamState {
             ItemBody::CommandExecution { command, output, exit_code } => {
                 ui.label(RichText::new(format!("$ {command}")).monospace().size(crate::theme::look().text_body));
                 if let Some(out) = output {
-                    ui.label(RichText::new(out).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                    let open = self.ui.folds.item_open(item);
+                    ui.label(RichText::new(format!("{} output", fold_mark(open))).size(crate::theme::look().text_small).color(colors().muted));
+                    if open {
+                        ui.label(RichText::new(out).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                    }
                 }
                 if let Some(code) = exit_code {
                     ui.label(RichText::new(format!("exit {code}")).monospace().size(crate::theme::look().text_small).color(colors().muted));

@@ -42,6 +42,11 @@ impl ChatStreamState {
             _ => Move::Enter.offer_if(false, "Open the file it points to"),
         });
         out.push(Move::Leave.offer_if(self.ui.cursor.is_some(), "Follow the latest again"));
+        // Folding: the run or the item's own fold under the cursor; every one.
+        let here = self.ui.cursor.and_then(|at| self.with_items(|items, folds| folds.at(items, at)).flatten());
+        out.extend(crate::nav::fold_here(here.as_ref().map(|(f, open)| (f.words(), !open)).as_ref().map(|(w, folded)| (w.as_str(), *folded))));
+        let (any_folded, any_open) = self.with_items(|items, folds| folds.any(items)).unwrap_or_default();
+        out.extend(crate::nav::fold_all((any_folded, "Unfold every run of calls and output"), (any_open, "Fold every run of calls and output")));
         out
     }
 }
@@ -191,8 +196,10 @@ impl Navigable for ChatStreamState {
             }
             self.ui.cursor = message;
             self.ui.link_pick = None;
-            if let Some(at) = message {
-                self.ui.scrolling.show(at, crate::viewport::Show::Middle);
+            if let Some(at) = message
+                && let Some(row) = self.rows().iter().position(|r| r.holds(at))
+            {
+                self.ui.scrolling.show(row, crate::viewport::Show::Middle);
             }
         }
     }
@@ -208,16 +215,15 @@ impl Navigable for ChatStreamState {
     /// From the latest message (none under the cursor yet), moves start at
     /// the bottom.
     fn motion(&mut self, motion: Motion, count: usize) {
-        let n = self.stream().len();
-        if n == 0 {
-            return;
-        }
+        let rows = self.rows();
+        let Some(last) = rows.last() else { return };
         use crate::viewport::{Go, Show};
         let fresh = self.ui.cursor.is_none();
         match motion {
             // Following the latest: the first move lands on the newest.
-            Motion::Down | Motion::Up if fresh => self.put_cursor(n - 1, Show::InView),
-            Motion::Line(i) => self.put_cursor(i.saturating_sub(1), Show::Middle),
+            Motion::Down | Motion::Up if fresh => self.put_cursor(last.first, Show::InView),
+            // The row of that number, as shown.
+            Motion::Line(i) => self.put_cursor(rows[i.saturating_sub(1).min(rows.len() - 1)].first, Show::Middle),
             _ => {
                 if let Some(go) = Go::of(motion, count) {
                     self.go(go);
@@ -226,8 +232,14 @@ impl Navigable for ChatStreamState {
         }
     }
 
-    /// A message's file opens in the code view.
+    /// A folded run opens; a message's file opens in the code view.
     fn enter(&mut self) -> Step {
+        if let Some(at) = self.ui.cursor
+            && let Some((folding @ crate::chat::rows::Folding::Run(..), false)) = self.with_items(|items, folds| folds.at(items, at)).flatten()
+        {
+            self.ui.folds.toggle(&folding);
+            return Step::Done;
+        }
         match self.target() {
             Some(Target::Message { link: Some(_), .. }) => Step::GoTo(GoTo::Code),
             Some(_) => Step::Nothing("No file in this message.".into()),
@@ -241,12 +253,37 @@ impl Navigable for ChatStreamState {
         let Some(at) = self.ui.cursor.take() else {
             return Step::Nothing("Already following the latest.".into());
         };
-        let n = self.stream().len();
-        self.ui.scrolling.go(n, Some(at), crate::viewport::Go::Last);
+        let rows = self.rows();
+        let row = rows.iter().position(|r| r.holds(at));
+        self.ui.scrolling.go(rows.len(), row, crate::viewport::Go::Last);
         Step::Done
     }
 
-    fn fold(&mut self, _fold: Fold) {}
+    /// The run or the item's own fold under the cursor (its own first);
+    /// or every one.
+    fn fold(&mut self, fold: Fold) {
+        use crate::chat::rows::Folds;
+        match fold {
+            Fold::OpenAll | Fold::CloseAll => {
+                if let Some(all) = self.with_items(|items, _| Folds::all(items, fold == Fold::OpenAll)) {
+                    self.ui.folds = all;
+                }
+            }
+            Fold::Toggle | Fold::Open | Fold::Close => {
+                let Some(at) = self.ui.cursor else { return };
+                let Some((folding, open)) = self.with_items(|items, folds| folds.at(items, at)).flatten() else { return };
+                if fold == Fold::Toggle || (fold == Fold::Open) != open {
+                    self.ui.folds.toggle(&folding);
+                }
+            }
+        }
+        // The cursor in a run folded now: on the run.
+        if let Some(at) = self.ui.cursor
+            && let Some(row) = self.rows().into_iter().find(|r| r.holds(at))
+        {
+            self.ui.cursor = Some(row.first);
+        }
+    }
 
     fn items(&self) -> Vec<Item> {
         self.stream().iter().enumerate().map(|(i, item)| Item::new(i.to_string(), "", item_text(item))).collect()

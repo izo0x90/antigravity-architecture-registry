@@ -188,3 +188,42 @@ fn what_waits_is_bounded_and_answerable_before_its_item_comes() {
     assert!(texts.iter().any(|(t, _, shows)| t.contains("Type a prompt") && panel.contains_rect(*shows) && shows.height() > 4.0), "the typing box still in the panel");
     assert!(app.bound_actions().iter().any(|b| b.action.id == "request.r1.allow" && !b.keys.is_empty()), "and answerable");
 }
+
+/// While a turn runs, its line says what the agent's doing and how live it
+/// is, in place of "RUNNING": receiving a moment after an update, the time
+/// since anything while waiting, no word after a minute, the connection
+/// down; asking for frames while there's something to move or say.
+#[test]
+fn a_running_turn_says_what_its_doing_and_how_live_it_is() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Chat);
+    *app.desk.net.ws_state.lock().unwrap() = crate::net::WsState::Open;
+    let turn = harness_contracts::Turn { id: harness_contracts::TurnId::new("now"), thread_id: ThreadId::new("t"), ordinal: 2, status: harness_contracts::TurnStatus::Running, failure: None, usage: None };
+    let mut call = item(200, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations: vec![FileLocation { path: "crates/cockpit-ui/src/render.rs".into(), line: None }] });
+    if let ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } } = &mut call {
+        (item.turn_id, item.status) = (harness_contracts::TurnId::new("now"), harness_contracts::ItemStatus::InProgress);
+    }
+    app.desk.shared.agents.get_mut().apply(ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } });
+    app.desk.shared.agents.get_mut().apply(call);
+    let line = |ctx: &egui::Context, app: &mut CockpitApp, t: f64| {
+        frame_at(ctx, app, vec![], t - 0.01);
+        let output = frame_at(ctx, app, vec![], t);
+        let words = texts(&output).lines().find(|l| l.contains("render.rs") && !l.contains("crates/") || l.contains("No word") || l.contains("connection")).unwrap_or_default().to_owned();
+        (words, output.viewport_output.values().map(|v| v.repaint_delay.as_secs_f64()).fold(f64::INFINITY, f64::min))
+    };
+    let (words, again) = line(&ctx, &mut app, 10.0);
+    assert!(words == "Reading render.rs…" && again <= 0.1, "receiving: {words:?}, again in {again}");
+    assert!(!texts(&frame_at(&ctx, &mut app, vec![], 10.05)).contains("RUNNING"));
+    let (words, again) = line(&ctx, &mut app, 15.0);
+    assert!(words == "Reading render.rs… 5 s since anything" && again <= 1.0, "waiting: {words:?}");
+    let (words, _) = line(&ctx, &mut app, 80.0);
+    assert_eq!(words, "No word for 1 min");
+    *app.desk.net.ws_state.lock().unwrap() = crate::net::WsState::Closed;
+    let (words, _) = line(&ctx, &mut app, 81.0);
+    assert_eq!(words, "The connection to the server is down");
+    *app.desk.net.ws_state.lock().unwrap() = crate::net::WsState::Open;
+    // Shown as nothing: the words stay.
+    let none = app.bound_actions().into_iter().find(|b| b.action.id == "chat.indicator").expect("the setting");
+    app.invoke(Invocation { action: none.action, origin: none.origin, value: Some("none".into()) }, &ctx);
+    assert!(app.desk.chat().ui.live.is_none() && line(&ctx, &mut app, 82.0).0 == "No word for 1 min");
+}

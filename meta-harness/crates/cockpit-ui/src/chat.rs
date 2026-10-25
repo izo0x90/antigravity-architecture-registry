@@ -26,8 +26,10 @@ use crate::store::ThreadView;
 use crate::theme::colors;
 
 pub(crate) mod actions;
+mod live;
 mod nav;
 mod render;
+mod rows;
 mod session;
 pub(crate) mod things;
 pub(crate) mod slots;
@@ -77,7 +79,20 @@ pub struct ChatView {
     pub input: crate::conversation::TypingBox,
     pub markdown_cache: CommonMarkCache,
     /// The message the cursor is on (normal mode); None follows the latest.
+    /// A folded run of calls is its first call's place.
     pub cursor: Option<usize>,
+    /// What's folded or opened against its default (runs of calls, a
+    /// call's output, reasoning).
+    pub(crate) folds: rows::Folds,
+    /// The agent at work: when its updates came (the clock's seconds, the
+    /// last few), the update count last seen, since when its turn has run,
+    /// whether the server's connection is up; what shows it, by name.
+    pub(crate) updates: std::collections::VecDeque<f64>,
+    pub(crate) seen_activity: Option<u64>,
+    pub(crate) running_since: Option<f64>,
+    pub(crate) connected: bool,
+    pub(crate) indicator: String,
+    pub(crate) live: Option<Box<dyn crate::indicator::Indicator>>,
     /// Which of its links a hint picked.
     pub(crate) link_pick: Option<usize>,
     /// Where it's looking (the shared rules move it, a message a stop);
@@ -106,6 +121,13 @@ impl Default for ChatView {
             input: Default::default(),
             markdown_cache: CommonMarkCache::default(),
             cursor: None,
+            folds: rows::Folds::default(),
+            updates: Default::default(),
+            seen_activity: None,
+            running_since: None,
+            connected: true,
+            indicator: "heartbeat".to_owned(),
+            live: crate::indicator::by_name("heartbeat"),
             link_pick: None,
             scrolling: Default::default(),
             spots: Vec::new(),
@@ -239,6 +261,18 @@ impl ChatStreamState {
         let mut out: Vec<(Option<usize>, harness_contracts::RuntimeRequest)> = waiting.into_iter().map(|r| (at.get(&r.id).copied(), r.clone())).collect();
         out.sort_by_key(|(index, _)| index.unwrap_or(usize::MAX));
         out
+    }
+
+    /// The stream as rows (a folded run of calls one of them), as drawn.
+    pub(crate) fn rows(&self) -> Vec<rows::Row> {
+        self.with_items(rows::rows).unwrap_or_default()
+    }
+
+    /// `read` given the stream's items (in place, in order) and the folds.
+    pub(crate) fn with_items<R>(&self, read: impl FnOnce(&[&TurnItem], &rows::Folds) -> R) -> Option<R> {
+        let view = self.thread()?;
+        let items: Vec<&TurnItem> = view.turns.iter().flat_map(|t| view.items_of(&t.id)).collect();
+        Some(read(&items, &self.ui.folds))
     }
 
     /// The item you're on: the cursor's, else (following the latest) what

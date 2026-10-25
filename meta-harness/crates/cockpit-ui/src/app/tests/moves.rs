@@ -331,9 +331,12 @@ fn enter_goes_in_and_backspace_comes_out_in_every_view() {
     assert!(app.desk.queue().expanded.contains(&ComponentId::new("rust:c")));
     leave(&ctx, &mut app);
     assert!(app.desk.queue().expanded.is_empty());
-    // Chat: Enter on a message with a file opens it in the code view.
+    // Chat: Enter on a folded run of calls opens it; on a call with a
+    // file, opens that in the code view.
     focus(&ctx, &mut app, BufferKind::Chat);
     app.desk.chat_mut().move_to("2");
+    enter(&ctx, &mut app);
+    assert_eq!(app.focused_kind(), BufferKind::Chat);
     enter(&ctx, &mut app);
     assert_eq!((app.focused_kind(), app.desk.code().current_file.as_str()), (BufferKind::Code, "src/parse.rs"));
     // Nothing to do: it says why.

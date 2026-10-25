@@ -44,6 +44,7 @@ enum ChatCommand {
     Retry,
     DismissError,
     Answer { thread: ThreadId, request: harness_contracts::RequestId, option: String },
+    Indicator,
 }
 
 impl ActionProvider for ChatStreamState {
@@ -270,6 +271,9 @@ impl ActionProvider for ChatStreamState {
                 out.extend(crate::request_card::offer(request, at, C::OpenPage, answer));
             }
         }
+        // What shows the agent at work, on the running turn's line.
+        let shown = crate::indicator::NAMES.iter().map(|name| Choice::new(*name, *name).current(*name == self.ui.indicator)).collect();
+        out.push(Action::new("chat.indicator", "Show the agent at work as…", "Beside the running turn's words: a heartbeat of its updates, or nothing", C::Indicator).param(Param::Choice(shown)).group(crate::actions::Group::View).importance(MINOR));
         // Typed in: sending it (to the sign-in, while one waits for it).
         out.push(match self.sign_in_box() {
             Some(_) => Action::new("chat.send", "Send to the sign-in", "What's typed goes to the sign-in waiting for it, not the agent", C::Send).on_typing(Button, "Send to the sign-in", Some(icon::KEY)),
@@ -460,6 +464,12 @@ impl ActionProvider for ChatStreamState {
             ChatCommand::Answer { thread, request, option } => {
                 if let Err(why) = self.answer(thread, request, option) {
                     *cx.note = Some(why);
+                }
+            }
+            ChatCommand::Indicator => {
+                if let Some(name) = value.filter(|n| crate::indicator::NAMES.contains(&n.as_str())) {
+                    self.ui.live = crate::indicator::by_name(&name);
+                    self.ui.indicator = name;
                 }
             }
         }

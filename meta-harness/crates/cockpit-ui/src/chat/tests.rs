@@ -102,17 +102,19 @@ pub(crate) fn conversation() -> Fed {
 fn messages_take_a_cursor_and_their_links_open() {
     let mut chat = conversation();
     assert_eq!(chat.target(), None, "no cursor: the stream follows the latest");
+    // Its rows: the prompt, the answer, and the run of two calls folded.
     chat.motion(Motion::Up, 1);
-    assert_eq!(chat.ui.cursor, Some(3), "the first move starts at the latest message");
+    assert_eq!(chat.ui.cursor, Some(2), "the first move starts at the latest row: the run");
     chat.motion(Motion::Up, 2);
-    assert_eq!(chat.ui.cursor, Some(1));
+    assert_eq!(chat.ui.cursor, Some(0));
     chat.motion(Motion::Last, 1);
-    assert_eq!(chat.ui.cursor, Some(3));
+    assert_eq!(chat.ui.cursor, Some(2));
     chat.motion(Motion::First, 1);
     assert_eq!(chat.ui.cursor, Some(0));
     assert!(matches!(chat.enter(), Step::Nothing(_)), "a prompt has no file");
     chat.motion(Motion::Line(3), 1);
     assert_eq!(chat.target(), Some(Target::Message { thread: Some("t".into()), turn: Some("turn".into()), index: 2, link: Some(("src/parse.rs".into(), Some(12))) }));
+    assert_eq!((chat.enter(), chat.rows().len()), (Step::Done, 4), "Enter on a folded run opens it: each call a row");
     assert_eq!(chat.enter(), Step::GoTo(GoTo::Code), "Enter opens the file it points to");
     // A hint on the second link picks it.
     chat.move_to("2:1");
@@ -239,7 +241,7 @@ fn a_long_chat_moves_by_the_shared_rules() {
     };
     let bottom = draw(&mut chat, 3);
     assert!(bottom > 0.0, "following the latest: at the bottom");
-    assert_eq!(chat.ui.scrolling.len(), 40, "each message measured once, following or not");
+    assert_eq!(chat.ui.scrolling.len(), 39, "each row measured once, following or not (the run of two calls is one)");
     // gg straight from following the latest: the top; Backspace, back.
     chat.motion(Motion::First, 1);
     assert_eq!((chat.ui.cursor, draw(&mut chat, 5)), (Some(0), 0.0));
@@ -379,3 +381,29 @@ fn a_sign_in_that_stopped_waiting_offers_a_new_one_and_says_how_it_ended() {
     chat.read();
     assert!(chat.sign_in_end_to_say().is_none() && !on_banners(&chat).contains(&"auth.end.dismiss".to_owned()));
 }
+
+/// A run of calls folds and opens with the fold keys every view has, and
+/// so does a call's output; everything at once; the cursor inside a run
+/// folded again is on the run.
+#[test]
+fn a_run_of_calls_and_a_calls_output_fold_with_the_shared_keys() {
+    let mut chat = conversation();
+    let output = vec![ContentBlock::Text { text: "fn parse() {}".into() }];
+    chat.apply(item(4, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output, locations: vec![] }));
+    let rows = |chat: &Fed| chat.rows().len();
+    assert_eq!(rows(&chat), 3, "the prompt, the answer, the run of three calls");
+    chat.motion(Motion::Up, 1);
+    chat.fold(Fold::Toggle);
+    assert_eq!((rows(&chat), chat.ui.cursor), (5, Some(2)), "opened: each call a row");
+    chat.motion(Motion::Last, 1);
+    assert_eq!(chat.ui.cursor, Some(4));
+    let open = |chat: &Fed| chat.with_items(|items, folds| folds.item_open(items[4])).unwrap();
+    assert!(!open(&chat), "its output folded");
+    chat.fold(Fold::Open);
+    assert!(open(&chat), "z o: its output open");
+    chat.fold(Fold::CloseAll);
+    assert_eq!((rows(&chat), chat.ui.cursor, open(&chat)), (3, Some(2), false), "everything folded: the cursor on the run");
+    chat.fold(Fold::OpenAll);
+    assert_eq!((rows(&chat), open(&chat)), (5, true));
+}
+
