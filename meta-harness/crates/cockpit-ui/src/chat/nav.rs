@@ -37,16 +37,21 @@ impl ChatStreamState {
     /// again.
     pub(super) fn moves(&self) -> Vec<Action> {
         let mut out = crate::nav::list_moves();
-        out.push(match self.target() {
-            Some(Target::Message { link: Some((path, _)), .. }) => Move::Enter.offer(format!("Open {path}")),
+        // Enter: a folded run opens; else the file it points to does.
+        let here = self.here().unwrap_or_default();
+        out.push(match (&here.run, self.target()) {
+            (Some((run, false)), _) => Move::Enter.offer(format!("Unfold {}", run.words())),
+            (_, Some(Target::Message { link: Some((path, _)), .. })) => Move::Enter.offer(format!("Open {path}")),
             _ => Move::Enter.offer_if(false, "Open the file it points to"),
         });
         out.push(Move::Leave.offer_if(self.ui.cursor.is_some(), "Follow the latest again"));
-        // Folding: the run or the item's own fold under the cursor; every one.
-        let here = self.ui.cursor.and_then(|at| self.with_items(|items, folds| folds.at(items, at)).flatten());
-        out.extend(crate::nav::fold_here(here.as_ref().map(|(f, open)| (f.words(), !open)).as_ref().map(|(w, folded)| (w.as_str(), *folded))));
-        let (any_folded, any_open) = self.with_items(|items, folds| folds.any(items)).unwrap_or_default();
-        out.extend(crate::nav::fold_all((any_folded, "Unfold every run of calls and output"), (any_open, "Fold every run of calls and output")));
+        // Folding: the innermost fold under the cursor each key can act
+        // on (its own, the run it's in); every one.
+        let words = |f: &super::rows::Folding| f.words();
+        let (toggle, open, close) = (here.toggles().map(|(f, open)| (words(f), !open)), here.opens().map(words), here.closes().map(words));
+        out.extend(crate::nav::fold_here(crate::nav::FoldsHere { toggle: toggle.as_ref().map(|(w, folded)| (w.as_str(), *folded)), open: open.as_deref(), close: close.as_deref() }));
+        let shape = self.shape();
+        out.extend(crate::nav::fold_all((shape.any_folded, "Unfold every run of calls and output"), (shape.any_open, "Fold every run of calls and output")));
         out
     }
 }
@@ -121,9 +126,17 @@ impl Navigable for ChatStreamState {
         std::mem::take(&mut self.asks)
     }
 
-    /// The desk's agents (read from now on), and how many files each turn
-    /// changed (the desk's timeline).
+    /// Its settings, the desk's agents (read from now on), and how many
+    /// files each turn changed (the desk's timeline).
     fn share(&mut self, shared: &crate::shared::Shared) {
+        // The chat's settings changed: what it starts with, taken.
+        if let Some(settings) = shared.settings.since(&mut self.seen_settings) {
+            self.settings = settings.chat.clone();
+            self.ui.folds.set_verbosity(self.settings.shows);
+            if let Some(shown) = crate::indicator::Shown::named(&self.settings.indicator) {
+                self.ui.indicator = shown;
+            }
+        }
         self.agents.follow(&shared.agents);
         self.unsent.follow(&shared.drafts);
         self.took();
@@ -196,34 +209,37 @@ impl Navigable for ChatStreamState {
             }
             self.ui.cursor = message;
             self.ui.link_pick = None;
-            if let Some(at) = message
-                && let Some(row) = self.rows().iter().position(|r| r.holds(at))
-            {
+            if let Some(row) = message.and_then(|at| self.shape().row_of(at)) {
                 self.ui.scrolling.show(row, crate::viewport::Show::Middle);
             }
         }
     }
 
+    /// What the cursor's on: its item (a folded run, as one: its first
+    /// item's place, no file of its own), the file it points to.
     fn target(&self) -> Option<Target> {
         let index = self.ui.cursor?;
-        let item = self.item_at(index)?;
-        let links = links_of(&item);
+        let shape = self.shape();
+        let folded = shape.row_of(index).is_some_and(|r| shape.rows[r].folded);
+        let view = self.thread()?;
+        let item = view.in_stream(index)?;
+        let links = if folded { Vec::new() } else { links_of(item) };
         let link = self.ui.link_pick.and_then(|n| links.get(n).cloned()).or_else(|| links.first().cloned());
-        Some(Target::Message { thread: self.active_thread().map(|t| t.to_string()), turn: Some(item.turn_id.to_string()), index, link })
+        Some(Target::Message { thread: Some(view.thread.id.to_string()), turn: Some(item.turn_id.to_string()), index, link })
     }
 
     /// From the latest message (none under the cursor yet), moves start at
     /// the bottom.
     fn motion(&mut self, motion: Motion, count: usize) {
-        let rows = self.rows();
-        let Some(last) = rows.last() else { return };
+        let shape = self.shape();
+        let Some(last) = shape.rows.last() else { return };
         use crate::viewport::{Go, Show};
         let fresh = self.ui.cursor.is_none();
         match motion {
             // Following the latest: the first move lands on the newest.
             Motion::Down | Motion::Up if fresh => self.put_cursor(last.first, Show::InView),
-            // The row of that number, as shown.
-            Motion::Line(i) => self.put_cursor(rows[i.saturating_sub(1).min(rows.len() - 1)].first, Show::Middle),
+            // Message of that number (as a place says it).
+            Motion::Line(i) => self.put_cursor(i.saturating_sub(1), Show::Middle),
             _ => {
                 if let Some(go) = Go::of(motion, count) {
                     self.go(go);
@@ -234,10 +250,8 @@ impl Navigable for ChatStreamState {
 
     /// A folded run opens; a message's file opens in the code view.
     fn enter(&mut self) -> Step {
-        if let Some(at) = self.ui.cursor
-            && let Some((folding @ crate::chat::rows::Folding::Run(..), false)) = self.with_items(|items, folds| folds.at(items, at)).flatten()
-        {
-            self.ui.folds.toggle(&folding);
+        if let Some((super::rows::Folding::Run { first, .. }, false)) = self.here().and_then(|h| h.run) {
+            self.ui.folds.set_run(&first, rows::Set::Open);
             return Step::Done;
         }
         match self.target() {
@@ -253,47 +267,42 @@ impl Navigable for ChatStreamState {
         let Some(at) = self.ui.cursor.take() else {
             return Step::Nothing("Already following the latest.".into());
         };
-        let rows = self.rows();
-        let row = rows.iter().position(|r| r.holds(at));
-        self.ui.scrolling.go(rows.len(), row, crate::viewport::Go::Last);
+        let shape = self.shape();
+        self.ui.scrolling.go(shape.rows.len(), shape.row_of(at), crate::viewport::Go::Last);
         Step::Done
     }
 
-    /// The run or the item's own fold under the cursor (its own first);
-    /// or every one.
+    /// The innermost fold under the cursor each key acts on (its own, then
+    /// the run it's in), or every one.
     fn fold(&mut self, fold: Fold) {
-        match fold {
-            Fold::OpenAll | Fold::CloseAll => {
-                if let Some(all) = self.with_items(|items, folds| folds.all(items, fold == Fold::OpenAll)) {
-                    self.ui.folds = all;
-                }
-            }
-            Fold::Toggle | Fold::Open | Fold::Close => {
-                let Some(at) = self.ui.cursor else { return };
-                let Some((folding, open)) = self.with_items(|items, folds| folds.at(items, at)).flatten() else { return };
-                if fold == Fold::Toggle || (fold == Fold::Open) != open {
-                    self.ui.folds.toggle(&folding);
-                }
-            }
+        if let Fold::OpenAll | Fold::CloseAll = fold {
+            self.ui.folds.set_all(if fold == Fold::OpenAll { rows::Set::Open } else { rows::Set::Folded });
+            return;
         }
-        // The cursor in a run folded now: on the run.
-        if let Some(at) = self.ui.cursor
-            && let Some(row) = self.rows().into_iter().find(|r| r.holds(at))
-        {
-            self.ui.cursor = Some(row.first);
+        let Some(here) = self.here() else { return };
+        use rows::Set;
+        let set = match fold {
+            Fold::Toggle => here.toggles().map(|(f, open)| (f, if *open { Set::Folded } else { Set::Open })),
+            Fold::Open => here.opens().map(|f| (f, Set::Open)),
+            _ => here.closes().map(|f| (f, Set::Folded)),
+        };
+        if let Some((folding, set)) = set {
+            self.ui.folds.set(folding, set);
         }
     }
 
     fn items(&self) -> Vec<Item> {
-        self.stream().iter().enumerate().map(|(i, item)| Item::new(i.to_string(), "", item_text(item))).collect()
+        self.thread().map(|v| v.stream().enumerate().map(|(i, item)| Item::new(i.to_string(), "", item_text(item))).collect()).unwrap_or_default()
     }
 
     fn spots(&self) -> Vec<Spot> {
         self.ui.spots.clone()
     }
 
+    /// The row the cursor's on (a folded run's by its first item).
     fn cursor_key(&self) -> Option<String> {
-        self.ui.cursor.map(|c| c.to_string())
+        let shape = self.shape();
+        self.ui.cursor.and_then(|c| shape.row_of(c)).map(|r| shape.rows[r].first.to_string())
     }
 
     /// A message ("3") or one of its links ("3:1").

@@ -213,7 +213,7 @@ impl TagList {
                         ui.add_space(look.space_s);
                         let folded = !self.open.contains(id);
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(if folded { icon::CARET_RIGHT } else { icon::CARET_DOWN }).size(look.text_small).color(theme.faint));
+                            ui.label(RichText::new(crate::nav::fold_mark(!folded)).size(look.text_small).color(theme.faint));
                             ui.label(crate::theme::tag_mark(ui, theme.tag(tag.colour), look.text_title));
                             ui.label(RichText::new(&tag.name).strong().size(look.text_title).color(theme.text_strong));
                             ui.label(RichText::new(on_things(tag.on.len())).size(look.text_small).color(theme.muted));
@@ -462,7 +462,7 @@ impl ActionProvider for TagList {
         out.push(Move::Motion(Motion::PrevSibling).offer_if(self.rows.iter().filter(|r| matches!(r, Row::Tag(_))).count() > 1, "Previous tag"));
         let here = self.rows.get(self.cursor).map(|r| r.tag().clone());
         let name = here.as_ref().and_then(|id| self.tags.get().get(id).map(|t| t.name.clone()));
-        out.extend(crate::nav::fold_here(here.as_ref().zip(name.as_deref()).map(|(id, name)| (name, !self.open.contains(id)))));
+        out.extend(crate::nav::fold_here(crate::nav::FoldsHere::one(here.as_ref().zip(name.as_deref()).map(|(id, name)| (name, !self.open.contains(id))))));
         let tags = self.tags.get().list().len();
         out.extend(crate::nav::fold_all((self.open.len() < tags, "Unfold every tag"), (!self.open.is_empty(), "Fold every tag")));
         out

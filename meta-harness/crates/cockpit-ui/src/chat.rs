@@ -12,7 +12,7 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use harness_contracts::{
     ConfigKind, McpServer, McpTransport, NativeId, OptionValue, ContentBlock, InstanceId, ItemBody, ItemStatus, ModelSelection, NoticeLevel, PlanBody,
     PlanStep, ProviderSnapshot, ProviderStatus, RuntimeMode, RuntimePolicy, SessionKey, Slot, SlotId, SlotStatus,
-    StepStatus, SteerInput, ThreadId, ToolKind, TurnItem, TurnStatus, LEAD,
+    StepStatus, SteerInput, ThreadId, TurnItem, TurnStatus, LEAD,
 };
 
 use egui_phosphor::regular as icon;
@@ -29,10 +29,13 @@ pub(crate) mod actions;
 mod live;
 mod nav;
 mod render;
-pub(crate) mod rows;
+mod rows;
 mod session;
 pub(crate) mod things;
 pub(crate) mod slots;
+mod words;
+
+pub use rows::Verbosity;
 
 use crate::agents::block_summary;
 use render::mcp_label;
@@ -68,6 +71,10 @@ pub struct ChatStreamState {
     unsent: crate::shared::Reader<crate::drafts::Drafts>,
     unsent_for: Option<SlotId>,
     unsent_said: harness_contracts::Message,
+    /// The chat's settings (what each view starts with; how live the
+    /// agent's said to be), and which of their changes it took.
+    settings: crate::config::ChatUi,
+    seen_settings: u64,
 }
 
 /// A chat view's own state: what's typed, where the cursor is, what was
@@ -81,18 +88,18 @@ pub struct ChatView {
     /// The message the cursor is on (normal mode); None follows the latest.
     /// A folded run of calls is its first call's place.
     pub cursor: Option<usize>,
-    /// What's folded or opened against its default (runs of calls, a
-    /// call's output, reasoning).
+    /// What's folded and open (runs of calls, a call's output, reasoning),
+    /// for which thread; the stream's shape as last worked out from them.
     pub(crate) folds: rows::Folds,
-    /// The agent at work: when its updates came (the clock's seconds, the
-    /// last few), the update count last seen, since when its turn has run,
-    /// whether the server's connection is up; what shows it, by name.
-    pub(crate) updates: std::collections::VecDeque<f64>,
-    pub(crate) seen_activity: Option<u64>,
-    pub(crate) running_since: Option<f64>,
-    pub(crate) connected: bool,
-    pub(crate) indicator: String,
-    pub(crate) live: Option<Box<dyn crate::indicator::Indicator>>,
+    pub(crate) folds_for: Option<ThreadId>,
+    shape: std::cell::RefCell<Option<(ShapeOf, std::rc::Rc<rows::Shape>)>>,
+    /// What shows the agent at work (the setting's pick); where the running
+    /// turn's line was drawn this frame.
+    pub(crate) indicator: crate::indicator::Shown,
+    pub(crate) live_at: Option<render::LiveAt>,
+    /// How tall each row was last drawn (by its first item), and as what:
+    /// a row out of sight takes that room without being drawn.
+    pub(crate) heights: std::collections::HashMap<harness_contracts::ItemId, (render::Measure, f32)>,
     /// Which of its links a hint picked.
     pub(crate) link_pick: Option<usize>,
     /// Where it's looking (the shared rules move it, a message a stop);
@@ -122,12 +129,11 @@ impl Default for ChatView {
             markdown_cache: CommonMarkCache::default(),
             cursor: None,
             folds: rows::Folds::default(),
-            updates: Default::default(),
-            seen_activity: None,
-            running_since: None,
-            connected: true,
-            indicator: "heartbeat".to_owned(),
-            live: crate::indicator::by_name("heartbeat"),
+            folds_for: None,
+            shape: Default::default(),
+            indicator: Default::default(),
+            live_at: None,
+            heights: Default::default(),
             link_pick: None,
             scrolling: Default::default(),
             spots: Vec::new(),
@@ -147,20 +153,6 @@ fn mode_label(mode: RuntimeMode) -> String {
         RuntimeMode::AutoAcceptEdits => format!("{} Auto-edit", icon::PENCIL_SIMPLE),
         RuntimeMode::Auto => format!("{} Auto", icon::LIGHTNING),
         RuntimeMode::FullAccess => format!("{} Full access", icon::FIRE),
-    }
-}
-
-fn tool_icon(kind: &ToolKind) -> &'static str {
-    match kind {
-        ToolKind::Read => icon::BOOK_OPEN,
-        ToolKind::Edit => icon::PENCIL_SIMPLE,
-        ToolKind::Delete => icon::TRASH,
-        ToolKind::Move => icon::ARROWS_LEFT_RIGHT,
-        ToolKind::Search => icon::MAGNIFYING_GLASS,
-        ToolKind::Execute => icon::PLAY,
-        ToolKind::Think => icon::LIGHTBULB,
-        ToolKind::Fetch => icon::GLOBE,
-        ToolKind::Other => icon::WRENCH,
     }
 }
 
@@ -208,6 +200,10 @@ impl ChatView {
     }
 }
 
+/// What a stream's shape was worked out from: its thread, as of which
+/// update, and which change of the folds.
+type ShapeOf = (ThreadId, u64, u64);
+
 /// How often a chat on screen says its slot's updates were seen (seconds).
 const SEEN_EVERY: f64 = 2.0;
 
@@ -253,7 +249,7 @@ impl ChatStreamState {
             return Vec::new();
         }
         let mut at = std::collections::BTreeMap::new();
-        for (index, item) in view.turns.iter().flat_map(|t| view.items_of(&t.id)).enumerate() {
+        for (index, item) in view.stream().enumerate() {
             if let ItemBody::Request { request_id } = &item.body {
                 at.insert(request_id.clone(), index);
             }
@@ -263,16 +259,36 @@ impl ChatStreamState {
         out
     }
 
-    /// The stream as rows (a folded run of calls one of them), as drawn.
-    pub(crate) fn rows(&self) -> Vec<rows::Row> {
-        self.with_items(rows::rows).unwrap_or_default()
+    /// The stream's shape (its rows, a folded run one of them; whether
+    /// anything is folded, anything open), as drawn: worked out once per
+    /// change of the thread or the folds.
+    pub(crate) fn shape(&self) -> std::rc::Rc<rows::Shape> {
+        let Some(view) = self.thread() else { return Default::default() };
+        let of = (view.thread.id.clone(), view.activity, self.ui.folds.changes());
+        if let Some((was, shape)) = &*self.ui.shape.borrow()
+            && *was == of
+        {
+            return shape.clone();
+        }
+        let items: Vec<&TurnItem> = view.stream().collect();
+        let shape = std::rc::Rc::new(rows::shape(&items, &self.ui.folds));
+        *self.ui.shape.borrow_mut() = Some((of, shape.clone()));
+        shape
     }
 
-    /// `read` given the stream's items (in place, in order) and the folds.
-    pub(crate) fn with_items<R>(&self, read: impl FnOnce(&[&TurnItem], &rows::Folds) -> R) -> Option<R> {
+    /// What folds where the cursor is (the run it's in, its own).
+    pub(crate) fn here(&self) -> Option<rows::Here> {
+        let at = self.ui.cursor?;
+        let shape = self.shape();
+        let row = &shape.rows[shape.row_of(at)?];
         let view = self.thread()?;
-        let items: Vec<&TurnItem> = view.turns.iter().flat_map(|t| view.items_of(&t.id)).collect();
-        Some(read(&items, &self.ui.folds))
+        let run: Vec<&TurnItem> = row.run.map(|(a, b)| (a..=b).filter_map(|i| view.in_stream(i)).collect()).unwrap_or_default();
+        Some(self.ui.folds.here(row, &run, view.in_stream(at)?))
+    }
+
+    /// Whether request `id` (of `view`) waits on you.
+    fn waits_on_you(&self, view: &ThreadView, id: &harness_contracts::RequestId) -> bool {
+        view.request(id).is_some_and(|r| self.agents().waits(r))
     }
 
     /// The item you're on: the cursor's, else (following the latest) what

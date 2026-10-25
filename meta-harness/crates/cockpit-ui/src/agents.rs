@@ -131,6 +131,10 @@ pub struct Agents {
     /// Requests answered here whose answer is on its way (no longer
     /// waiting on you: another can't go to them meanwhile).
     answering: BTreeSet<harness_contracts::RequestId>,
+    /// The clock (seconds) as of this frame, events applied at it; whether
+    /// the server's event socket is up.
+    now: f64,
+    connected: bool,
     mailbox: Mailbox,
 }
 
@@ -147,7 +151,12 @@ impl Agents {
         {
             self.answering.remove(&request.id);
         }
-        self.store.apply(event);
+        self.store.apply(event, self.now);
+    }
+
+    /// Whether the server's event socket is up (as of this frame).
+    pub fn connected(&self) -> bool {
+        self.connected
     }
 
     /// Whether `request` waits on you: pending, and no answer to it on its
@@ -259,7 +268,7 @@ impl Agents {
 
     /// The agent's last message in `thread`, as text.
     pub fn last_said(&self, thread: &ThreadId) -> Option<String> {
-        self.store.threads.get(thread)?.items.iter().rev().find_map(|item| match &item.body {
+        self.store.threads.get(thread)?.stream().rev().find_map(|item| match &item.body {
             ItemBody::AssistantMessage { content, .. } => Some(content.iter().map(block_summary).collect::<Vec<_>>().join(" ")),
             _ => None,
         })
@@ -390,6 +399,8 @@ impl Agents {
     /// there's a harness (every frame, shown or not: a message sent from
     /// elsewhere waits on a session opening).
     pub fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
+        self.now = ctx.input(|i| i.time);
+        self.connected = net.ws_state.lock().is_ok_and(|s| *s == crate::net::WsState::Open);
         if !self.tools_asked && !self.store.instances.is_empty() {
             self.tools_asked = true;
             let mailbox = self.mailbox.clone();

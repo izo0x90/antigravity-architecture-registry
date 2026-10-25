@@ -713,7 +713,7 @@ impl ChangesView {
                 let Some(hunk) = self.file_changes(file.group, &file.path).and_then(|c| c.hunks.get(*h)) else { return };
                 let folded = self.folded.contains(&(file_key(file), *h));
                 ui.horizontal(|ui| {
-                    let caret = if folded { egui_phosphor::regular::CARET_RIGHT } else { egui_phosphor::regular::CARET_DOWN };
+                    let caret = crate::nav::fold_mark(!folded);
                     ui.label(RichText::new(caret).size(look.text_small).color(colors().muted));
                     if !folded {
                         ui.label(RichText::new(format!("@@ −{},{} +{},{} @@", hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines)).monospace().size(look.text_small).color(colors().faint));
@@ -778,7 +778,7 @@ impl ChangesView {
         let opened = self.opened.get(&file_key(file));
         // One line (rows are laid out by height): a long path is cut.
         ui.horizontal(|ui| {
-            let caret = if opened.is_some() { egui_phosphor::regular::CARET_DOWN } else { egui_phosphor::regular::CARET_RIGHT };
+            let caret = crate::nav::fold_mark(opened.is_some());
             ui.label(RichText::new(caret).size(look.text_body).color(colors().muted));
             let (mark, color, word) = status_look(file.status);
             ui.label(RichText::new(mark).size(look.text_body).color(color)).on_hover_text(word);
@@ -855,11 +855,11 @@ impl ChangesView {
             _ => Move::Leave.offer_if(false, "Up to its change or file"),
         });
         let change = row.as_ref().and_then(Self::hunk_of).zip(file).map(|((_, h), f)| self.folded.contains(&(file_key(f), h)));
-        out.extend(crate::nav::fold_here(match (change, file) {
+        out.extend(crate::nav::fold_here(crate::nav::FoldsHere::one(match (change, file) {
             (Some(folded), _) => Some(("this change", folded)),
             (None, Some(f)) => Some((f.path.as_str(), !self.opened.contains_key(&file_key(f)))),
             _ => None,
-        }));
+        })));
         let closed = self.list().is_some_and(|l| l.files.iter().any(|f| !self.opened.contains_key(&file_key(f))));
         out.extend(crate::nav::fold_all((closed || !self.folded.is_empty(), "Unfold everything"), (!self.opened.is_empty(), "Fold everything")));
         out

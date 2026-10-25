@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use arch_graph::{IndexStatus, Source, TypeSystem};
 
-use crate::config::{ChangesUi, CodeUi, UiConfig};
+use crate::config::{ChangesUi, ChatUi, CodeUi, UiConfig};
 use crate::graph_config::GraphUi;
 use crate::review::ReviewState;
 
@@ -107,11 +107,12 @@ pub struct Settings {
     pub graph: GraphUi,
     pub code: CodeUi,
     pub changes: ChangesUi,
+    pub chat: ChatUi,
 }
 
 impl Settings {
     pub fn of(config: &UiConfig) -> Self {
-        Self { graph: config.graph.clone(), code: config.code.clone(), changes: config.changes.clone() }
+        Self { graph: config.graph.clone(), code: config.code.clone(), changes: config.changes.clone(), chat: config.chat.clone() }
     }
 }
 

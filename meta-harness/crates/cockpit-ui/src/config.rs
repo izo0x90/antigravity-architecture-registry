@@ -53,6 +53,7 @@ pub struct UiConfig {
     pub code: CodeUi,
     pub panels: PanelsUi,
     pub changes: ChangesUi,
+    pub chat: ChatUi,
     /// The faces text is drawn in.
     pub fonts: FontsUi,
     /// Every state's word, icon and colour.
@@ -119,6 +120,33 @@ pub struct ChangesUi {
 impl Default for ChangesUi {
     fn default() -> Self {
         Self { context: 3, more_context: 10, open_up_to_files: 30, open_up_to_lines: 600, refresh_s: 5.0, side_by_side_from: 900.0, deleted_in_code: true }
+    }
+}
+
+/// The chat: how much it shows at first, what shows the agent at work,
+/// and how long after its last update it's said to be receiving still,
+/// and quiet too long.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct ChatUi {
+    pub shows: crate::chat::Verbosity,
+    #[serde(deserialize_with = "indicator_name")]
+    pub indicator: String,
+    pub receiving_s: f64,
+    pub quiet_after_s: f64,
+}
+
+impl Default for ChatUi {
+    fn default() -> Self {
+        Self { shows: crate::chat::Verbosity::default(), indicator: crate::indicator::ALL[0].0.to_owned(), receiving_s: 1.5, quiet_after_s: 60.0 }
+    }
+}
+
+/// One of the indicators there are, by name.
+fn indicator_name<'de, D: serde::Deserializer<'de>>(to: D) -> Result<String, D::Error> {
+    let name = String::deserialize(to)?;
+    match crate::indicator::Shown::named(&name) {
+        Some(_) => Ok(name),
+        None => Err(serde::de::Error::custom(format!("no indicator named {name:?} (there are: {})", crate::indicator::ALL.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")))),
     }
 }
 

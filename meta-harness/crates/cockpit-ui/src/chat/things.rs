@@ -31,7 +31,7 @@ impl ChatStreamState {
             return places.clone();
         }
         let mut places = Vec::new();
-        for turn in &view.turns {
+        for turn in view.turns() {
             let of: Vec<&TurnItem> = view.items_of(&turn.id).collect();
             for item in &of {
                 places.push(view.thread.native_id.clone().map(|session| (session, turn.ordinal, message_number(&of, &item.id))));

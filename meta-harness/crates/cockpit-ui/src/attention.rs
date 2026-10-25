@@ -93,7 +93,7 @@ mod tests {
     fn they_are_gone_through_waiting_first() {
         let mut store = Store::default();
         for n in [note("turn:1", NotificationKind::TurnFinished, "lead", 1), note("req:2", NotificationKind::Approval, "sub-1", 5), note("req:1", NotificationKind::Question, "sub-1", 2)] {
-            store.apply(ClientEvent::NotificationUpdated { notification: n });
+            store.apply(ClientEvent::NotificationUpdated { notification: n }, 0.0);
         }
         assert_eq!(list(&store, None).iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["req:1", "req:2", "turn:1"]);
         assert_eq!(counts(&store), (2, 1));

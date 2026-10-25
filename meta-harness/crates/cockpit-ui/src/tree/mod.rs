@@ -392,7 +392,7 @@ impl TreeBuffer {
                         ui.set_min_height(row_h);
                         ui.add_space(row.depth as f32 * crate::theme::look().space_xl);
                         if self.has_children(&row.id) {
-                            let icon = if self.folded(&row.id) { egui_phosphor::regular::CARET_RIGHT } else { egui_phosphor::regular::CARET_DOWN };
+                            let icon = crate::nav::fold_mark(!self.folded(&row.id));
                             ui.label(RichText::new(icon).size(crate::theme::look().text_body).color(colors().muted));
                         } else {
                             ui.add_space(crate::theme::look().space_xl);
@@ -454,7 +454,7 @@ impl TreeBuffer {
         // On a leaf, the fold is the row that holds it.
         let row = id.and_then(|id| if self.has_children(id) { Some(id) } else { self.parent.get(id) });
         let name = row.map(|r| self.name(r));
-        out.extend(crate::nav::fold_here(row.zip(name.as_deref()).map(|(r, n)| (n, self.folded(r)))));
+        out.extend(crate::nav::fold_here(crate::nav::FoldsHere::one(row.zip(name.as_deref()).map(|(r, n)| (n, self.folded(r))))));
         let ids = self.all_ids();
         let (any_folded, any_open) = (ids.iter().any(|id| self.folded(id)), ids.iter().any(|id| self.has_children(id) && !self.folded(id)));
         out.extend(crate::nav::fold_all((any_folded, "Unfold everything"), (any_open, "Fold everything")));

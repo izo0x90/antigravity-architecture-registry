@@ -351,6 +351,12 @@ impl Measured {
         Some(moved.cursor)
     }
 
+    /// The items are laid out anew (one opened, say): the stops as last
+    /// drawn no longer hold; what's asked waits for them as drawn next.
+    pub fn relaid(&mut self) {
+        self.stops.clear();
+    }
+
     /// Shows item `at` as asked, once it's laid out.
     pub fn show(&mut self, at: usize, show: Show) {
         self.show = Some((at, show));

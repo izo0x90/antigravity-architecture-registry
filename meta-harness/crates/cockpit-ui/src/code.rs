@@ -948,7 +948,7 @@ impl CodeViewerState {
         out.push(Move::Leave.offer_if(self.defs.iter().any(|d| d.start < line && line <= d.end), "Out to the definition's start"));
         // Definitions spanning lines fold: the innermost the cursor is in.
         let def = self.defs.iter().filter(|d| d.start <= line && line <= d.end && d.end > d.start).min_by_key(|d| d.end - d.start);
-        out.extend(crate::nav::fold_here(def.map(|d| (d.name.as_str(), self.folds.contains(&d.start)))));
+        out.extend(crate::nav::fold_here(crate::nav::FoldsHere::one(def.map(|d| (d.name.as_str(), self.folds.contains(&d.start))))));
         let open = self.defs.iter().any(|d| d.end > d.start && !self.folds.contains(&d.start) && self.fold_hiding(d.start).is_none());
         out.extend(crate::nav::fold_all((!self.folds.is_empty(), "Unfold every definition"), (open, "Fold every definition")));
         out

@@ -1,7 +1,7 @@
 use super::*;
 use crate::net::NetClient;
 use crate::shared::Shared;
-use harness_contracts::{AdapterEvent, ClientEvent, FileLocation, InstanceId, ItemId, RuntimePolicy, Thread, ThreadStatus, Turn, TurnId, TurnStatus};
+use harness_contracts::{AdapterEvent, ClientEvent, FileLocation, InstanceId, ItemId, RuntimePolicy, Thread, ThreadStatus, ToolKind, Turn, TurnId, TurnStatus};
 
 /// A chat over agents of its own: the server's events applied to them,
 /// the chat reading them as it does each frame.
@@ -112,9 +112,14 @@ fn messages_take_a_cursor_and_their_links_open() {
     chat.motion(Motion::First, 1);
     assert_eq!(chat.ui.cursor, Some(0));
     assert!(matches!(chat.enter(), Step::Nothing(_)), "a prompt has no file");
+    // Message 3 is the run's first: folded, the run (no file of its own),
+    // and Enter says it unfolds it, and does.
     chat.motion(Motion::Line(3), 1);
-    assert_eq!(chat.target(), Some(Target::Message { thread: Some("t".into()), turn: Some("turn".into()), index: 2, link: Some(("src/parse.rs".into(), Some(12))) }));
-    assert_eq!((chat.enter(), chat.rows().len()), (Step::Done, 4), "Enter on a folded run opens it: each call a row");
+    assert_eq!(chat.target(), Some(Target::Message { thread: Some("t".into()), turn: Some("turn".into()), index: 2, link: None }));
+    assert!(chat.moves().iter().any(|a| a.label == "Unfold the 2 calls"), "{:?}", chat.moves().iter().map(|a| &a.label).collect::<Vec<_>>());
+    assert_eq!((chat.enter(), chat.shape().rows.len()), (Step::Done, 4), "Enter on a folded run opens it: each call a row");
+    assert_eq!(chat.target().and_then(|t| t.code()), Some(("src/parse.rs".into(), Some(12))));
+    assert!(chat.moves().iter().any(|a| a.label == "Open src/parse.rs"));
     assert_eq!(chat.enter(), Step::GoTo(GoTo::Code), "Enter opens the file it points to");
     // A hint on the second link picks it.
     chat.move_to("2:1");
@@ -384,25 +389,25 @@ fn a_sign_in_that_stopped_waiting_offers_a_new_one_and_says_how_it_ended() {
 
 /// A run of calls folds and opens with the fold keys every view has, and
 /// so does a call's output; everything at once; the cursor inside a run
-/// folded again is on the run.
+/// folded again is on the run's row.
 #[test]
 fn a_run_of_calls_and_a_calls_output_fold_with_the_shared_keys() {
     let mut chat = conversation();
     let output = vec![ContentBlock::Text { text: "fn parse() {}".into() }];
     chat.apply(item(4, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output, locations: vec![] }));
-    let rows = |chat: &Fed| chat.rows().len();
+    let rows = |chat: &Fed| chat.shape().rows.len();
     assert_eq!(rows(&chat), 3, "the prompt, the answer, the run of three calls");
     chat.motion(Motion::Up, 1);
     chat.fold(Fold::Toggle);
     assert_eq!((rows(&chat), chat.ui.cursor), (5, Some(2)), "opened: each call a row");
     chat.motion(Motion::Last, 1);
     assert_eq!(chat.ui.cursor, Some(4));
-    let open = |chat: &Fed| chat.with_items(|items, folds| folds.item_open(items[4])).unwrap();
+    let open = |chat: &Fed| chat.thread().is_some_and(|v| chat.ui.folds.item_open(v.in_stream(4).unwrap()));
     assert!(!open(&chat), "its output folded");
     chat.fold(Fold::Open);
     assert!(open(&chat), "z o: its output open");
     chat.fold(Fold::CloseAll);
-    assert_eq!((rows(&chat), chat.ui.cursor, open(&chat)), (3, Some(2), false), "everything folded: the cursor on the run");
+    assert_eq!((rows(&chat), chat.cursor_key().as_deref(), open(&chat)), (3, Some("2"), false), "everything folded: the cursor on the run");
     chat.fold(Fold::OpenAll);
     assert_eq!((rows(&chat), open(&chat)), (5, true));
 }

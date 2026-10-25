@@ -646,7 +646,7 @@ impl SpecState {
                     title.push_str(&format!("  {glyph} {required} {word}"));
                 }
                 let color = if self.current == section { colors().focus } else if changed.contains(&section) { colors().info } else { colors().text_strong };
-                let caret = if open { egui_phosphor::regular::CARET_DOWN } else { egui_phosphor::regular::CARET_RIGHT };
+                let caret = crate::nav::fold_mark(open);
                 item(ui, Entry { section, item: SpecItem::Header }, &mut |ui| {
                     ui.label(RichText::new(format!("{caret} {title}")).strong().size(crate::theme::look().text_title).color(color));
                 });
@@ -1000,7 +1000,7 @@ impl SpecState {
         });
         out.push(Move::Enter.offer_if(enter.is_some(), enter.unwrap_or_else(|| "Open: fold a section, follow a relation, reply".into())));
         out.push(Move::Leave.offer_if(entry.as_ref().is_some_and(|e| e.item != SpecItem::Header), "Up to the section title"));
-        out.extend(crate::nav::fold_here(Some((&format!("the {} section", self.current.title()), self.folded.contains(&self.current)))));
+        out.extend(crate::nav::fold_here(crate::nav::FoldsHere::one(Some((&format!("the {} section", self.current.title()), self.folded.contains(&self.current))))));
         out.extend(crate::nav::fold_all((!self.folded.is_empty(), "Unfold every section"), (self.folded.len() < Section::ALL.len(), "Fold every section")));
         out
     }

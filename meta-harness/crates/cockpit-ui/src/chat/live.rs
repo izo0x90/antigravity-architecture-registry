@@ -1,99 +1,138 @@
 //! The running turn's live line: what the agent is doing, how live it is
 //! (receiving, waiting, quiet too long, cut off), in words, with what shows
-//! it (`crate::indicator`) beside them. From what's already known: each
-//! update's arrival (the thread's update count changing), the event
-//! socket's state, the turn's latest item.
+//! it (`crate::indicator`) beside them. From what's already known: when
+//! the agent's updates came (kept with its thread, `ThreadView::arrivals`),
+//! whether the server's socket is up, the running turn's latest item, and
+//! whether its harness can run.
 
 use super::*;
 use crate::indicator::{Activity, Liveness, Next, Stage};
 
-/// Updates in the last this-many seconds: receiving.
-const RECEIVING_S: f64 = 1.5;
-/// No update for this long: quiet too long.
-const QUIET_S: f64 = 60.0;
+/// The indicator's spot beside the words.
+pub(super) const SPOT: Vec2 = Vec2::new(64.0, 12.0);
 
 impl ChatStreamState {
-    /// Once a frame while drawn: an update arrived (the count changed), and
-    /// since when the turn has run.
-    pub(super) fn note_updates(&mut self, now: f64, connected: bool) {
-        self.ui.connected = connected;
-        let (activity, running) = self.thread().map_or((None, false), |t| (Some(t.activity), t.running_turn().is_some()));
-        if activity != self.ui.seen_activity {
-            if self.ui.seen_activity.is_some() {
-                self.ui.updates.push_back(now);
-            }
-            self.ui.seen_activity = activity;
-        }
-        while self.ui.updates.front().is_some_and(|t| now - t > crate::indicator::TRACE_S) {
-            self.ui.updates.pop_front();
-        }
-        self.ui.running_since = if running { self.ui.running_since.or(Some(now)) } else { None };
-    }
-
-    /// The agent at work now, as plain data.
-    pub(super) fn activity(&self, now: f64) -> Activity {
-        let last = self.ui.updates.back().copied().or(self.ui.running_since).unwrap_or(now);
-        let since_last = now - last;
+    /// The agent at work at `now`, as plain data: its updates over the
+    /// last while (as long as it can be before it's quiet too long).
+    pub(super) fn activity(&self, view: &ThreadView, now: f64) -> Activity {
+        let (receiving, quiet) = (self.settings.receiving_s, self.settings.quiet_after_s);
+        let since_last = view.arrivals().back().map(|(t, _)| (now - t).max(0.0));
         let liveness = match since_last {
-            _ if !self.ui.connected => Liveness::Disconnected,
-            s if s < RECEIVING_S => Liveness::Receiving,
-            s if s < QUIET_S => Liveness::Waiting,
-            _ => Liveness::Quiet,
+            _ if !self.agents().connected() => Liveness::Disconnected,
+            // (Nothing's come since it was known: no time to say.)
+            None => Liveness::Waiting,
+            Some(s) if s < receiving => Liveness::Receiving,
+            Some(s) if s < quiet => Liveness::Waiting,
+            Some(_) => Liveness::Quiet,
         };
-        Activity { liveness, updates: self.ui.updates.iter().copied().collect(), since_last, doing: self.doing() }
+        let updates = view.arrivals().iter().filter(|(t, _)| now - *t <= quiet).copied().collect();
+        Activity { liveness, updates, since_last, doing: self.doing(view) }
     }
 
     /// What it's doing, from the running turn's latest item.
-    fn doing(&self) -> String {
-        let Some(view) = self.thread() else { return "Working".into() };
-        let Some(turn) = view.running_turn() else { return "Working".into() };
-        let Some(item) = view.items_of(&turn.id).last() else { return "Starting".into() };
-        let file = |locations: &[harness_contracts::FileLocation]| locations.first().map(|l| l.path.rsplit('/').next().unwrap_or(&l.path).to_owned());
+    fn doing(&self, view: &ThreadView) -> String {
+        let Some(turn) = view.running() else { return "Working".into() };
+        let Some(item) = view.items_of(&turn.id).next_back() else { return "Starting".into() };
         match &item.body {
-            ItemBody::Request { request_id } if view.request(request_id).is_some_and(|r| self.agents().waits(r)) => "Asking you".into(),
-            ItemBody::Reasoning { .. } => "Thinking".into(),
+            ItemBody::Request { request_id } if self.waits_on_you(view, request_id) => "Asking you".into(),
             ItemBody::AssistantMessage { .. } => "Writing".into(),
-            ItemBody::ToolCall { kind, locations, .. } => match (kind, file(locations)) {
-                (ToolKind::Read, Some(f)) => format!("Reading {f}"),
-                (ToolKind::Edit, Some(f)) => format!("Editing {f}"),
-                (ToolKind::Read, None) => "Reading".into(),
-                (ToolKind::Edit, None) => "Editing".into(),
-                (ToolKind::Search, _) => "Searching".into(),
-                (ToolKind::Execute, _) => "Running a command".into(),
-                (ToolKind::Fetch, _) => "Fetching".into(),
-                (ToolKind::Think, _) => "Thinking".into(),
-                (ToolKind::Delete | ToolKind::Move, _) => "Changing files".into(),
-                (ToolKind::Other, _) => item.title.clone().unwrap_or_else(|| "Using a tool".into()),
-            },
-            ItemBody::CommandExecution { .. } => "Running a command".into(),
-            ItemBody::FileChange { path, .. } => format!("Changing {}", path.rsplit('/').next().unwrap_or(path)),
-            _ => "Working".into(),
+            _ => words::doing(item).unwrap_or_else(|| "Working".into()),
         }
     }
 
-    /// The live line on the running turn's line: its words, then what
-    /// shows it in a spot beside them; the next frame asked for when either
-    /// moves (at most about 30 a second).
-    pub(super) fn render_live(&mut self, ui: &mut egui::Ui) {
-        let now = ui.input(|i| i.time);
-        let activity = self.activity(now);
-        let look = crate::theme::look();
-        let (words, color) = match activity.liveness {
-            Liveness::Receiving => (format!("{}…", activity.doing), colors().info),
-            Liveness::Waiting => (format!("{}… {} s since anything", activity.doing, activity.since_last as u64), colors().muted),
-            Liveness::Quiet => (format!("No word for {} min", (activity.since_last / 60.0) as u64), colors().warn),
-            Liveness::Disconnected => ("The connection to the server is down".to_owned(), colors().warn),
-        };
-        ui.add(egui::Label::new(RichText::new(words).size(look.text_small).color(color)).truncate());
-        let (spot, _) = ui.allocate_exact_size(egui::vec2(64.0, 12.0), egui::Sense::hover());
-        // (The words say seconds: again within the second.)
-        let mut next = 1.0f64;
-        if let Some(live) = self.ui.live.as_mut() {
-            let stage = Stage { spot, panel: ui.clip_rect(), items: self.ui.item_rects.clone() };
-            if let Next::In(s) = live.draw(&ui.painter_at(spot), ui.painter(), &activity, &stage, now) {
-                next = next.min(s);
-            }
+    /// Whether the agent can still be reached, in words (for when it's
+    /// been quiet too long): its slot's, its harness's state.
+    fn reach(&self) -> Option<String> {
+        if let Some(slot) = self.slot()
+            && let SlotStatus::Unavailable { reason, .. } = &slot.status
+        {
+            return Some(format!("it can't run: {reason}"));
         }
-        ui.ctx().request_repaint_after_secs(next.max(crate::indicator::FASTEST_S) as f32);
+        Some(match self.instance()?.status.clone() {
+            ProviderStatus::Ready => "the server still reaches it".into(),
+            ProviderStatus::Starting => "its harness is starting again".into(),
+            ProviderStatus::NeedsAuth => "it needs you to sign in".into(),
+            ProviderStatus::Unavailable { reason } => format!("its harness can't run: {reason}"),
+            ProviderStatus::Error { message } => format!("its harness failed: {message}"),
+        })
+    }
+
+    /// The live line's words for `activity`, their colour, and when they
+    /// next change.
+    pub(super) fn live_words(&self, activity: &Activity) -> (String, Color32, Next) {
+        let since = activity.since_last.unwrap_or_default();
+        match activity.liveness {
+            Liveness::Receiving => (format!("{}…", activity.doing), colors().info, Next::In(self.settings.receiving_s - since)),
+            Liveness::Waiting if activity.since_last.is_none() => (format!("{}…", activity.doing), colors().muted, Next::OnChange),
+            Liveness::Waiting => (format!("{}… {} s since anything", activity.doing, since as u64), colors().muted, Next::In((1.0 - since.fract()).min(self.settings.quiet_after_s - since))),
+            Liveness::Quiet => {
+                let reach = self.reach().map(|r| format!(" · {r}")).unwrap_or_default();
+                (format!("No word for {} min{reach}", (since / 60.0) as u64), colors().warn, Next::In(60.0 - since % 60.0))
+            }
+            Liveness::Disconnected => ("The connection to the server is down".to_owned(), colors().warn, Next::OnChange),
+        }
+    }
+
+    /// The running turn's live line in `ui` (a turn's line), for
+    /// `activity`: its words in the room left beside the indicator's spot
+    /// (none when there's no room for both). The spot, when there is one.
+    pub(super) fn render_live(&self, ui: &mut egui::Ui, activity: &Activity) -> Option<Rect> {
+        let (words, color, _) = self.live_words(activity);
+        let look = crate::theme::look();
+        let room = ui.available_width() - SPOT.x - ui.spacing().item_spacing.x;
+        let label = egui::Label::new(RichText::new(words).size(look.text_small).color(color)).truncate();
+        if room < SPOT.x {
+            ui.add(label);
+            return None;
+        }
+        ui.allocate_ui(Vec2::new(room, SPOT.y), |ui| ui.add(label));
+        Some(ui.allocate_exact_size(SPOT, egui::Sense::hover()).0)
+    }
+
+    /// After the stream's drawn: the live line's indicator where its spot
+    /// shows (on the running turn's line; that line scrolled past while
+    /// its turn's still in sight, pinned at the stream's top), on the
+    /// stage (the panel, the items on screen), see-through over the panel;
+    /// the next frame asked for when it or the words next move (gently;
+    /// nothing asked while it's out of sight).
+    pub(super) fn show_live(&mut self, ui: &mut egui::Ui, visible: Rect, panel: Rect, items: &[Rect]) {
+        let Some(live) = self.ui.live_at.take() else { return };
+        let spot = if visible.intersects(live.line) {
+            live.spot
+        } else if live.line.bottom() <= visible.top() && live.turn_bottom > visible.top() + live.line.height() {
+            self.pin_live(ui, visible, &live)
+        } else {
+            None
+        };
+        let Some(spot) = spot else { return };
+        let (now, activity) = (ui.input(|i| i.time), &live.activity);
+        let (_, _, mut next) = self.live_words(activity);
+        if let Some(drawer) = self.ui.indicator.drawer() {
+            let stage = Stage { spot, panel, items: items.iter().filter(|r| r.intersects(visible)).copied().collect() };
+            let over = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Middle, ui.id().with("live over"))).with_clip_rect(panel);
+            next = sooner(next, drawer.draw(&ui.painter_at(spot.intersect(visible)), &over, activity, &stage, now));
+        }
+        if let Next::In(s) = next {
+            ui.ctx().request_repaint_after_secs(s.max(crate::indicator::FASTEST_S) as f32);
+        }
+    }
+
+    /// The running turn's line again at the stream's top, over what's
+    /// there (its own line scrolled past). Its spot.
+    fn pin_live(&mut self, ui: &mut egui::Ui, visible: Rect, live: &render::LiveAt) -> Option<Rect> {
+        let turn = self.thread()?.turn(&live.turn)?.clone();
+        let bar = Rect::from_min_size(visible.min, Vec2::new(visible.width(), live.line.height()));
+        ui.painter().rect_filled(bar, 0.0, colors().panel);
+        let mut pinned = ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        self.render_turn_line(&mut pinned, &turn, Some(&live.activity)).1
+    }
+}
+
+/// The sooner of two.
+fn sooner(a: Next, b: Next) -> Next {
+    match (a, b) {
+        (Next::In(a), Next::In(b)) => Next::In(a.min(b)),
+        (Next::In(s), Next::OnChange) | (Next::OnChange, Next::In(s)) => Next::In(s),
+        (Next::OnChange, Next::OnChange) => Next::OnChange,
     }
 }

@@ -37,6 +37,19 @@ fn request(id: &str, title: &str, detail: Option<&str>, item: Option<u32>) -> Ve
     events
 }
 
+/// A turn running (the second), holding `items`: the server's events.
+fn running_turn(items: Vec<ClientEvent>) -> Vec<ClientEvent> {
+    let turn = harness_contracts::Turn { id: harness_contracts::TurnId::new("now"), thread_id: ThreadId::new("t"), ordinal: 2, status: harness_contracts::TurnStatus::Running, failure: None, usage: None };
+    let mut events = vec![ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } }];
+    for mut event in items {
+        if let ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } } = &mut event {
+            item.turn_id = harness_contracts::TurnId::new("now");
+        }
+        events.push(event);
+    }
+    events
+}
+
 /// What's drawn within `inside` (clipped to it, or to a part of it): each
 /// text, where it's laid out and how much of it shows (cut by its clip).
 fn drawn_texts(output: &egui::FullOutput, inside: egui::Rect) -> Vec<(String, egui::Rect, egui::Rect)> {
@@ -88,10 +101,13 @@ fn long_unbreakable_lines_stay_inside_a_narrow_panel() {
         ("a notice", vec![item(100, ItemBody::Notice { level: NoticeLevel::Info, text: long.clone() })]),
         ("an error", vec![item(100, ItemBody::Error { message: long.clone() })]),
         ("a request waiting", request("r1", &format!("cat {long}"), Some(&long), Some(100))),
+        // (Its words last: what it's doing, a file with a long name.)
+        ("a running turn's line", running_turn(vec![item(100, said(words.clone())), item(102, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations: vec![FileLocation { path: format!("src/{}.rs", "a_very_long_folder_name_with_no_spaces".repeat(4)), line: None }] })])),
     ];
     let mut broke = Vec::new();
     for (case, events) in cases {
         let (ctx, mut app) = full_app();
+        *app.desk.net.ws_state.lock().unwrap() = crate::net::WsState::Open;
         focus(&ctx, &mut app, BufferKind::Chat);
         frame(&ctx, &mut app, vec![]);
         let panel = app.panel_rects[app.desk.panels.focused()];
@@ -191,60 +207,147 @@ fn what_waits_is_bounded_and_answerable_before_its_item_comes() {
 
 /// While a turn runs, its line says what the agent's doing and how live it
 /// is, in place of "RUNNING": receiving a moment after an update, the time
-/// since anything while waiting, no word after a minute, the connection
-/// down; asking for frames while there's something to move or say.
+/// since the last one while waiting (not since the turn began), no word
+/// after a minute, the connection down; of the turn running, not one
+/// queued after it; asking for frames only as often as something on it
+/// moves (none for words that don't change).
 #[test]
 fn a_running_turn_says_what_its_doing_and_how_live_it_is() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Chat);
     *app.desk.net.ws_state.lock().unwrap() = crate::net::WsState::Open;
-    let turn = harness_contracts::Turn { id: harness_contracts::TurnId::new("now"), thread_id: ThreadId::new("t"), ordinal: 2, status: harness_contracts::TurnStatus::Running, failure: None, usage: None };
-    let mut call = item(200, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations: vec![FileLocation { path: "crates/cockpit-ui/src/render.rs".into(), line: None }] });
-    if let ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } } = &mut call {
-        (item.turn_id, item.status) = (harness_contracts::TurnId::new("now"), harness_contracts::ItemStatus::InProgress);
-    }
-    app.desk.shared.agents.get_mut().apply(ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } });
-    app.desk.shared.agents.get_mut().apply(call);
+    let turn = |id: &str, ordinal, status| ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: harness_contracts::Turn { id: harness_contracts::TurnId::new(id), thread_id: ThreadId::new("t"), ordinal, status, failure: None, usage: None } } };
+    let call = |status| {
+        let mut call = item(200, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations: vec![FileLocation { path: "crates/cockpit-ui/src/render.rs".into(), line: None }] });
+        if let ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } } = &mut call {
+            (item.turn_id, item.status, item.title) = (harness_contracts::TurnId::new("now"), harness_contracts::ItemStatus::InProgress, status);
+        }
+        call
+    };
     let line = |ctx: &egui::Context, app: &mut CockpitApp, t: f64| {
         frame_at(ctx, app, vec![], t - 0.01);
         let output = frame_at(ctx, app, vec![], t);
         let words = texts(&output).lines().find(|l| l.contains("render.rs") && !l.contains("crates/") || l.contains("No word") || l.contains("connection")).unwrap_or_default().to_owned();
         (words, output.viewport_output.values().map(|v| v.repaint_delay.as_secs_f64()).fold(f64::INFINITY, f64::min))
     };
-    let (words, again) = line(&ctx, &mut app, 10.0);
-    assert!(words == "Reading render.rs…" && again <= 0.1, "receiving: {words:?}, again in {again}");
-    assert!(!texts(&frame_at(&ctx, &mut app, vec![], 10.05)).contains("RUNNING"));
-    let (words, again) = line(&ctx, &mut app, 15.0);
-    assert!(words == "Reading render.rs… 5 s since anything" && again <= 1.0, "waiting: {words:?}");
-    let (words, _) = line(&ctx, &mut app, 80.0);
-    assert_eq!(words, "No word for 1 min");
+    // The turn starts at 10 s.
+    told(&app, turn("now", 2, harness_contracts::TurnStatus::Running));
+    told(&app, call(None));
+    frame_at(&ctx, &mut app, vec![], 10.0);
+    let (words, again) = line(&ctx, &mut app, 10.5);
+    assert!(words == "Reading render.rs…" && again <= 0.3, "receiving: {words:?}, again in {again}");
+    assert!(!texts(&frame_at(&ctx, &mut app, vec![], 10.55)).contains("RUNNING"));
+    // An update at 30 s, a prompt queued after it at 31 s.
+    told(&app, call(Some("read".into())));
+    frame_at(&ctx, &mut app, vec![], 30.0);
+    told(&app, turn("next", 3, harness_contracts::TurnStatus::Queued));
+    frame_at(&ctx, &mut app, vec![], 31.0);
+    let (words, again) = line(&ctx, &mut app, 45.0);
+    assert!(words == "Reading render.rs… 15 s since anything" && again <= 1.0, "waiting, since the last update, of the turn running: {words:?}");
+    let (words, again) = line(&ctx, &mut app, 95.0);
+    assert!(words.starts_with("No word for 1 min") && again < 60.0, "quiet: {words:?}");
     *app.desk.net.ws_state.lock().unwrap() = crate::net::WsState::Closed;
-    let (words, _) = line(&ctx, &mut app, 81.0);
+    let (words, _) = line(&ctx, &mut app, 96.0);
     assert_eq!(words, "The connection to the server is down");
     *app.desk.net.ws_state.lock().unwrap() = crate::net::WsState::Open;
-    // Shown as nothing: the words stay.
+    // Shown as nothing: the words stay; quiet, they're drawn again only
+    // when the minutes change.
     let none = app.bound_actions().into_iter().find(|b| b.action.id == "chat.indicator").expect("the setting");
     app.invoke(Invocation { action: none.action, origin: none.origin, value: Some("none".into()) }, &ctx);
-    assert!(app.desk.chat().ui.live.is_none() && line(&ctx, &mut app, 82.0).0 == "No word for 1 min");
+    let (words, again) = line(&ctx, &mut app, 100.0);
+    assert!(app.desk.chat().ui.indicator.name() == "none" && words.starts_with("No word for 1 min") && again > 10.0, "{words:?}, again in {again}");
 }
 
-/// How much the chat shows is a setting on its line ("Shows:"): quiet folds
-/// even one call into a line, everything opens every call; switching starts
-/// what was folded by hand afresh.
+/// How much the chat shows is a setting on its line ("Shows:", beside
+/// "At work:"): quiet folds even one call into a line, everything opens
+/// every call. The cursor inside a run folded by the switch is on the
+/// run's row. Picking the one it is keeps what was set by hand; another
+/// starts afresh.
 #[test]
 fn how_much_the_chat_shows_is_its_setting() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Chat);
+    app.desk.shared.agents.get_mut().apply(item(40, ItemBody::ToolCall { kind: ToolKind::Search, name: "grep".into(), input: None, output: vec![ContentBlock::Text { text: "found".into() }], locations: vec![] }));
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("Shows:"), "on its settings row: {text}");
+    assert!(text.contains("Shows:") && text.contains("At work:"), "on its settings row: {text}");
     let set = |ctx: &egui::Context, app: &mut CockpitApp, to: &str| {
         let shows = app.bound_actions().into_iter().find(|b| b.action.id == "chat.verbosity").expect("the setting");
         app.invoke(Invocation { action: shows.action, origin: shows.origin, value: Some(to.into()) }, ctx);
-        app.desk.chat().rows().len()
+        frame(ctx, app, vec![]);
     };
-    let normal = app.desk.chat().rows().len();
-    let everything = set(&ctx, &mut app, "everything");
-    let quiet = set(&ctx, &mut app, "quiet");
-    assert!(everything > normal && quiet <= normal, "quiet {quiet}, normal {normal}, everything {everything}");
-    assert_eq!(set(&ctx, &mut app, "normal"), normal, "back: as it was");
+    let rows = |app: &CockpitApp| {
+        let shape = app.desk.chat().shape();
+        (shape.rows.len(), shape.rows.iter().filter(|r| r.folded).count())
+    };
+    assert_eq!(rows(&app), (40, 1), "normal: the run of two folded, the lone call its row");
+    set(&ctx, &mut app, "everything");
+    assert_eq!(rows(&app), (41, 0), "everything: every call a row");
+    app.desk.chat_mut().move_to("3");
+    set(&ctx, &mut app, "quiet");
+    assert_eq!(rows(&app), (40, 2), "quiet: the lone call folded too");
+    let spots = app.desk.chat().spots();
+    assert!(app.desk.chat().cursor_key().as_deref() == Some("2") && spots.iter().any(|s| s.key == "2"), "the cursor on the run's row, drawn");
+    assert_eq!(app.desk.chat_mut().enter(), crate::nav::Step::Done, "Enter opens the run");
+    assert_eq!(rows(&app), (41, 1));
+    set(&ctx, &mut app, "quiet");
+    assert_eq!(rows(&app), (41, 1), "the same one: what was set stays");
+    set(&ctx, &mut app, "normal");
+    assert_eq!(rows(&app), (40, 1), "another: afresh");
+}
+
+/// A jump onto a call inside a folded run opens the run and shows that
+/// call where it's laid out now (not where the folded rows had its row).
+#[test]
+fn a_jump_into_a_folded_run_shows_the_call_it_went_to() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Chat);
+    let long = "a line of the answer\n\n".repeat(6);
+    {
+        let mut agents = app.desk.shared.agents.get_mut();
+        for n in 40..60 {
+            agents.apply(item(n, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations: vec![FileLocation { path: format!("src/f{n}.rs"), line: None }] }));
+        }
+        for n in 60..90 {
+            agents.apply(item(n, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: long.clone() }], streaming: false }));
+        }
+    }
+    for _ in 0..3 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    app.desk.chat_mut().move_to("50");
+    for _ in 0..4 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    let keys: Vec<String> = app.desk.chat().spots().into_iter().map(|s| s.key).collect();
+    assert!(keys.contains(&"50".to_owned()), "the call it went to, in sight: {keys:?}");
+}
+
+/// Through a long turn, its line scrolled past while you follow the
+/// latest, the live line is pinned at the stream's top and moves; with
+/// the turn out of sight, nothing is asked for it.
+#[test]
+fn the_live_line_stays_in_sight_through_a_long_turn() {
+    let (ctx, mut app) = full_app();
+    *app.desk.net.ws_state.lock().unwrap() = crate::net::WsState::Open;
+    focus(&ctx, &mut app, BufferKind::Chat);
+    let long = "a line of the answer\n\n".repeat(6);
+    let said: Vec<ClientEvent> = (100..120).map(|n| item(n, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: long.clone() }], streaming: false })).collect();
+    running_turn(said).into_iter().for_each(|e| told(&app, e));
+    let shown = |ctx: &egui::Context, app: &mut CockpitApp, t: f64| {
+        frame_at(ctx, app, vec![], t - 0.05);
+        let output = frame_at(ctx, app, vec![], t);
+        let panel = app.panel_rects[app.desk.panels.focused()];
+        let live = drawn_texts(&output, panel).into_iter().find(|(text, _, shows)| text == "Writing…" && shows.is_positive()).map(|(_, rect, _)| rect);
+        (live, output.viewport_output.values().map(|v| v.repaint_delay.as_secs_f64()).fold(f64::INFINITY, f64::min))
+    };
+    frame_at(&ctx, &mut app, vec![], 10.0);
+    let (live, again) = shown(&ctx, &mut app, 10.5);
+    let stream = app.panel_rects[app.desk.panels.focused()];
+    assert!(live.is_some_and(|r| r.top() < stream.center().y) && again <= 0.3, "pinned at the top, moving: {live:?}, again in {again}");
+    app.desk.chat_mut().move_to("0");
+    for t in [11.0, 11.5, 12.0] {
+        frame_at(&ctx, &mut app, vec![], t);
+    }
+    let (live, again) = shown(&ctx, &mut app, 13.0);
+    assert!(live.is_none() && again > 1.0, "out of sight, nothing asked: {live:?}, again in {again}");
 }

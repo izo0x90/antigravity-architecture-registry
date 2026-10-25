@@ -459,19 +459,44 @@ pub fn list_moves() -> Vec<crate::actions::Action> {
     vec![m(Motion::Down, "Down"), m(Motion::Up, "Up"), m(Motion::HalfDown, "Half a page down"), m(Motion::HalfUp, "Half a page up"), m(Motion::First, "First"), m(Motion::Last, "Last")]
 }
 
-/// Folding what the cursor is on: `here` is what it is, in words, and
-/// whether it's folded, when it folds. Then its toggle (on the item too)
-/// and the way it can go now apply; otherwise they're offered but don't.
-pub fn fold_here(here: Option<(&str, bool)>) -> Vec<crate::actions::Action> {
+/// What says a fold is folded or open (every view's).
+pub fn fold_mark(open: bool) -> &'static str {
+    if open { egui_phosphor::regular::CARET_DOWN } else { egui_phosphor::regular::CARET_RIGHT }
+}
+
+/// What the fold keys act on where the cursor is, in the view's words:
+/// the toggle's (and whether that's folded), unfolding's, folding's. One
+/// fold there: the same one for all three (`FoldsHere::one`); folds within
+/// folds: the innermost each can act on.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FoldsHere<'a> {
+    pub toggle: Option<(&'a str, bool)>,
+    pub open: Option<&'a str>,
+    pub close: Option<&'a str>,
+}
+
+impl<'a> FoldsHere<'a> {
+    /// One fold: what it is, in words, and whether it's folded.
+    pub fn one(here: Option<(&'a str, bool)>) -> Self {
+        Self { toggle: here, open: here.filter(|(_, folded)| *folded).map(|(what, _)| what), close: here.filter(|(_, folded)| !folded).map(|(what, _)| what) }
+    }
+}
+
+/// Folding what the cursor is on: its toggle (on the item too), and the
+/// ways it can go now apply; otherwise they're offered but don't.
+pub fn fold_here(here: FoldsHere<'_>) -> Vec<crate::actions::Action> {
     use crate::actions::Style;
-    let Some((what, folded)) = here else {
-        return vec![Move::Fold(Fold::Toggle).offer_if(false, "Fold or unfold"), Move::Fold(Fold::Open).offer_if(false, "Unfold"), Move::Fold(Fold::Close).offer_if(false, "Fold")];
+    let toggle = match here.toggle {
+        Some((what, folded)) => {
+            let word = if folded { "Unfold" } else { "Fold" };
+            Move::Fold(Fold::Toggle).offer(format!("{word} {what}")).on_item(Style::Button, word, Some(fold_mark(!folded)))
+        }
+        None => Move::Fold(Fold::Toggle).offer_if(false, "Fold or unfold"),
     };
-    let (word, icon) = if folded { ("Unfold", egui_phosphor::regular::CARET_RIGHT) } else { ("Fold", egui_phosphor::regular::CARET_DOWN) };
     vec![
-        Move::Fold(Fold::Toggle).offer(format!("{word} {what}")).on_item(Style::Button, word, Some(icon)),
-        Move::Fold(Fold::Open).offer_if(folded, format!("Unfold {what}")),
-        Move::Fold(Fold::Close).offer_if(!folded, format!("Fold {what}")),
+        toggle,
+        here.open.map_or_else(|| Move::Fold(Fold::Open).offer_if(false, "Unfold"), |what| Move::Fold(Fold::Open).offer(format!("Unfold {what}"))),
+        here.close.map_or_else(|| Move::Fold(Fold::Close).offer_if(false, "Fold"), |what| Move::Fold(Fold::Close).offer(format!("Fold {what}"))),
     ]
 }
 

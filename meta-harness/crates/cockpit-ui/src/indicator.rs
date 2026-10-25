@@ -27,10 +27,11 @@ pub enum Liveness {
 #[derive(Clone, Debug)]
 pub struct Activity {
     pub liveness: Liveness,
-    /// When its recent updates came (the clock's seconds), oldest first.
-    pub updates: Vec<f64>,
-    /// Seconds since the last of them.
-    pub since_last: f64,
+    /// When its recent updates came (the clock's seconds), oldest first:
+    /// each tenth of a second that had any, and how many.
+    pub updates: Vec<(f64, u32)>,
+    /// Seconds since the last of them (none: none came since it was known).
+    pub since_last: Option<f64>,
     /// What it's doing, in a word or two ("Thinking", "Reading render.rs").
     pub doing: String,
 }
@@ -63,14 +64,38 @@ pub trait Indicator {
     fn draw(&mut self, spot: &egui::Painter, over: &egui::Painter, activity: &Activity, stage: &Stage, now: f64) -> Next;
 }
 
-/// The ones there are, by name (the chat's setting picks one).
-pub const NAMES: &[&str] = &["heartbeat", "none"];
+/// How one is made (none: nothing shows).
+type Make = fn() -> Option<Box<dyn Indicator>>;
 
-/// The one named `name` (none for an unknown name).
-pub fn by_name(name: &str) -> Option<Box<dyn Indicator>> {
-    match name {
-        "heartbeat" => Some(Box::new(Heartbeat)),
-        _ => None,
+/// The ones there are, by name, in one table (the chat's setting picks
+/// one; the first is the default).
+pub static ALL: &[(&str, Make)] = &[("heartbeat", || Some(Box::new(Heartbeat))), ("none", || None)];
+
+/// The one picked: its name, and it (none: nothing shows).
+pub struct Shown {
+    name: &'static str,
+    drawer: Option<Box<dyn Indicator>>,
+}
+
+impl Shown {
+    /// The one named `name` (none: there's no such one).
+    pub fn named(name: &str) -> Option<Self> {
+        ALL.iter().find(|(n, _)| *n == name).map(|(name, make)| Self { name, drawer: make() })
+    }
+
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub fn drawer(&mut self) -> Option<&mut (dyn Indicator + 'static)> {
+        self.drawer.as_deref_mut()
+    }
+}
+
+impl Default for Shown {
+    fn default() -> Self {
+        let (name, make) = ALL[0];
+        Self { name, drawer: make() }
     }
 }
 
@@ -92,46 +117,73 @@ impl Indicator for Heartbeat {
         };
         let color = if faded { line.gamma_multiply(0.5) } else { line };
         let mid = rect.center().y;
-        let x_at = |t: f64| rect.right() - ((now - t) / TRACE_S) as f32 * rect.width();
-        // The base line, then a blip for each update in sight.
-        spot.line_segment([Pos2::new(rect.left(), mid), Pos2::new(rect.right(), mid)], Stroke::new(look.line_thin, color.gamma_multiply(0.5)));
+        // The trace, and the dot's room at its right end (in the spot).
+        let most = look.line_bold + 1.0;
+        let trace = Rect::from_min_max(rect.min, Pos2::new(rect.right() - 2.0 * most - look.space_xs, rect.max.y));
+        let blip_w = 6.0;
+        let x_at = |t: f64| trace.right() - blip_w - ((now - t) / TRACE_S) as f32 * (trace.width() - blip_w);
+        // The base line, then a blip for each update in sight (ones closer
+        // than a blip's width, as one).
+        spot.line_segment([Pos2::new(trace.left(), mid), Pos2::new(trace.right(), mid)], Stroke::new(look.line_thin, color.gamma_multiply(0.5)));
         let height = rect.height() / 2.0 - 1.0;
-        for t in activity.updates.iter().filter(|t| now - **t <= TRACE_S) {
+        let mut drawn = f32::NEG_INFINITY;
+        let in_sight = || activity.updates.iter().filter(|(t, _)| now - *t <= TRACE_S);
+        for (t, _) in in_sight() {
             let x = x_at(*t);
-            let blip = [Pos2::new(x - 2.0, mid), Pos2::new(x, mid - height), Pos2::new(x + 2.0, mid + height * 0.6), Pos2::new(x + 4.0, mid)];
-            spot.add(egui::Shape::line(blip.to_vec(), Stroke::new(look.line_bold, color)));
+            if x - drawn < blip_w {
+                continue;
+            }
+            drawn = x;
+            let blip = vec![Pos2::new(x, mid), Pos2::new(x + 2.0, mid - height), Pos2::new(x + 4.0, mid + height * 0.6), Pos2::new(x + blip_w, mid)];
+            spot.add(egui::Shape::line(blip, Stroke::new(look.line_bold, color)));
         }
-        // Waiting: a dot breathing slowly beside it.
-        if activity.liveness == Liveness::Waiting {
+        // Waiting: a dot breathing slowly at its end.
+        let waiting = activity.liveness == Liveness::Waiting;
+        if waiting {
             let breath = ((now * std::f64::consts::TAU / 3.0).sin() * 0.5 + 0.5) as f32;
-            spot.circle_filled(Pos2::new(rect.right() + look.space_sm, mid), look.line_bold + breath, line.gamma_multiply(0.35 + 0.5 * breath));
+            spot.circle_filled(Pos2::new(rect.right() - most, mid), look.line_bold + breath, line.gamma_multiply(0.35 + 0.5 * breath));
         }
-        // Moving while a blip is in sight or a dot breathes; else still.
-        let moving = activity.updates.iter().any(|t| now - *t <= TRACE_S) || activity.liveness == Liveness::Waiting;
-        if moving { Next::In(0.1) } else { Next::OnChange }
+        // Moving: the trace a pixel at a time while a blip's in sight; the
+        // dot breathing; else still.
+        let pixel = TRACE_S / f64::from((trace.width() - blip_w).max(1.0));
+        match (in_sight().next().is_some(), waiting) {
+            (true, true) => Next::In(pixel.min(BREATH_S)),
+            (true, false) => Next::In(pixel),
+            (false, true) => Next::In(BREATH_S),
+            (false, false) => Next::OnChange,
+        }
     }
 }
+
+/// How often the breathing dot is drawn again.
+const BREATH_S: f64 = 0.15;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Moving while a blip is in sight or it waits; still otherwise; and
-    /// the named ones are there.
+    /// Moving while a blip is in sight or it waits, still otherwise; all it
+    /// draws inside its spot (the breathing dot too); the named ones are
+    /// there, one table.
     #[test]
-    fn the_heartbeat_moves_only_while_there_is_something_to_move() {
+    fn the_heartbeat_moves_only_while_there_is_something_to_move_and_draws_in_its_spot() {
         let ctx = egui::Context::default();
-        let stage = Stage { spot: Rect::from_min_size(Pos2::ZERO, egui::vec2(60.0, 12.0)), panel: Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0)), items: Vec::new() };
+        crate::theme::set(crate::config::UiConfig::with_overrides("").unwrap().theme, &ctx);
+        let spot = Rect::from_min_size(Pos2::new(100.0, 100.0), egui::vec2(64.0, 12.0));
+        let stage = Stage { spot, panel: Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0)), items: Vec::new() };
         let mut next = Vec::new();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            let painter = ctx.layer_painter(egui::LayerId::background());
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(spot);
             let mut beat = Heartbeat;
-            let at = |liveness, updates: Vec<f64>| Activity { liveness, updates, since_last: 0.0, doing: "Thinking".into() };
-            next.push(beat.draw(&painter, &painter, &at(Liveness::Receiving, vec![99.5]), &stage, 100.0));
-            next.push(beat.draw(&painter, &painter, &at(Liveness::Waiting, vec![80.0]), &stage, 100.0));
-            next.push(beat.draw(&painter, &painter, &at(Liveness::Quiet, vec![10.0]), &stage, 100.0));
+            let at = |liveness, updates: Vec<(f64, u32)>| Activity { liveness, updates, since_last: Some(0.0), doing: "Thinking".into() };
+            next.push(beat.draw(&painter, &painter, &at(Liveness::Receiving, vec![(99.5, 3)]), &stage, 100.0));
+            next.push(beat.draw(&painter, &painter, &at(Liveness::Waiting, vec![(80.0, 1)]), &stage, 100.0));
+            next.push(beat.draw(&painter, &painter, &at(Liveness::Quiet, vec![(10.0, 1)]), &stage, 100.0));
         });
-        assert_eq!(next, [Next::In(0.1), Next::In(0.1), Next::OnChange]);
-        assert!(by_name("heartbeat").is_some() && by_name("none").is_none() && NAMES.contains(&"heartbeat"));
+        assert!(matches!(next[..], [Next::In(a), Next::In(b), Next::OnChange] if a > FASTEST_S && a < 0.3 && b == BREATH_S), "{next:?}");
+        let dot = output.shapes.iter().find(|s| matches!(s.shape, egui::Shape::Circle(_))).expect("the breathing dot");
+        assert!(spot.contains_rect(dot.shape.visual_bounding_rect()), "inside its spot: {:?} in {spot:?}", dot.shape.visual_bounding_rect());
+        assert!(output.shapes.iter().all(|s| spot.expand(1.0).contains_rect(s.shape.visual_bounding_rect())), "all of it in its spot");
+        assert!(Shown::named("heartbeat").is_some_and(|s| s.name() == "heartbeat") && Shown::named("none").is_some_and(|mut s| s.drawer().is_none()) && Shown::named("lemmings").is_none());
     }
 }

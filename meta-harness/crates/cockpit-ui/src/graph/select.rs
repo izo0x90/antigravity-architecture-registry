@@ -327,7 +327,7 @@ impl GraphState {
         };
         out.push(Move::Leave.offer_if(leave.is_some(), leave.unwrap_or_else(|| "Back to the whole view".into())));
         let card = self.selected_card().filter(|c| c.open || c.more > 0);
-        out.extend(crate::nav::fold_here(card.map(|c| (c.label.as_str(), !c.open))));
+        out.extend(crate::nav::fold_here(crate::nav::FoldsHere::one(card.map(|c| (c.label.as_str(), !c.open)))));
         out.push(Move::Fold(Fold::OpenAll).offer_if(self.tree.is_some(), "Show one more level"));
         out.push(Move::Fold(Fold::CloseAll).offer_if(!self.nav.opened.is_empty() || !self.nav.closed.is_empty(), "Put back what was opened and closed by hand"));
         out

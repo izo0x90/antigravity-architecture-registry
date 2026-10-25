@@ -272,12 +272,12 @@ impl ActionProvider for ChatStreamState {
                 out.extend(crate::request_card::offer(request, at, C::OpenPage, answer));
             }
         }
-        // How much of what the agent does it shows (what's folded at first).
-        let verbosity = crate::chat::rows::Verbosity::ALL.into_iter().map(|v| Choice::new(v.name(), v.name()).detail(Some(v.detail().into())).current(v == self.ui.folds.verbosity)).collect();
-        out.push(Action::new("chat.verbosity", "How much it shows", "Quiet: messages and what needs you; normal: calls folded into runs; everything: every call and its output", C::Verbosity).param(Param::Choice(verbosity)).setting("Shows", None).importance(MINOR));
-        // What shows the agent at work, on the running turn's line.
-        let shown = crate::indicator::NAMES.iter().map(|name| Choice::new(*name, *name).current(*name == self.ui.indicator)).collect();
-        out.push(Action::new("chat.indicator", "Show the agent at work as…", "Beside the running turn's words: a heartbeat of its updates, or nothing", C::Indicator).param(Param::Choice(shown)).group(crate::actions::Group::View).importance(MINOR));
+        // Its settings: how much of what the agent does it shows (what's
+        // folded at first), what shows the agent at work.
+        let verbosity = super::rows::Verbosity::ALL.into_iter().map(|v| Choice::new(v.name(), v.name()).detail(Some(v.detail().into())).current(v == self.ui.folds.verbosity())).collect();
+        out.push(Action::new("chat.verbosity", "How much it shows", "Quiet: messages and what needs you; normal: calls folded into runs; everything: every call and its output", C::Verbosity).param(Param::Choice(verbosity)).setting("Shows", None).group(crate::actions::Group::View).importance(MINOR));
+        let shown = crate::indicator::ALL.iter().map(|(name, _)| Choice::new(*name, *name).current(*name == self.ui.indicator.name())).collect();
+        out.push(Action::new("chat.indicator", "Show the agent at work as…", "Beside the running turn's words: a heartbeat of its updates, or nothing", C::Indicator).param(Param::Choice(shown)).setting("At work", None).group(crate::actions::Group::View).importance(MINOR));
         // Typed in: sending it (to the sign-in, while one waits for it).
         out.push(match self.sign_in_box() {
             Some(_) => Action::new("chat.send", "Send to the sign-in", "What's typed goes to the sign-in waiting for it, not the agent", C::Send).on_typing(Button, "Send to the sign-in", Some(icon::KEY)),
@@ -471,16 +471,15 @@ impl ActionProvider for ChatStreamState {
                 }
             }
             // Its defaults change: what was folded or opened by hand starts
-            // afresh.
+            // afresh (the same one: nothing changes).
             ChatCommand::Verbosity => {
-                if let Some(verbosity) = value.as_deref().and_then(crate::chat::rows::Verbosity::from_name) {
-                    self.ui.folds = crate::chat::rows::Folds::at_verbosity(verbosity);
+                if let Some(verbosity) = value.as_deref().and_then(super::rows::Verbosity::from_name) {
+                    self.ui.folds.set_verbosity(verbosity);
                 }
             }
             ChatCommand::Indicator => {
-                if let Some(name) = value.filter(|n| crate::indicator::NAMES.contains(&n.as_str())) {
-                    self.ui.live = crate::indicator::by_name(&name);
-                    self.ui.indicator = name;
+                if let Some(shown) = value.as_deref().and_then(crate::indicator::Shown::named) {
+                    self.ui.indicator = shown;
                 }
             }
         }
