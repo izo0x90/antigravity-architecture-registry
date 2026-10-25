@@ -14,6 +14,7 @@ mod driver;
 mod instance;
 mod launch;
 mod login;
+mod pieces;
 mod profile;
 mod questions;
 mod session;

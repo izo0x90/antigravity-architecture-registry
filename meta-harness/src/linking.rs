@@ -11,18 +11,27 @@ fn said_at(text: &str, link: &Link) -> Option<String> {
     (link.start < link.end).then(|| text.chars().skip(link.start).take(link.end - link.start).collect::<String>()).filter(|s| s.chars().count() == link.end - link.start)
 }
 
+/// A part for each tag or thing `links` link (in `text`), with every link
+/// to it; linked twice, it's whole if either link asks for it.
 pub(crate) fn attached(tags: &nah_tags::Tags, things: &Things, text: &str, links: &[Link]) -> Vec<Attached> {
     let mut out: Vec<Attached> = Vec::new();
     things.pass(|| {
         for link in links {
+            if let Some(o) = out.iter_mut().find(|o| o.links[0].to == link.to) {
+                if link.include == Include::Whole {
+                    o.include = Include::Whole;
+                }
+                o.links.push(link.clone());
+                continue;
+            }
             let said = said_at(text, link);
-            let one = match &link.to {
+            let mut one = match &link.to {
                 Linked::Tag { tag } => match tags.attached(tag, link.include) {
                     Some(attached) => attached,
                     // Deleted since it was linked: said, by what the message says there.
                     None => {
                         let heading = said.clone().unwrap_or_else(|| tag.to_string());
-                        Attached { heading, include: link.include, things: Vec::new(), gone: true }
+                        Attached { links: Vec::new(), heading, include: link.include, things: Vec::new(), gone: true }
                     }
                 },
                 Linked::Thing { subject } => {
@@ -32,15 +41,11 @@ pub(crate) fn attached(tags: &nah_tags::Tags, things: &Things, text: &str, links
                         Some(said) if said.trim_start_matches('@') != what => format!("{said} ({what})"),
                         _ => format!("@{what}"),
                     };
-                    Attached { heading, include: link.include, things: vec![AttachedThing { read_by: format!("`thing_read` (\"{what}\")"), what, subject, kept: None, whole: "`thing_read`" }], gone: false }
+                    Attached { links: Vec::new(), heading, include: link.include, things: vec![AttachedThing { read_by: format!("`thing_read` (\"{what}\")"), what, subject, kept: None, whole: "`thing_read`" }], gone: false }
                 }
             };
-            // The same linked twice: once, whole if either asks for it.
-            match out.iter_mut().find(|o| o.heading == one.heading) {
-                Some(o) if one.include == Include::Whole => o.include = Include::Whole,
-                Some(_) => {}
-                None => out.push(one),
-            }
+            one.links.push(link.clone());
+            out.push(one);
         }
     });
     out

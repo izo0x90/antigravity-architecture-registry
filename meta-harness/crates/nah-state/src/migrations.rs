@@ -63,6 +63,11 @@ const MIGRATIONS: &[(i64, &str)] = &[
     // What the user typed for a message sent with what it links, by the
     // text the agent was handed (its hash).
     (15, "CREATE TABLE typed_messages (sent TEXT PRIMARY KEY, json TEXT NOT NULL, at_ms INTEGER NOT NULL);"),
+    // A message's pieces say what it linked (they come back with its
+    // session's history): nothing of it is kept here. A message held for
+    // a slot keeps its links, handed on as they are when it's delivered.
+    (16, "DROP TABLE typed_messages;
+     ALTER TABLE held_reports ADD COLUMN links TEXT NOT NULL DEFAULT '[]';"),
 ];
 
 /// The newest layout this NAH knows.

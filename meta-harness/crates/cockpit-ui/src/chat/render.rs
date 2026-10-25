@@ -644,20 +644,20 @@ impl ChatStreamState {
         let index = row.first;
         match &item.body {
             // Your messages and the agent's: as every conversation draws them.
-            // Yours as you typed it: its links as chips (places of their
-            // own, Enter goes to what each is), what was handed on with it
-            // folded under it.
-            ItemBody::UserMessage { text, typed } => {
-                let (shown, links, handed_on) = crate::conversation::as_typed(text, typed.as_ref());
-                let drawn = self.ui.messages.draw(ui, egui::Id::new(&item.id), &crate::conversation::Message { links, ..crate::conversation::Message::new("user", shown) });
+            // Yours with its links as chips (places of their own, Enter goes
+            // to what each is), what they handed on with it folded under it.
+            ItemBody::UserMessage { text, links, handed_on } => {
+                let drawn = self.ui.messages.draw(ui, egui::Id::new(&item.id), &crate::conversation::Message { links, ..crate::conversation::Message::new("user", text) });
                 for (n, rect) in drawn.chips.iter().enumerate() {
                     self.ui.drawing.push(Spot { key: Pick::Chip(n).key(index), rect: *rect });
                 }
-                if let Some(handed_on) = handed_on {
+                if !handed_on.is_empty() {
                     let open = self.ui.folds.item_open(item);
                     ui.label(RichText::new(format!("{} what went with it", crate::nav::fold_mark(open))).size(crate::theme::look().text_small).color(colors().muted));
                     if open {
-                        ui.label(RichText::new(handed_on).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                        for piece in handed_on {
+                            ui.label(RichText::new(piece).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                        }
                     }
                 }
             }

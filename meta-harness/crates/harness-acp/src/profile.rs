@@ -32,6 +32,8 @@ pub struct Profile {
 pub struct Declared {
     pub queueing: bool,
     pub steering: bool,
+    /// It takes a message's pieces as pieces (embedded resources).
+    pub pieces: bool,
     /// It sends who it's signed in as.
     pub sign_in: bool,
 }
@@ -159,6 +161,16 @@ impl Profile {
         self.settings.parent_call.clone()
     }
 
+    /// How a replayed message's pieces are read back: as its agent writes
+    /// them, when it takes pieces (its pack says how, else they're shown
+    /// as they come), or as we write them for one that takes none.
+    pub fn replayed_pieces(&self, declared: &Declared) -> Option<crate::pieces::Template> {
+        match declared.pieces {
+            true => self.settings.replayed_piece.as_deref().and_then(|t| crate::pieces::Template::parse(t).ok()),
+            false => Some(crate::pieces::Template::ours()),
+        }
+    }
+
     pub fn session_meta(&self) -> Option<acp::Meta> {
         (!self.settings.session_meta.is_empty()).then(|| self.settings.session_meta.clone())
     }
@@ -170,6 +182,7 @@ impl Profile {
         Declared {
             queueing: says(self.settings.queueing.as_deref()),
             steering: says(self.settings.steering.as_deref()),
+            pieces: init.agent_capabilities.prompt_capabilities.embedded_context,
             sign_in: sign_in.is_some_and(|s| s.declared.is_none() || says(s.declared.as_deref())),
         }
     }

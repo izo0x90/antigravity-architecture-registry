@@ -100,7 +100,7 @@ fn long_unbreakable_lines_stay_inside_a_narrow_panel() {
     }
     let steps = vec![harness_contracts::PlanStep { text: format!("read {long}"), status: harness_contracts::StepStatus::Pending }];
     let cases: Vec<(&str, Vec<ClientEvent>)> = vec![
-        ("your message", vec![item(100, ItemBody::UserMessage { text: format!("read {long} please"), typed: None })]),
+        ("your message", vec![item(100, ItemBody::UserMessage { text: format!("read {long} please"), links: Vec::new(), handed_on: Vec::new() })]),
         ("a message's words", vec![item(100, said(format!("It's in {long}, and `{long}` too. {words}")))]),
         ("a message's code block", vec![item(100, said(format!("```\n{long} {long}\n```")))]),
         ("a message's table", vec![item(100, said(format!("| file | lines |\n|---|---|\n| {long} | 3 |\n\n{words}")))]),
@@ -610,26 +610,25 @@ fn a_change_is_folded_as_what_it_adds_and_removes_and_opens_as_its_hunks() {
     assert!(text.contains("x\ny"), "written whole, opened: its text: {text}");
 }
 
-/// Your message shows as you typed it: what it links as chips (places of
-/// their own; Enter goes to what one links), what went with it folded
-/// under it. One whose typing wasn't kept shows as it was sent.
+/// Your message shows its text, what it links as chips (places of their
+/// own; Enter goes to what one links), and what they handed on folded
+/// under it. One with no links shows as it came.
 #[test]
-fn your_message_shows_as_typed_with_its_links_as_chips() {
+fn your_message_shows_its_links_as_chips_and_what_went_with_it_folded() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Chat);
     told(&app, ClientEvent::TagUpdated { tag: harness_contracts::Tag { id: harness_contracts::TagId::new("x1"), name: "flaky".into(), colour: 2, note: String::new(), noted_by: String::new(), on: Vec::new() } });
     let handed_on = "#flaky\n- terminal t1 line 3: the attached words";
-    let message = harness_contracts::Message { text: "look at #flaky.".into(), links: vec![harness_contracts::Link { start: 8, end: 14, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("x1") }, include: harness_contracts::Include::Auto }] };
-    let typed = harness_contracts::AsTyped { message, handed_on: Some(handed_on.into()) };
+    let links = vec![harness_contracts::Link { start: 8, end: 14, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("x1") }, include: harness_contracts::Include::Auto }];
     {
         let mut agents = app.desk.shared.agents.get_mut();
-        agents.apply(item(40, ItemBody::UserMessage { text: format!("look at #flaky.\n\n---\n{handed_on}"), typed: Some(typed) }));
-        agents.apply(item(41, ItemBody::UserMessage { text: "older one, as sent".into(), typed: None }));
+        agents.apply(item(40, ItemBody::UserMessage { text: "look at #flaky.".into(), links, handed_on: vec![handed_on.into()] }));
+        agents.apply(item(41, ItemBody::UserMessage { text: "older one, as sent".into(), links: Vec::new(), handed_on: Vec::new() }));
     }
     frame(&ctx, &mut app, vec![]);
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("look at #flaky.") && text.contains("what went with it") && !text.contains("attached words"), "as typed, what went with it folded: {text}");
-    assert!(text.lines().any(|l| l == "older one, as sent"), "not kept: as sent: {text}");
+    assert!(text.contains("look at #flaky.") && text.contains("what went with it") && !text.contains("attached words"), "its text, what went with it folded: {text}");
+    assert!(text.lines().any(|l| l == "older one, as sent"), "no links: as it came: {text}");
     let keys: Vec<String> = app.desk.chat().spots().into_iter().map(|s| s.key).collect();
     assert!(keys.contains(&"40:l0".to_owned()), "the chip, a place: {keys:?}");
     app.desk.chat_mut().move_to("40:l0");

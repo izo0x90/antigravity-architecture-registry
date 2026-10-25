@@ -19,7 +19,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use harness_contracts::{
     AdapterEvent, ClientEvent, InstanceId, ItemBody, McpServer, ModelSelection, NativeId, ProviderStatus, RuntimePolicy, SessionKey, Slot, SlotId,
-    SlotSession, SlotStatus, Starter, ThreadId, ThreadStatus, TurnId, TurnInput, TurnItem, LEAD, AsTyped, Expanded, Message,
+    SlotSession, SlotStatus, Starter, ThreadId, ThreadStatus, TurnId, TurnInput, TurnItem, LEAD, Expanded, Link, Message, Piece,
 };
 
 use crate::{EventHub, HarnessError, InstanceRegistry, OpenThread, Result, SessionManager};
@@ -37,13 +37,6 @@ pub trait SlotStore: Send + Sync {
     fn take_reports(&self, to: &SlotId) -> std::result::Result<Vec<HeldReport>, String>;
     /// Notes what happened, for looking back (never fails an operation).
     fn note(&self, actor: &str, action: &str, subject: &str, detail: Option<&str>);
-    /// Keeps what the user typed (`typed`: its text and links) by the
-    /// key of the text an agent was handed for it (`sent_key`), so it's
-    /// shown as typed whenever it's seen again (its session's history
-    /// replayed too); the newest `TYPED_KEPT`.
-    fn keep_typed(&self, key: &str, typed: &AsTyped) -> std::result::Result<(), String>;
-    /// Every one kept, by its key.
-    fn typed_kept(&self) -> std::result::Result<Vec<(String, AsTyped)>, String>;
 }
 
 /// What a slot is told (a sub-slot's report to the lead, a discussion's
@@ -55,6 +48,9 @@ pub struct HeldReport {
     /// Who it's from, as the slot reads it (`sub 1 (sub-slot)`).
     pub from: String,
     pub text: String,
+    /// What its text links (the user's, in a discussion): handed on with
+    /// it as it is when it's delivered.
+    pub links: Vec<Link>,
     pub at_ms: u64,
 }
 
@@ -197,25 +193,18 @@ pub struct SlotManager {
     /// What a message's links hand an agent besides its text, set at
     /// start-up; every message with links goes through it.
     expand: std::sync::OnceLock<Expand>,
-    /// What the user typed for each message kept (by `sent_key`), read
-    /// once: a message's lookup is a hash and a map's.
-    typed: std::sync::RwLock<HashMap<String, AsTyped>>,
 }
 
-/// Messages whose typed form is kept, at the most (the newest).
-pub const TYPED_KEPT: usize = 10_000;
+/// What a message's links hand an agent with it, a piece for each tag or
+/// thing (and what the sender is told), as far as the slot it's for
+/// (`reader`) may read it (none: no slot's, all of it: a check before
+/// sending). Only the user's messages have links (agents' are plain text).
+pub type Expand = Arc<dyn Fn(&str, &[Link], Option<&SlotId>) -> (Vec<Piece>, Vec<String>) + Send + Sync>;
 
-/// A message as sent, as its typed form is kept by (its SHA-256, hex).
-pub fn sent_key(sent: &str) -> String {
-    use sha2::Digest;
-    sha2::Sha256::digest(sent.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+/// What heads a message a slot is told.
+fn told_from(from: &str) -> String {
+    format!("From {from}:\n\n")
 }
-
-/// A message as an agent is handed it: its text with what it links, as
-/// far as the slot it's for (`reader`) may read it (none: no slot's,
-/// all of it: a check before sending). Only the user's messages have
-/// links (agents' are plain text).
-pub type Expand = Arc<dyn Fn(&str, &[harness_contracts::Link], Option<&SlotId>) -> harness_contracts::Expanded + Send + Sync>;
 
 fn store_error(reason: String) -> HarnessError {
     HarnessError::Store { reason }
@@ -267,13 +256,7 @@ impl SlotManager {
             store.save(&slot).map_err(store_error)?;
             place.insert(slot);
         }
-        // (Not read: a replay shows what isn't as sent.)
-        let typed = store.typed_kept().unwrap_or_else(|e| {
-            tracing::warn!("what was typed isn't read (replays show messages as sent): {e}");
-            Vec::new()
-        });
         let manager = Arc::new(Self {
-            typed: std::sync::RwLock::new(typed.into_iter().collect()),
             sessions,
             registry,
             hub,
@@ -576,37 +559,25 @@ impl SlotManager {
         Ok(self.open_session(id, open).await?.thread)
     }
 
-    /// What the user typed for `sent` (a message as an agent was handed
-    /// it), when it was kept.
-    pub fn typed(&self, sent: &str) -> Option<AsTyped> {
-        self.typed.read().unwrap_or_else(std::sync::PoisonError::into_inner).get(&sent_key(sent)).cloned()
-    }
-
-    /// Keeps what the user typed for `sent` (here and in the store; past
-    /// what's kept, as the store keeps it).
-    fn keep_typed(&self, sent: &str, typed: &AsTyped) -> std::result::Result<(), String> {
-        let key = sent_key(sent);
-        self.store.keep_typed(&key, typed)?;
-        let mut kept = self.typed.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-        kept.insert(key, typed.clone());
-        if kept.len() > TYPED_KEPT + TYPED_KEPT / 10 {
-            *kept = self.store.typed_kept()?.into_iter().collect();
-        }
-        Ok(())
-    }
-
     /// What every prompt is handed through from now on (`Expand`).
     pub fn expand_prompts_with(&self, expand: Expand) {
         let _ = self.expand.set(expand);
     }
 
     /// `message` as an agent is handed it (off the async threads: what it
-    /// links is read where it's kept). Without links, its text as it is.
+    /// links is read where it's kept). Without links, its text alone.
     pub async fn expanded(&self, message: Message, reader: Option<SlotId>) -> Expanded {
-        let Message { text, links } = message.valid();
-        let Some(expand) = self.expand.get().cloned().filter(|_| !links.is_empty()) else { return Expanded { text, ..Expanded::default() } };
-        let written = text.clone();
-        tokio::task::spawn_blocking(move || expand(&text, &links, reader.as_ref())).await.unwrap_or(Expanded { text: written, ..Expanded::default() })
+        let message = message.valid();
+        let Some(expand) = self.expand.get().cloned().filter(|_| !message.links.is_empty()) else { return Expanded { message, ..Expanded::default() } };
+        let (text, links) = (message.text.clone(), message.links.clone());
+        let (pieces, notes) = tokio::task::spawn_blocking(move || expand(&text, &links, reader.as_ref())).await.unwrap_or_default();
+        Expanded { message, pieces, notes }
+    }
+
+    /// `message` as the input of a turn: its text and its pieces.
+    async fn input(&self, message: Message, reader: &SlotId) -> TurnInput {
+        let Expanded { message, pieces, .. } = self.expanded(message, Some(reader.clone())).await;
+        TurnInput { pieces, ..TurnInput::of(message.text) }
     }
 
     /// Sends a message to a slot (as its user, or as the lead). With `wait`,
@@ -618,26 +589,11 @@ impl SlotManager {
         let session = self.sessions.get(&thread)?;
         let message = match &from {
             Origin::User => message,
-            Origin::Lead => Message::text(message.text),
+            Origin::Lead => Message::text(message.text).after(&format!("From the lead ({}):\n\n", self.slot(&self.lead()).map(|s| s.name).unwrap_or_else(|_| LEAD.into()))),
         };
-        // A message of the user's linking things: what was typed goes
-        // with it, and is kept by what's sent (its replayed history shows
-        // it so).
-        let typed = (from == Origin::User && !message.links.is_empty()).then(|| message.clone().valid());
-        let Expanded { text, handed_on, .. } = self.expanded(message, Some(to.clone())).await;
-        let typed = typed.map(|message| AsTyped { message, handed_on });
-        if let Some(typed) = &typed
-            && let Err(e) = self.keep_typed(&text, typed)
-        {
-            tracing::warn!("what was typed isn't kept (a replay shows it as sent): {e}");
-        }
-        let text = match &from {
-            Origin::User => text,
-            Origin::Lead => format!("From the lead ({}):\n\n{text}", self.slot(&self.lead()).map(|s| s.name).unwrap_or_else(|_| LEAD.into())),
-        };
+        let input = self.input(message, to).await;
         // Listening first: a quick turn's end isn't missed.
         let mut events = session.events();
-        let input = TurnInput { typed, ..TurnInput::of(text) };
         let turn = match delivery {
             Delivery::Queue => session.start_turn(input).await?,
             Delivery::AddToRunning => session.inject(input).await?,
@@ -679,15 +635,14 @@ impl SlotManager {
     /// work), else held, as it was told, until one of its sessions runs.
     pub async fn tell(&self, to: &SlotId, from: &str, message: Message) -> Result<Reported> {
         let slot = self.slot(to)?;
-        let text = self.expanded(message, Some(to.clone())).await.text;
         match slot.current_thread().and_then(|t| self.sessions.get(t).ok()) {
             Some(session) => {
-                let prompt = format!("From {from}:\n\n{text}");
-                session.start_turn(TurnInput::of(prompt)).await?;
+                session.start_turn(self.input(message.after(&told_from(from)), to).await).await?;
                 Ok(Reported::Delivered)
             }
             None => {
-                self.store.hold_report(&HeldReport { to: to.clone(), from: from.to_owned(), text, at_ms: now_ms() }).map_err(store_error)?;
+                let message = message.valid();
+                self.store.hold_report(&HeldReport { to: to.clone(), from: from.to_owned(), text: message.text, links: message.links, at_ms: now_ms() }).map_err(store_error)?;
                 Ok(Reported::Held)
             }
         }
@@ -705,13 +660,10 @@ impl SlotManager {
         if reports.is_empty() {
             return 0;
         }
-        let mut each = Vec::new();
-        for r in &reports {
-            each.push(format!("From {}:\n\n{}", r.from, r.text));
-        }
-        let text = each.join("\n\n---\n\n");
+        let each = reports.iter().map(|r| Message { text: r.text.clone(), links: r.links.clone() }.after(&told_from(&r.from))).collect();
+        let input = self.input(Message::joined(each, "\n\n---\n\n"), id).await;
         let sent = match self.sessions.get(thread) {
-            Ok(session) => session.start_turn(TurnInput::of(text)).await.map(|_| ()),
+            Ok(session) => session.start_turn(input).await.map(|_| ()),
             Err(e) => Err(e),
         };
         if let Err(e) = sent {
@@ -894,7 +846,7 @@ mod tests {
     fn a_turns_reply_is_its_assistant_messages_in_order() {
         let items = vec![
             item("a", 2, says("second")),
-            item("a", 0, ItemBody::UserMessage { text: "asked".into(), typed: None }),
+            item("a", 0, ItemBody::UserMessage { text: "asked".into(), links: Vec::new(), handed_on: Vec::new() }),
             item("b", 1, says("another turn")),
             item("a", 1, says("first")),
         ];

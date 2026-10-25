@@ -371,8 +371,7 @@ impl ChatStreamState {
     /// where it goes.
     pub(crate) fn chips_here(&self) -> Vec<(String, Target)> {
         let Some(view) = self.thread() else { return Vec::new() };
-        let Some(ItemBody::UserMessage { text, typed }) = self.ui.cursor.and_then(|at| view.in_stream(at)).map(|i| &i.body) else { return Vec::new() };
-        let (shown, links, _) = crate::conversation::as_typed(text, typed.as_ref());
+        let Some(ItemBody::UserMessage { text: shown, links, .. }) = self.ui.cursor.and_then(|at| view.in_stream(at)).map(|i| &i.body) else { return Vec::new() };
         links
             .iter()
             .filter_map(|link| {

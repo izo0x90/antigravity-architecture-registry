@@ -16,7 +16,7 @@ pub(super) fn links_of(item: &TurnItem) -> Vec<(String, Option<usize>)> {
 /// What search looks through in an item.
 pub(super) fn item_text(item: &TurnItem) -> String {
     match &item.body {
-        ItemBody::UserMessage { text, typed } => crate::conversation::as_typed(text, typed.as_ref()).0.to_owned(),
+        ItemBody::UserMessage { text, .. } => text.clone(),
         ItemBody::AssistantMessage { content, .. } => content.iter().map(block_summary).collect::<Vec<_>>().join(" "),
         ItemBody::Reasoning { text, .. } => text.clone(),
         ItemBody::ToolCall { name, locations, .. } => {
@@ -216,7 +216,7 @@ impl Navigable for ChatStreamState {
         let view = self.thread()?;
         let item = view.in_stream(self.ui.cursor?)?;
         let text = match &item.body {
-            ItemBody::UserMessage { text, typed } => crate::conversation::as_typed(text, typed.as_ref()).0.to_owned(),
+            ItemBody::UserMessage { text, .. } => text.clone(),
             ItemBody::ProposedPlan { markdown, .. } => markdown.clone(),
             body => body.said().unwrap_or_default(),
         };

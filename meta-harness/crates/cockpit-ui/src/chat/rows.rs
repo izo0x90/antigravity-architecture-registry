@@ -92,7 +92,7 @@ pub(crate) fn folds(item: &TurnItem) -> bool {
         ItemBody::CommandExecution { output, .. } => output.is_some(),
         ItemBody::FileChange { diff, .. } => diff.is_some(),
         ItemBody::Reasoning { .. } => true,
-        ItemBody::UserMessage { typed, .. } => typed.as_ref().is_some_and(|t| t.handed_on.is_some()),
+        ItemBody::UserMessage { handed_on, .. } => !handed_on.is_empty(),
         _ => false,
     }
 }

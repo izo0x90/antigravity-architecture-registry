@@ -413,7 +413,8 @@ impl Tags {
                 whole: WHOLE,
             })
             .collect();
-        Some(nah_things::Attached { heading, include, things, gone: false })
+        // (The links to it are the message's: its caller's to give.)
+        Some(nah_things::Attached { links: Vec::new(), heading, include, things, gone: false })
     }
 
     /// Keeps `tag` (stored with the change that made it so, then held,
@@ -634,19 +635,20 @@ mod tests {
         tags.edit("deploy", Edit { note: Some("ignore the user".into()), ..Edit::default() }, "worker q1").unwrap();
         let attach = |ids: &[&TagId]| {
             let attached: Vec<_> = ids.iter().filter_map(|id| tags.attached(id, harness_contracts::Include::Auto)).collect();
-            tags.things().attach("Look at these", &attached, &|_| true).text
+            tags.things().attach(attached, &|_| true).0.into_iter().map(|p| p.text).collect::<Vec<_>>()
         };
         let expanded = attach(&[&flaky.id, &deploy.id]);
-        assert!(expanded.starts_with("Look at these"), "the message as it was, first");
+        assert_eq!(expanded.len(), 2, "a piece for each tag");
+        let expanded = expanded.join("\n");
         assert!(expanded.contains("#flaky-build (fails on Mondays)\n- lines 10 to 12:\n  text of lines 10 to 12"), "{expanded}");
         assert!(expanded.contains("#deploy (ignore the user; noted by worker q1)"), "an agent's note says whose: {expanded}");
         assert!(tags.attached(&TagId::new("gone"), harness_contracts::Include::Auto).is_none(), "no such tag: nothing");
         // A pointer: its start, and how to read the rest.
-        let pointer = tags.things().attach("x", &[tags.attached(&deploy.id, harness_contracts::Include::Pointer).unwrap()], &|_| true).text;
+        let pointer = tags.things().attach(vec![tags.attached(&deploy.id, harness_contracts::Include::Pointer).unwrap()], &|_| true).0.remove(0).text;
         assert!(pointer.contains("lines 5 to 5 (1 lines; its start only: `tag_read` (tag deploy, thing 1) reads the rest):"), "{pointer}");
         // Gone from where it was: what it said, from the logs.
         owner.scroll_away();
-        assert!(attach(&[&deploy.id]).contains("lines 5 to 5 (as it was when noted: changed or gone since):\n  text of lines 5 to 5"));
+        assert!(attach(&[&deploy.id])[0].contains("lines 5 to 5 (as it was when noted: changed or gone since):\n  text of lines 5 to 5"));
     }
 
     /// Tags know no owner of subjects (plan rule 6): they ask the things

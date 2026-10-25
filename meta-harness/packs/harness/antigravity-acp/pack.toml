@@ -104,6 +104,9 @@ display_name = "Antigravity"
 [provides.settings]
 # It reads and writes the project's files through us.
 client_fs = true
+# A message's pieces, replayed: run on after its text, each headed by its
+# label (1.1.1 to 1.4.3).
+replayed_piece = "Embedded resource ({uri}):\n{content}"
 # Its login opens no browser on the server's machine (`true` succeeds,
 # doing nothing); it still prints the link, which the cockpit shows.
 env = { BROWSER = "true" }

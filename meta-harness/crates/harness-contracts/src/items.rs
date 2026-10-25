@@ -34,13 +34,14 @@ pub enum ItemStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum ItemBody {
-    /// What you sent, as the agent was handed it (`text`), and as you
-    /// typed it, when that's another: its own text and links, and what was
-    /// handed on with it.
+    /// What you sent: its text, what it links (in the text's order), and
+    /// what those handed on with it (a piece's text each).
     UserMessage {
         text: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        typed: Option<crate::AsTyped>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        links: Vec<crate::Link>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        handed_on: Vec<String>,
     },
     AssistantMessage { content: Vec<ContentBlock>, streaming: bool },
     Reasoning { text: String, streaming: bool },

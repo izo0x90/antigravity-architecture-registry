@@ -40,7 +40,7 @@ pub(crate) fn may_read(slots: &Arc<SlotManager>, access: &Arc<nah_access::Access
 /// What an agent in it is told of what was said (`at`: which of its
 /// messages; `asked`: the agent is the one asked, else the one that
 /// started it).
-fn news(d: &Discussion, at: usize, asked: bool) -> Option<String> {
+fn news(d: &Discussion, at: usize, asked: bool) -> Option<harness_contracts::Message> {
     let said = d.said.get(at)?;
     let what = match (at, said.kind, d.kind, asked) {
         (0, _, DiscussionKind::ChangeRequest, true) => "asks you for a change",
@@ -57,7 +57,12 @@ fn news(d: &Discussion, at: usize, asked: bool) -> Option<String> {
         (true, DiscussionKind::Question) => "discussion_answer it, or discussion_reply to ask something back",
         (false, _) => "discussion_reply says something in it",
     };
-    Some(format!("Discussion {} on {}: {} {what}:\n\n{}\n\n(discussion_read {} reads it whole; {then}.)", d.id, d.on.what, d.to_agent(&said.by), said.text, d.id))
+    // What the user's message links goes with it (an agent's is plain
+    // text), its links moved with its text.
+    let links = if said.by == USER { said.links.clone() } else { Vec::new() };
+    let mut news = harness_contracts::Message { text: said.text.clone(), links }.after(&format!("Discussion {} on {}: {} {what}:\n\n", d.id, d.on.what, d.to_agent(&said.by)));
+    news.text.push_str(&format!("\n\n(discussion_read {} reads it whole; {then}.)", d.id));
+    Some(news)
 }
 
 /// Tells the agents in `d` (the one asked, the one that started it; not
@@ -76,9 +81,7 @@ async fn tell(slots: &SlotManager, d: &Discussion, from: usize) {
             }
             let Some(news) = news(d, at, asked) else { continue };
             let from = format!("{} (discussion {})", d.to_agent(&said.by), d.id);
-            // What the user's message links goes with it (an agent's is plain text).
-            let links = if said.by == USER { said.links.clone() } else { Vec::new() };
-            if let Err(e) = slots.tell(&slot.id, &from, harness_contracts::Message { text: news, links }).await {
+            if let Err(e) = slots.tell(&slot.id, &from, news).await {
                 tracing::warn!("{} couldn't be told of discussion {}: {e}", slot.name, d.id);
             }
         }
@@ -126,7 +129,9 @@ mod tests {
     #[test]
     fn the_slot_asked_reads_what_was_said_and_how_to_answer() {
         use harness_contracts::{DiscussionStatus, Named, Said, Subject};
-        let said = |by: &str, kind, text: &str| Said { by: by.into(), at_ms: 0, kind, text: text.into(), links: Vec::new(), changed: Vec::new() };
+        // Each `#x` in what's said links tag x.
+        let link = |text: &str| text.find("#x").map(|at| harness_contracts::Link { start: at, end: at + 2, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("x") }, include: harness_contracts::Include::Auto });
+        let said = |by: &str, kind, text: &str| Said { by: by.into(), at_ms: 0, kind, text: text.into(), links: link(text).into_iter().collect(), changed: Vec::new() };
         let d = Discussion {
             id: DiscussionId::new("d3"),
             on: Named { subject: Subject::Plan { plan: arch_graph::PlanId::new("p").unwrap() }, what: "plan p".into() },
@@ -135,15 +140,21 @@ mod tests {
             by: USER.into(),
             asked: LEAD.into(),
             status: DiscussionStatus::Open,
-            said: vec![said(USER, SaidKind::Message, "Split it."), said("lead", SaidKind::Answer, "Split."), said(USER, SaidKind::Reopened, "Not yet.")],
+            said: vec![said(USER, SaidKind::Message, "Split it."), said("lead", SaidKind::Answer, "Split #x."), said(USER, SaidKind::Reopened, "Not yet: #x.")],
             names: Default::default(),
         };
-        let first = news(&d, 0, true).unwrap();
+        let first = news(&d, 0, true).unwrap().text;
         assert!(first.starts_with("Discussion d3 on plan p: the user asks you for a change:\n\nSplit it.") && first.contains("naming what you changed"), "{first}");
         assert!(news(&d, 1, true).is_none(), "an answer isn't news to the one asked");
-        assert!(news(&d, 2, true).unwrap().contains("the user reopened it:\n\nNot yet."));
+        // The user's links, moved with its text: still on what it says.
+        let reopened = news(&d, 2, true).unwrap();
+        assert!(reopened.text.contains("the user reopened it:\n\nNot yet: #x."), "{}", reopened.text);
+        let l = &reopened.links[0];
+        assert_eq!(reopened.text.chars().skip(l.start).take(l.end - l.start).collect::<String>(), "#x");
         // To the agent that started one: what's said back, the answer too.
         assert!(news(&d, 0, false).is_none(), "what it said itself");
-        assert!(news(&d, 1, false).unwrap().contains("lead answered it:\n\nSplit.") && news(&d, 1, false).unwrap().contains("discussion_reply says something in it"));
+        let answered = news(&d, 1, false).unwrap();
+        assert!(answered.text.contains("lead answered it:\n\nSplit #x.") && answered.text.contains("discussion_reply says something in it"));
+        assert!(answered.links.is_empty(), "an agent's message: plain text");
     }
 }

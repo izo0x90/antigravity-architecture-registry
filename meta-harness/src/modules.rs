@@ -319,18 +319,15 @@ impl AppState {
             let attached = crate::linking::attached(&tags, &things, text, links);
             let slot = reader.and_then(|id| slots.upgrade().and_then(|s| s.get(id).map(|slot| (s, slot))));
             match (reader, slot) {
-                (None, _) => things.attach(text, &attached, &|_| true),
+                (None, _) => things.attach(attached, &|_| true),
                 (Some(_), Some((slots, slot))) => {
                     let reach = crate::mcp::sets::reach::Reach::of_slot(&slots, &access, &discussions, &slot);
-                    things.attach(text, &attached, &|s| reach.reaches(s))
+                    things.attach(attached, &|s| reach.reaches(s))
                 }
                 // A slot gone meanwhile: nothing handed on (named only).
-                (Some(_), None) => things.attach(text, &attached, &|_| false),
+                (Some(_), None) => things.attach(attached, &|_| false),
             }
         }));
-        // A message of the user's shown as typed: what was typed for it, kept by the slots.
-        let typed_by = Arc::downgrade(&p.slots);
-        p.sessions.read_typed_with(Arc::new(move |sent: &str| typed_by.upgrade()?.typed(sent)));
         Ok(Self {
             server: ServerState { gate: gate.clone(), shutdown: stopping.clone() },
             home: HomeState { gate: gate.clone(), stopping: stopping.clone(), home },

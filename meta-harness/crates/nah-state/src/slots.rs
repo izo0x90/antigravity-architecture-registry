@@ -119,7 +119,8 @@ impl SlotStore for StateDb {
 
     fn hold_report(&self, report: &HeldReport) -> Result<(), String> {
         self.transaction(|tx| {
-            tx.execute("INSERT INTO held_reports (to_slot, from_slot, text, at_ms) VALUES (?1, ?2, ?3, ?4)", params![report.to.as_str(), report.from, report.text, report.at_ms as i64]).map_err(failed)?;
+            let links = serde_json::to_string(&report.links).map_err(failed)?;
+            tx.execute("INSERT INTO held_reports (to_slot, from_slot, text, links, at_ms) VALUES (?1, ?2, ?3, ?4, ?5)", params![report.to.as_str(), report.from, report.text, links, report.at_ms as i64]).map_err(failed)?;
             Ok(())
         })
         .map_err(|e| e.to_string())
@@ -127,37 +128,15 @@ impl SlotStore for StateDb {
 
     fn take_reports(&self, to: &SlotId) -> Result<Vec<HeldReport>, String> {
         self.transaction(|tx| {
-            let mut stmt = tx.prepare("SELECT from_slot, text, at_ms FROM held_reports WHERE to_slot = ?1 ORDER BY seq").map_err(failed)?;
+            let mut stmt = tx.prepare("SELECT from_slot, text, links, at_ms FROM held_reports WHERE to_slot = ?1 ORDER BY seq").map_err(failed)?;
+            // (Links that don't read: the text alone.)
             let reports = stmt
-                .query_map(params![to.as_str()], |r| Ok(HeldReport { to: to.clone(), from: r.get(0)?, text: r.get(1)?, at_ms: r.get::<_, i64>(2)? as u64 }))
+                .query_map(params![to.as_str()], |r| Ok(HeldReport { to: to.clone(), from: r.get(0)?, text: r.get(1)?, links: serde_json::from_str(&r.get::<_, String>(2)?).unwrap_or_default(), at_ms: r.get::<_, i64>(3)? as u64 }))
                 .map_err(failed)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(failed)?;
             tx.execute("DELETE FROM held_reports WHERE to_slot = ?1", params![to.as_str()]).map_err(failed)?;
             Ok(reports)
-        })
-        .map_err(|e| e.to_string())
-    }
-
-    fn keep_typed(&self, key: &str, typed: &harness_contracts::AsTyped) -> Result<(), String> {
-        let json = serde_json::to_string(typed).map_err(|e| e.to_string())?;
-        let at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
-        self.transaction(|tx| {
-            tx.execute("INSERT OR REPLACE INTO typed_messages (sent, json, at_ms) VALUES (?1, ?2, ?3)", params![key, json, at_ms]).map_err(failed)?;
-            // The newest kept (by when each was put in, its row's number):
-            // older ones show as sent once replayed.
-            tx.execute("DELETE FROM typed_messages WHERE rowid <= (SELECT MAX(rowid) FROM typed_messages) - ?1", params![harness_core::slots::TYPED_KEPT as i64]).map_err(failed)?;
-            Ok(())
-        })
-        .map_err(|e| e.to_string())
-    }
-
-    fn typed_kept(&self) -> Result<Vec<(String, harness_contracts::AsTyped)>, String> {
-        self.transaction(|tx| {
-            let mut stmt = tx.prepare("SELECT sent, json FROM typed_messages").map_err(failed)?;
-            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(failed)?.collect::<Result<Vec<_>, _>>().map_err(failed)?;
-            // (One that doesn't read, an older form's: shown as sent.)
-            Ok(rows.into_iter().filter_map(|(key, json)| Some((key, serde_json::from_str(&json).ok()?))).collect())
         })
         .map_err(|e| e.to_string())
     }

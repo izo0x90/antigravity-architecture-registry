@@ -401,16 +401,6 @@ pub fn places(text: &str) -> Vec<(String, Option<usize>)> {
     out
 }
 
-/// What you sent, as you typed it: the text, what it links, and what was
-/// handed on with it (folded under it). From what was kept of it (`typed`),
-/// else the text the agent was handed, whole.
-pub fn as_typed<'a>(sent: &'a str, typed: Option<&'a harness_contracts::AsTyped>) -> (&'a str, &'a [harness_contracts::Link], Option<&'a str>) {
-    match typed {
-        Some(typed) => (&typed.message.text, &typed.message.links, typed.handed_on.as_deref()),
-        None => (sent, &[], None),
-    }
-}
-
 /// A link in the box, and the colour it's drawn in.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Chip {

@@ -479,16 +479,14 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let link = json!({ "start": 8, "end": 16, "to": { "kind": "tag", "tag": checked } });
     let (status, body) = http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "look at #checked.", "links": [link] }).to_string())).await;
     assert_eq!(status, 200, "{body}");
-    // Yours, as you typed it (its own words and link), with what the agent
-    // was handed; kept by that (a replay shows it so).
+    // Yours: its own words and link, and what the link handed on, a piece
+    // apart from its words.
     let yours = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if matches!(item.body, harness_contracts::ItemBody::UserMessage { .. }) && format!("{:?}", item.body).contains("look at #checked."))).await;
     let harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item: yours } } = yours else { unreachable!() };
-    let harness_contracts::ItemBody::UserMessage { text: sent, typed } = yours.body else { unreachable!() };
-    let handed_on = typed.as_ref().and_then(|t| t.handed_on.clone()).unwrap_or_default();
-    assert_eq!(typed.map(|t| (t.message.text, t.message.links.len())), Some(("look at #checked.".to_owned(), 1)), "as typed, with it");
-    assert!(sent.ends_with(&handed_on) && handed_on.contains("#checked"), "what was handed on, apart: {handed_on:?}");
-    assert_eq!(state.harness.slots.typed(&sent).map(|t| t.message.text), Some("look at #checked.".to_owned()), "kept by what was sent");
-    let echoed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if matches!(item.body, harness_contracts::ItemBody::AssistantMessage { .. }) && format!("{:?}", item.body).contains("What's linked above"))).await;
+    let harness_contracts::ItemBody::UserMessage { text: sent, links, handed_on } = yours.body else { unreachable!() };
+    assert_eq!((sent.as_str(), links.len()), ("look at #checked.", 1), "its own words and link");
+    assert!(handed_on.len() == 1 && handed_on[0].starts_with("#checked"), "what was handed on, apart: {handed_on:?}");
+    let echoed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if matches!(item.body, harness_contracts::ItemBody::AssistantMessage { .. }) && format!("{:?}", item.body).contains("echo: look at #checked."))).await;
     let echoed = format!("{echoed:?}");
     assert!(echoed.contains("#checked (the echo works; noted by lead)") && echoed.contains("tagged-line"), "an agent's note says whose: {echoed}");
     let (status, _) = http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "plain #checked, not linked" }).to_string())).await;

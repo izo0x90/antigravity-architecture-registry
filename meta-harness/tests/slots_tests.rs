@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::{FAKE, Mcp, given_tools, spawn_app};
-use harness_contracts::{InstanceId, McpTransport, NativeId, SessionKey, Slot, SlotId, SlotSession, SlotStatus, Starter, ThreadId};
+use harness_contracts::{AdapterEvent, ClientEvent, InstanceId, ItemBody, McpTransport, NativeId, SessionKey, Slot, SlotId, SlotSession, SlotStatus, Starter, ThreadId};
 use harness_core::slots::{HeldReport, SlotStore};
 use harness_core::{Delivery, Open, Origin, Reported, Sent, SlotManager, SlotSettings};
 use serde_json::json;
@@ -123,13 +123,31 @@ async fn a_report_reaches_a_running_lead_or_waits_for_one() {
     assert_eq!(slots.report(&sub, "and a fourth".into()).await.unwrap(), Reported::Delivered);
     // Any slot is told the same way: held for it alone until it runs.
     assert_eq!(slots.tell(&sub, "the user (discussion d1)", "Why?".into()).await.unwrap(), Reported::Held, "no session of its own: held");
+    // The user's, linking a tag (gone since): held with its link, handed
+    // on as it is when it's delivered, the link still on its words.
+    let link = harness_contracts::Link { start: 4, end: 9, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("no-such-tag") }, include: harness_contracts::Include::Auto };
+    let linked = harness_contracts::Message { text: "See #gone.".into(), links: vec![link] };
+    assert_eq!(slots.tell(&sub, "the user (discussion d1)", linked).await.unwrap(), Reported::Held);
+    let (_, mut events) = state.harness.hub.subscribe();
     let opened = slots.open_session(&sub, Open::New { resume: None }).await.unwrap();
-    assert_eq!(opened.delivered_reports, 1, "delivered as it opened");
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while !slots.read(&sub, 10).unwrap().messages.iter().any(|(_, m)| m.contains("From the user (discussion d1):\n\nWhy?")) {
-        assert!(std::time::Instant::now() < deadline, "{:?}", slots.read(&sub, 10).unwrap().messages);
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    assert_eq!(opened.delivered_reports, 2, "delivered as it opened");
+    let delivered = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } }) = events.recv().await
+                && let ItemBody::UserMessage { text, links, handed_on } = item.body
+                && text.contains("Why?")
+            {
+                return (text, links, handed_on);
+            }
+        }
+    })
+    .await
+    .expect("delivered");
+    let (text, links, handed_on) = delivered;
+    assert!(text.starts_with("From the user (discussion d1):\n\nWhy?\n\n---\n\nFrom the user (discussion d1):\n\nSee #gone."), "{text}");
+    let said: String = text.chars().skip(links[0].start).take(links[0].end - links[0].start).collect();
+    assert_eq!(said, "#gone", "the link moved with its words");
+    assert!(handed_on.len() == 1 && handed_on[0].contains("gone since it was linked"), "{handed_on:?}");
 }
 
 /// A store that can be made to fail, for what happens then.
@@ -137,7 +155,6 @@ async fn a_report_reaches_a_running_lead_or_waits_for_one() {
 struct Store {
     slots: Mutex<Vec<Slot>>,
     reports: Mutex<Vec<HeldReport>>,
-    typed: Mutex<std::collections::HashMap<String, harness_contracts::AsTyped>>,
     failing: std::sync::atomic::AtomicBool,
 }
 
@@ -169,13 +186,6 @@ impl SlotStore for Store {
         Ok(taken)
     }
     fn note(&self, _: &str, _: &str, _: &str, _: Option<&str>) {}
-    fn keep_typed(&self, key: &str, typed: &harness_contracts::AsTyped) -> Result<(), String> {
-        self.typed.lock().unwrap().insert(key.to_owned(), typed.clone());
-        Ok(())
-    }
-    fn typed_kept(&self) -> Result<Vec<(String, harness_contracts::AsTyped)>, String> {
-        Ok(self.typed.lock().unwrap().iter().map(|(k, t)| (k.clone(), t.clone())).collect())
-    }
 }
 
 fn manager(state: &meta_harness::modules::AppState, store: Arc<Store>, open_within: Duration) -> Arc<SlotManager> {

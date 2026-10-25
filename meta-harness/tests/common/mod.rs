@@ -115,11 +115,11 @@ impl SessionRuntime for FakeSession {
             self.asked.lock().unwrap().push((request, turn.clone()));
             return Ok(turn.id);
         }
-        // As a harness does: the turn runs (your message in it, as typed
-        // when it was), then ends.
+        // As a harness does: the turn runs (your message in it, with what
+        // it links), then ends.
         self.emit(AdapterEvent::TurnUpdated { turn: Turn { status: TurnStatus::Running, failure: None, ..turn.clone() } });
         self.emit(AdapterEvent::ItemUpdated {
-            item: TurnItem { id: ItemId::new(format!("yours-{}", turn.id)), thread_id: self.thread.id.clone(), turn_id: turn.id.clone(), native_id: None, parent_id: None, ordinal: 0, status: ItemStatus::Completed, title: None, body: ItemBody::UserMessage { text: input.text.clone(), typed: input.typed.clone() } },
+            item: TurnItem { id: ItemId::new(format!("yours-{}", turn.id)), thread_id: self.thread.id.clone(), turn_id: turn.id.clone(), native_id: None, parent_id: None, ordinal: 0, status: ItemStatus::Completed, title: None, body: { let (links, handed_on) = harness_contracts::Piece::split(input.pieces.clone()); ItemBody::UserMessage { text: input.text.clone(), links, handed_on } } },
         });
         // "[tool]": it runs a tool first (what the tool gave, two lines).
         if input.text.contains("[tool]") {
@@ -128,7 +128,9 @@ impl SessionRuntime for FakeSession {
                 item: TurnItem { id: ItemId::new(format!("tool-{}", turn.id)), thread_id: self.thread.id.clone(), turn_id: turn.id.clone(), native_id: None, parent_id: None, ordinal: 0, status: ItemStatus::Completed, title: None, body: ItemBody::ToolCall { kind: harness_contracts::ToolKind::Execute, name: "Bash".into(), input: None, output, locations: Vec::new() } },
             });
         }
-        self.reply(&turn, format!("echo: {}", input.text));
+        // (What its links handed on, read with it.)
+        let pieces: String = input.pieces.iter().map(|p| format!("\n\n{}", p.text)).collect();
+        self.reply(&turn, format!("echo: {}{pieces}", input.text));
         self.emit(AdapterEvent::TurnUpdated { turn: turn.clone() });
         if input.text.contains("[die]") {
             let _ = self.dead.send(true);

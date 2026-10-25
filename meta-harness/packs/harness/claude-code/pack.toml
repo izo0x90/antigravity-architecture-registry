@@ -35,6 +35,9 @@ queueing = "/agentCapabilities/_meta/claudeCode/promptQueueing"
 steering = "/_meta/steering/supported"
 # Where a sub-agent's updates name the tool call that started it (its Task).
 parent_call = "/claudeCode/parentToolUseId"
+# A message's pieces, replayed: each one's label, then its text in a
+# <context> (claude-agent-acp 0.89 to 0.95).
+replayed_piece = "{uri}\n<context ref=\"{uri}\">\n{content}\n</context>"
 
 [provides.settings.modes]
 approval_required = "default"

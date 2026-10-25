@@ -37,6 +37,10 @@ pub struct AcpSettings {
     /// it, by the call's id (a JSON pointer): its items nest under that
     /// call's.
     pub parent_call: Option<String>,
+    /// How its replay writes a piece of a message back into the message's
+    /// text: words around `{uri}` and `{content}` (`pieces::Template`).
+    /// None: a replayed message is shown as it comes.
+    pub replayed_piece: Option<String>,
     /// How it reports who it's signed in as.
     pub sign_in: Option<SignInSettings>,
     /// Its logins: by a login command of its own, or run by itself.
@@ -77,6 +81,9 @@ impl AcpSettings {
             && !self.dirs.contains_key(&home.dir)
         {
             return Err(format!("home.dir names {}, which isn't one of its dirs", home.dir));
+        }
+        if let Some(template) = &self.replayed_piece {
+            crate::pieces::Template::parse(template).map_err(|why| format!("replayed_piece: {why}"))?;
         }
         Ok(())
     }

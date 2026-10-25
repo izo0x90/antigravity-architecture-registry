@@ -139,31 +139,19 @@ mod slots {
         let db = StateDb::open(dir.path(), &settings()).unwrap();
         let (lead, sub) = (SlotId::new("lead"), SlotId::new("s2"));
         for (n, text) in ["one", "two"].iter().enumerate() {
-            db.hold_report(&HeldReport { to: lead.clone(), from: "sub 1 (sub-slot)".into(), text: (*text).into(), at_ms: n as u64 }).unwrap();
+            db.hold_report(&HeldReport { to: lead.clone(), from: "sub 1 (sub-slot)".into(), text: (*text).into(), links: Vec::new(), at_ms: n as u64 }).unwrap();
         }
-        db.hold_report(&HeldReport { to: sub.clone(), from: "the user".into(), text: "d3".into(), at_ms: 3 }).unwrap();
+        // The user's, in a discussion: its links kept with it.
+        let link = harness_contracts::Link { start: 4, end: 6, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("x") }, include: harness_contracts::Include::Auto };
+        db.hold_report(&HeldReport { to: sub.clone(), from: "the user".into(), text: "see #x".into(), links: vec![link.clone()], at_ms: 3 }).unwrap();
         let taken = db.take_reports(&lead).unwrap();
         assert_eq!(taken.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["one", "two"]);
         assert!(db.take_reports(&lead).unwrap().is_empty(), "taken: gone");
-        assert_eq!(db.take_reports(&sub).unwrap().iter().map(|r| (r.from.as_str(), r.text.as_str())).collect::<Vec<_>>(), [("the user", "d3")], "each slot's own");
+        assert_eq!(db.take_reports(&sub).unwrap().iter().map(|r| (r.from.as_str(), r.text.as_str(), r.links.clone())).collect::<Vec<_>>(), [("the user", "see #x", vec![link])], "each slot's own");
         db.note("lead", "sent", "sub 1", None);
         assert_eq!(db.activity(1).unwrap()[0].action, "sent");
     }
 
-    /// What was typed for a message is kept by its key, across a
-    /// reopening.
-    #[test]
-    fn what_was_typed_is_kept_by_its_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let message = harness_contracts::Message { text: "see #x".into(), links: vec![harness_contracts::Link { start: 4, end: 6, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("x") }, include: harness_contracts::Include::Auto }] };
-        let typed = harness_contracts::AsTyped { message, handed_on: Some("#x: a tag".into()) };
-        {
-            let db = StateDb::open(dir.path(), &settings()).unwrap();
-            db.keep_typed("k1", &typed).unwrap();
-        }
-        let db = StateDb::open(dir.path(), &settings()).unwrap();
-        assert_eq!(db.typed_kept().unwrap(), [("k1".to_owned(), typed)]);
-    }
 }
 
 mod notifications {

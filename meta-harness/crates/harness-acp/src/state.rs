@@ -8,7 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use agent_client_protocol::schema::v1 as acp;
 use harness_contracts::{
     AdapterEvent, ApprovalOption, CatalogUpdate, ContentBlock, Failure, ItemBody, ItemId, ItemStatus,
-    NativeId, PlanArtifact, PlanBody, PlanId, PlanStatus, Question, RequestId, RequestKind, RequestStatus,
+    NativeId, Piece, PlanArtifact, PlanBody, PlanId, PlanStatus, Question, RequestId, RequestKind, RequestStatus,
     RuntimeRequest, SignIn, Thread, ThreadStatus, ToolKind, Turn, TurnId, TurnInput, TurnItem, TurnStatus, Usage,
 };
 use tokio::sync::broadcast;
@@ -43,6 +43,12 @@ pub struct SessionState {
     /// The id the agent gave the last message of yours it replayed: a
     /// chunk with another is another message.
     replayed_message: Option<String>,
+    /// The message of yours being replayed, as it's come so far: read
+    /// back to its text and pieces once it's all come.
+    open_user: Option<(ItemId, String)>,
+    /// How a replayed message's pieces are read back (none: it's shown as
+    /// it comes).
+    pieces: Option<crate::pieces::Template>,
     /// A prompt's turn split by a message added to it: the turn it goes on
     /// in (its end ends that one).
     continues: HashMap<TurnId, TurnId>,
@@ -76,6 +82,8 @@ impl SessionState {
             running: VecDeque::new(),
             replay_turn: None,
             replayed_message: None,
+            open_user: None,
+            pieces: None,
             continues: HashMap::new(),
             parent_call,
             parent: None,
@@ -153,8 +161,33 @@ impl SessionState {
         self.running.front()
     }
 
+    /// How replayed messages' pieces are read back from now on.
+    pub fn read_pieces_by(&mut self, template: Option<crate::pieces::Template>) {
+        self.pieces = template;
+    }
+
+    /// The history's replay is over: its last message of yours is read back.
+    pub fn replayed(&mut self) {
+        self.close_user();
+    }
+
+    /// The message of yours being replayed, read back to its text and its
+    /// pieces (once: it's all come); one with none stays as it came.
+    fn close_user(&mut self) {
+        let Some((id, raw)) = self.open_user.take() else { return };
+        let Some((text, pieces)) = self.pieces.as_ref().and_then(|t| t.read(&raw)) else { return };
+        let (links, handed_on) = Piece::split(pieces);
+        self.update_item(&id, |item| item.body = ItemBody::UserMessage { text, links, handed_on });
+    }
+
+    /// Your message as its item has it: its text, what it links, what those handed on.
+    fn yours(input: &TurnInput) -> ItemBody {
+        let (links, handed_on) = Piece::split(input.pieces.clone());
+        ItemBody::UserMessage { text: input.text.clone(), links, handed_on }
+    }
+
     /// A turn for `input`: running if none is, else queued behind those
-    /// that are. Its message is in it either way (as typed, when it was).
+    /// that are. Its message is in it either way.
     pub fn begin_turn(&mut self, input: &TurnInput) -> TurnId {
         let starts = self.running.is_empty();
         if starts {
@@ -163,7 +196,7 @@ impl SessionState {
         }
         let turn_id = self.start_turn_record(if starts { TurnStatus::Running } else { TurnStatus::Queued });
         self.running.push_back(turn_id.clone());
-        self.push_item_in(turn_id.clone(), ItemBody::UserMessage { text: input.text.clone(), typed: input.typed.clone() }, ItemStatus::Completed, None, None);
+        self.push_item_in(turn_id.clone(), Self::yours(input), ItemStatus::Completed, None, None);
         if starts {
             self.set_thread(|t| t.status = ThreadStatus::Running);
         }
@@ -175,7 +208,7 @@ impl SessionState {
     pub fn inject(&mut self, input: &TurnInput) -> Option<(TurnId, ItemId)> {
         let turn_id = self.running.front()?.clone();
         self.close_all_streams();
-        let item = self.push_item_in(turn_id.clone(), ItemBody::UserMessage { text: input.text.clone(), typed: input.typed.clone() }, ItemStatus::Completed, None, None);
+        let item = self.push_item_in(turn_id.clone(), Self::yours(input), ItemStatus::Completed, None, None);
         Some((turn_id, item))
     }
 
@@ -319,6 +352,8 @@ impl SessionState {
     }
 
     fn push_item_in(&mut self, turn_id: TurnId, body: ItemBody, status: ItemStatus, title: Option<String>, native: Option<String>) -> ItemId {
+        // Anything after a replayed message of yours: it's all come.
+        self.close_user();
         let item = TurnItem {
             id: ItemId::new(new_id()),
             thread_id: self.thread.id.clone(),
@@ -462,22 +497,22 @@ impl SessionState {
             _ => true,
         };
         self.replayed_message = id;
-        if let Some(last) = self.items.last().map(|i| i.id.clone())
+        if let Some((last, raw)) = self.open_user.as_mut()
             && same
-            && self.open_message.is_empty()
-            && self.open_reasoning.is_empty()
-            && matches!(self.items.last().map(|i| &i.body), Some(ItemBody::UserMessage { .. }))
         {
+            raw.push_str(&text);
+            let last = last.clone();
             self.update_item(&last, |item| {
-                if let ItemBody::UserMessage { text: existing, .. } = &mut item.body {
-                    existing.push_str(&text);
+                if let ItemBody::UserMessage { text: shown, .. } = &mut item.body {
+                    shown.push_str(&text);
                 }
             });
             return;
         }
         self.close_all_streams();
         self.replay_turn = None;
-        self.push_item(ItemBody::UserMessage { text, typed: None }, ItemStatus::Completed, None, None);
+        let id = self.push_item(ItemBody::UserMessage { text: text.clone(), links: Vec::new(), handed_on: Vec::new() }, ItemStatus::Completed, None, None);
+        self.open_user = Some((id, text));
     }
 
     fn message_chunk(&mut self, content: &acp::ContentBlock) {
@@ -891,5 +926,57 @@ mod tests {
         s.apply(&acp::SessionUpdate::UserMessageChunk(of("one", "m2")));
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("answer")));
         assert_eq!(turns(&s).into_iter().map(|(_, _, said)| said).collect::<Vec<_>>(), [vec!["you: stopped".to_owned()], vec!["you: next one".into(), "answer".into()]]);
+    }
+
+    /// Your messages as the agent replays them, each with a piece: read back
+    /// once each has come, by the agent's way, to its text, its links and
+    /// what they handed on.
+    #[test]
+    fn a_replayed_message_of_yours_comes_back_to_its_text_and_pieces() {
+        let link = harness_contracts::Link { start: 4, end: 10, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("flaky") }, include: harness_contracts::Include::Auto };
+        let piece = Piece { links: vec![link.clone()], text: "#flaky\n- lines 1 to 2".into() };
+        let label = crate::pieces::label(&piece);
+        let of = |text: &str, id: &str| acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(text))).message_id(acp::MessageId::new(id));
+        let yours = |s: &SessionState| s.items.iter().filter_map(|i| match &i.body { ItemBody::UserMessage { text, links, handed_on } => Some((text.clone(), links.clone(), handed_on.clone())), _ => None }).collect::<Vec<_>>();
+        let want = ("see #flaky now".to_owned(), vec![link], vec![piece.text.clone()]);
+
+        // Claude Code: the text, the label, the context: one message by its id.
+        let mut s = state();
+        s.read_pieces_by(Some(crate::pieces::Template::parse("{uri}\n<context ref=\"{uri}\">\n{content}\n</context>").unwrap()));
+        s.apply(&acp::SessionUpdate::UserMessageChunk(of("see #flaky now", "m1")));
+        s.apply(&acp::SessionUpdate::UserMessageChunk(of(&label, "m1")));
+        s.apply(&acp::SessionUpdate::UserMessageChunk(of(&format!("\n<context ref=\"{label}\">\n{}\n</context>", piece.text), "m1")));
+        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("answer")));
+        assert_eq!(yours(&s), std::slice::from_ref(&want));
+
+        // Antigravity: one text; the last message read back when the replay ends.
+        let mut s = state();
+        s.read_pieces_by(Some(crate::pieces::Template::parse("Embedded resource ({uri}):\n{content}").unwrap()));
+        s.apply(&acp::SessionUpdate::UserMessageChunk(chunk(&format!("see #flaky nowEmbedded resource ({label}):\n{}", piece.text))));
+        assert_eq!(yours(&s)[0].1, Vec::new(), "still coming");
+        s.replayed();
+        assert_eq!(yours(&s), [want]);
+    }
+
+    /// A long session: thousands of your messages each with a full piece,
+    /// replayed; each is read back once, as it ends (nothing looked up).
+    #[test]
+    fn a_long_replay_reads_each_message_back_once() {
+        let template = crate::pieces::Template::parse("Embedded resource ({uri}):\n{content}").unwrap();
+        let link = harness_contracts::Link { start: 0, end: 6, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("flaky") }, include: harness_contracts::Include::Whole };
+        let piece = Piece { links: vec![link], text: "x".repeat(16_000) };
+        let label = crate::pieces::label(&piece);
+        let mut s = state();
+        s.read_pieces_by(Some(template));
+        let started = std::time::Instant::now();
+        for n in 0..3000 {
+            s.apply(&acp::SessionUpdate::UserMessageChunk(chunk(&format!("#flaky {n}Embedded resource ({label}):\n{}", piece.text))));
+            s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("ok")));
+        }
+        s.replayed();
+        let took = started.elapsed();
+        let read_back = s.items.iter().filter(|i| matches!(&i.body, ItemBody::UserMessage { handed_on, .. } if handed_on.len() == 1)).count();
+        assert_eq!(read_back, 3000);
+        assert!(took < std::time::Duration::from_secs(5), "{took:?} for 3000 messages of 16 KB");
     }
 }

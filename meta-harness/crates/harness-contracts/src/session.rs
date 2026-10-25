@@ -243,16 +243,16 @@ pub struct TurnInput {
     pub text: String,
     #[serde(default)]
     pub attachments: Vec<Attachment>,
-    /// What the user typed for it, when it's another (what it links handed
-    /// on after it): its own item shows it so.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub typed: Option<crate::AsTyped>,
+    /// What its links hand on with it, a piece each (an agent that takes
+    /// pieces gets them as such).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pieces: Vec<crate::Piece>,
 }
 
 impl TurnInput {
-    /// `text`, as it's handed on (nothing typed apart from it).
+    /// `text` alone.
     pub fn of(text: impl Into<String>) -> Self {
-        Self { text: text.into(), attachments: Vec::new(), typed: None }
+        Self { text: text.into(), attachments: Vec::new(), pieces: Vec::new() }
     }
 }
 
