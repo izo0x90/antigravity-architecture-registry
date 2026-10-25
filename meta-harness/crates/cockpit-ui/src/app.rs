@@ -96,6 +96,8 @@ enum ShellCommand {
     /// Row or line N (its value).
     Line,
     Hint { open: bool },
+    /// What the view has where you are, to the clipboard.
+    Copy,
     Search,
     SearchStep { forward: bool },
     MarkSet,

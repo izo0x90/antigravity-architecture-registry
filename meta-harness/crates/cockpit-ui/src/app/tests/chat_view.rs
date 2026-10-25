@@ -255,7 +255,7 @@ fn a_running_turn_says_what_its_doing_and_how_live_it_is() {
     let none = app.bound_actions().into_iter().find(|b| b.action.id == "chat.indicator").expect("the setting");
     app.invoke(Invocation { action: none.action, origin: none.origin, value: Some("none".into()) }, &ctx);
     let (words, again) = line(&ctx, &mut app, 100.0);
-    assert!(app.desk.chat().ui.indicator.name() == "none" && words.starts_with("No word for 1 min") && again > 10.0, "{words:?}, again in {again}");
+    assert!(app.desk.chat().ui.indicator.kind() == crate::indicator::Kind::None && words.starts_with("No word for 1 min") && again > 10.0, "{words:?}, again in {again}");
 }
 
 /// How much the chat shows is a setting on its line ("Shows:", beside

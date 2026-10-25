@@ -519,7 +519,7 @@ fn not_typing_it_moves_by_command_and_copies_one_s_output_or_runs_it_again() {
     let copied: Vec<&String> = out.platform_output.commands.iter().filter_map(|c| if let egui::OutputCommand::CopyText(t) = c { Some(t) } else { None }).collect();
     assert_eq!(copied, ["ok 1\nok 2"]);
     frame(&ctx, &mut app, vec![]);
-    assert_eq!(app.note.as_deref(), Some("Copied its output."));
+    assert_eq!(app.note.as_deref(), Some("Copied its output (2 lines)."));
     // Run again: typed in, as the user would, at the empty prompt.
     keys(&ctx, &mut app, ":");
     keys(&ctx, &mut app, "run the command again");

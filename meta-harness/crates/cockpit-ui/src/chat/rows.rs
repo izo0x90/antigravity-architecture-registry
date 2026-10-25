@@ -13,6 +13,8 @@ use std::collections::BTreeMap;
 
 use harness_contracts::{ItemBody, ItemId, ItemStatus, TurnItem};
 
+use crate::config::Verbosity;
+
 /// One row: the items it covers (their places in the stream, `first` to
 /// `last`); the run it's in (its first and last item), folded into this
 /// row or open, each of its items a row; how deep it's nested (within how
@@ -48,43 +50,6 @@ impl Shape {
     pub(crate) fn row_of(&self, index: usize) -> Option<usize> {
         let at = self.rows.partition_point(|r| r.last < index);
         self.rows.get(at).filter(|r| r.holds(index)).map(|_| at)
-    }
-}
-
-/// How much of what the agent does the chat shows: messages and what
-/// needs you (everything between two messages one folded line), the calls
-/// folded into runs, or every call and its output open.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Verbosity {
-    Quiet,
-    #[default]
-    Normal,
-    Everything,
-}
-
-impl Verbosity {
-    pub(crate) const ALL: [Self; 3] = [Self::Quiet, Self::Normal, Self::Everything];
-
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::Quiet => "quiet",
-            Self::Normal => "normal",
-            Self::Everything => "everything",
-        }
-    }
-
-    pub(crate) fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|v| v.name() == name)
-    }
-
-    /// What it shows, in words.
-    pub(crate) fn detail(self) -> &'static str {
-        match self {
-            Self::Quiet => "Messages and what needs you: what it did between them is one folded line",
-            Self::Normal => "Calls folded into runs, each a line; their output folded",
-            Self::Everything => "Every call and its output, open",
-        }
     }
 }
 

@@ -33,7 +33,6 @@ enum TermCommand {
     New,
     Restart,
     Close,
-    Copy,
     CopyOutput,
     RunAgain,
 }
@@ -290,8 +289,9 @@ impl TerminalBuffer {
                         self.said = Some(match text {
                             Some(text) if text.is_empty() => "It printed nothing to copy.".into(),
                             Some(text) => {
-                                ctx.copy_text(text);
-                                "Copied its output.".into()
+                                let copied = crate::nav::Copyable::new("its output", text);
+                                ctx.copy_text(copied.text.clone());
+                                copied.said()
                             }
                             None => "That command is gone (its lines went).".into(),
                         });
@@ -454,6 +454,12 @@ impl crate::nav::DrawsThings for TerminalBuffer {
 }
 
 impl Navigable for TerminalBuffer {
+    /// The selection (drag to select), else the cursor's line.
+    fn copy_here(&self) -> Option<crate::nav::Copyable> {
+        let what = if self.selection.is_some() { "the selection" } else { "the line" };
+        self.selected_text().map(|text| crate::nav::Copyable::new(what, text))
+    }
+
     fn take_asks(&mut self) -> Vec<Ask> {
         std::mem::take(&mut self.asks)
     }
@@ -745,7 +751,6 @@ impl ActionProvider for TerminalBuffer {
         });
         out.push(crate::nav::Move::Leave.offer_if(self.cursor.is_some() || self.selection.is_some() || !self.view.live(), "Back to the live screen").detail("Drops the cursor and the selection; the view follows the output again"));
         out.push(Action::new("terminal.type", "Type into the terminal", "Every key goes to its program until you stop typing", C::Type).focused().importance(PRIMARY).when(if has && !ended && !self.typing { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
-        out.push(Action::new("terminal.copy", if self.selection.is_some() { "Copy the selection" } else { "Copy the line" }, "To the clipboard, as text (drag to select)", C::Copy).focused().importance(MINOR));
         let many = self.terminals.get().list().count() > 1;
         out.push(Action::new("terminal.next", "Next terminal", "This panel shows the next of the server's terminals", C::Step(1)).focused().importance(MINOR).when(if many { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
         out.push(Action::new("terminal.prev", "Previous terminal", "This panel shows the terminal before", C::Step(-1)).focused().importance(MINOR).when(if many { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
@@ -796,13 +801,6 @@ impl ActionProvider for TerminalBuffer {
                     self.asks.push(Ask::Terminals { id: Some(id), act: TermAct::Close });
                 }
             }
-            TermCommand::Copy => match self.selected_text() {
-                Some(text) => {
-                    cx.ctx.copy_text(text);
-                    *cx.note = Some("Copied.".into());
-                }
-                None => *cx.note = Some("Nothing to copy: select some text, or put the cursor on a line.".into()),
-            },
             // Its output as the server has it (lines that wrapped joined, all
             // of it), copied when it comes.
             TermCommand::CopyOutput => match self.run_on().map(|c| c.id) {

@@ -351,14 +351,16 @@ changes in a row) is one folded line ("Read 3 files, searched twice"); a
 call's output, reasoning, and what a call's sub-agent did (where its
 harness says, as Claude Code does) fold too, with the fold keys every
 view has (`z o`, `z c`, `z a`, `z R`, `z M`; Enter unfolds a run). "Shows:"
-on its settings row says how much shows at first (quiet, normal,
-everything; `[chat] shows` in the UI config). The running turn's line
-says what the agent is doing and how live it is ("Reading render.rs… 12 s
-since anything"), with a heartbeat of its updates beside it ("At work:",
-`[chat] indicator`). A message's code blocks are coloured as the code view
+on its settings row (`Space m v`) says how much shows at first (quiet,
+normal, everything); each chat keeps what's picked for it through a
+reload, and one not picked for takes `[chat] shows` in the UI config. The
+running turn's line says what the agent is doing and how live it is
+("Reading render.rs… 12 s since anything"), with a heartbeat of its
+updates beside it ("At work:", `Space m a`, `[chat] indicator`). A message's code blocks are coloured as the code view
 colours a file of the language their fence names (`POST
-/api/code/highlight`). `c` copies the message you're on, or the code
-block `f` picked; `] ]` and `[ [` go to the next and previous message,
+/api/code/highlight`). `c` copies what you're on, in every view: the code
+block `f` picked, else the message (a terminal's selection or line, the
+code view's file); `] ]` and `[ [` go to the next and previous message,
 past the calls between; `/` finds what's said, opening a fold it's in.
 The files a message's words name (`src/a.rs:12`, a path with a folder or a
 line) are links under it, as a call's places are: Enter opens the one

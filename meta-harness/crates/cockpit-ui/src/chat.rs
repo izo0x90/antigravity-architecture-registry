@@ -34,7 +34,6 @@ pub(crate) mod things;
 pub(crate) mod slots;
 mod words;
 
-pub use rows::Verbosity;
 
 use crate::agents::block_summary;
 use render::mcp_label;
@@ -103,6 +102,9 @@ pub struct ChatView {
     /// What shows the agent at work (the setting's pick); where the running
     /// turn's line was drawn this frame.
     pub(crate) indicator: crate::indicator::Shown,
+    /// How much it shows and what shows the agent at work, as picked for
+    /// it (kept through a reload; none: the config's).
+    pub(crate) picked: Picked,
     pub(crate) live_at: Option<render::LiveAt>,
     /// How tall each row was last drawn (by its first item), and as what:
     /// a row out of sight takes that room without being drawn.
@@ -131,6 +133,27 @@ pub struct ChatView {
     pub(crate) sign_in_has_box: bool,
 }
 
+/// A chat's settings as picked for it (none: the config's).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Picked {
+    pub shows: Option<crate::config::Verbosity>,
+    pub at_work: Option<crate::indicator::Kind>,
+}
+
+impl Picked {
+    /// As kept: each by its name.
+    fn kept(self) -> Option<serde_json::Value> {
+        use crate::config::Named;
+        (self != Self::default()).then(|| serde_json::json!({ "shows": self.shows.map(Named::name), "at_work": self.at_work.map(Named::name) }))
+    }
+
+    fn from_kept(kept: &serde_json::Value) -> Self {
+        use crate::config::Named;
+        let named = |key: &str| kept.get(key).and_then(serde_json::Value::as_str);
+        Self { shows: named("shows").and_then(Named::named), at_work: named("at_work").and_then(Named::named) }
+    }
+}
+
 impl Default for ChatView {
     fn default() -> Self {
         Self {
@@ -144,6 +167,7 @@ impl Default for ChatView {
             epoch: None,
             shape: Default::default(),
             indicator: Default::default(),
+            picked: Picked::default(),
             live_at: None,
             heights: Default::default(),
             diffs: Default::default(),
@@ -310,25 +334,6 @@ impl ChatStreamState {
         let view = self.thread()?;
         let run: Vec<&TurnItem> = row.run.map(|(a, b)| (a..=b).filter_map(|i| view.in_stream(i)).collect()).unwrap_or_default();
         Some(self.ui.folds.here(row, &run, view.in_stream(row.first)?))
-    }
-
-    /// What `c` copies where you are: the code block picked (a hint), else
-    /// the message (yours as you typed it), else the proposed plan; in
-    /// words, and its text.
-    pub(crate) fn copy_here(&self) -> Option<(&'static str, String)> {
-        if let Some(Pick::Code(n)) = self.ui.pick
-            && let Some(code) = self.codes_here().into_iter().nth(n)
-        {
-            return Some(("the code block", code));
-        }
-        let view = self.thread()?;
-        let item = view.in_stream(self.ui.cursor?)?;
-        match &item.body {
-            ItemBody::UserMessage { text, typed } => Some(("your message", crate::conversation::as_typed(text, typed.as_ref()).0.to_owned())),
-            ItemBody::AssistantMessage { .. } => Some(("the message", item.body.said().unwrap_or_default())),
-            ItemBody::ProposedPlan { markdown, .. } => Some(("the plan", markdown.clone())),
-            _ => None,
-        }
     }
 
     /// The code blocks of the item you're on (a message's, a proposed

@@ -141,6 +141,30 @@ impl crate::buffer::Buffer for ChatStreamState {
     fn describe(&self) -> String {
         self.slot().map_or_else(|| "the agent's session".to_owned(), |s| format!("agent slot {}", s.name))
     }
+
+    /// What's picked for it: how much it shows, what shows the agent at
+    /// work.
+    fn keep(&self) -> Option<serde_json::Value> {
+        self.ui.picked.kept()
+    }
+
+    fn restore_kept(&mut self, kept: &serde_json::Value) {
+        self.ui.picked = Picked::from_kept(kept);
+        self.settle();
+    }
+}
+
+impl ChatStreamState {
+    /// How much it shows and what shows the agent at work: as picked for
+    /// it, else as the config says (a change of what it shows starts the
+    /// folds afresh).
+    pub(super) fn settle(&mut self) {
+        self.ui.folds.set_verbosity(self.ui.picked.shows.unwrap_or(self.settings.shows));
+        let kind = self.ui.picked.at_work.unwrap_or(self.settings.indicator);
+        if self.ui.indicator.kind() != kind {
+            self.ui.indicator = crate::indicator::Shown::of(kind);
+        }
+    }
 }
 
 impl crate::nav::DrawsThings for ChatStreamState {
@@ -162,18 +186,33 @@ impl Navigable for ChatStreamState {
         std::mem::take(&mut self.asks)
     }
 
+    /// The code block picked (a hint), else the message (yours as you
+    /// typed it), else the proposed plan.
+    fn copy_here(&self) -> Option<crate::nav::Copyable> {
+        use crate::nav::Copyable;
+        if let Some(Pick::Code(n)) = self.ui.pick
+            && let Some(code) = self.codes_here().into_iter().nth(n)
+        {
+            return Some(Copyable::new("the code block", code));
+        }
+        let view = self.thread()?;
+        let item = view.in_stream(self.ui.cursor?)?;
+        match &item.body {
+            ItemBody::UserMessage { text, typed } => Some(Copyable::new("your message", crate::conversation::as_typed(text, typed.as_ref()).0)),
+            ItemBody::AssistantMessage { .. } => Some(Copyable::new("the message", item.body.said().unwrap_or_default())),
+            ItemBody::ProposedPlan { markdown, .. } => Some(Copyable::new("the plan", markdown.as_str())),
+            _ => None,
+        }
+    }
+
     /// Its settings, the desk's agents (read from now on), and how many
     /// files each turn changed (the desk's timeline).
     fn share(&mut self, shared: &crate::shared::Shared) {
-        // The chat's settings changed: what it starts with, taken.
         if let Some(settings) = shared.settings.since(&mut self.seen_settings) {
             self.settings = settings.chat.clone();
             self.context = settings.changes.context as usize;
-            self.ui.folds.set_verbosity(self.settings.shows);
-            if let Some(shown) = crate::indicator::Shown::named(&self.settings.indicator) {
-                self.ui.indicator = shown;
-            }
         }
+        self.settle();
         self.agents.follow(&shared.agents);
         self.unsent.follow(&shared.drafts);
         self.ui.messages.follow(shared);

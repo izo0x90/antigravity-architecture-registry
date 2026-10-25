@@ -4,6 +4,7 @@ use super::*;
 use crate::store::Store;
 
 use crate::actions::wire_name;
+use crate::config::Named;
 
 #[derive(Clone, Debug)]
 enum ChatCommand {
@@ -46,7 +47,6 @@ enum ChatCommand {
     Answer { thread: ThreadId, request: harness_contracts::RequestId, option: String },
     Indicator,
     Verbosity,
-    Copy,
 }
 
 impl ActionProvider for ChatStreamState {
@@ -273,16 +273,13 @@ impl ActionProvider for ChatStreamState {
                 out.extend(crate::request_card::offer(request, at, C::OpenPage, answer));
             }
         }
-        // What you're on, copied: the code block picked, else the message.
-        if let Some((what, _)) = self.copy_here() {
-            out.push(Action::new("chat.copy", format!("Copy {what}"), "To the clipboard: a code block picked with f, else the message you're on", C::Copy).focused().on_item(Button, "Copy", Some(icon::COPY)).importance(crate::actions::SECONDARY));
-        }
         // Its settings: how much of what the agent does it shows (what's
         // folded at first), what shows the agent at work.
-        let verbosity = rows::Verbosity::ALL.into_iter().map(|v| Choice::new(v.name(), v.name()).detail(Some(v.detail().into())).current(v == self.ui.folds.verbosity())).collect();
-        out.push(Action::new("chat.verbosity", "How much it shows", "Quiet: messages and what needs you; normal: calls folded into runs; everything: every call and its output", C::Verbosity).param(Param::Choice(verbosity)).setting("Shows", None).group(crate::actions::Group::View).importance(MINOR));
-        let shown = crate::indicator::ALL.iter().map(|(name, _)| Choice::new(*name, *name).current(*name == self.ui.indicator.name())).collect();
-        out.push(Action::new("chat.indicator", "Show the agent at work as…", "Beside the running turn's words: a heartbeat of its updates, or nothing", C::Indicator).param(Param::Choice(shown)).setting("At work", None).group(crate::actions::Group::View).importance(MINOR));
+        fn choices<T: Named>(current: T) -> Param {
+            Param::Choice(T::ALL.iter().map(|c| Choice::new(c.name(), c.words()).detail(Some(c.detail().into())).current(*c == current)).collect())
+        }
+        out.push(Action::new("chat.verbosity", "How much it shows", "Quiet: messages and what needs you; normal: calls folded into runs; everything: every call and its output", C::Verbosity).param(choices(self.ui.folds.verbosity())).setting("Shows", None).group(crate::actions::Group::View).importance(MINOR));
+        out.push(Action::new("chat.indicator", "What shows the agent at work", "Beside the running turn's words: a heartbeat of its updates, or nothing", C::Indicator).param(choices(self.ui.indicator.kind())).setting("At work", None).group(crate::actions::Group::View).importance(MINOR));
         // Typed in: sending it (to the sign-in, while one waits for it).
         out.push(match self.sign_in_box() {
             Some(_) => Action::new("chat.send", "Send to the sign-in", "What's typed goes to the sign-in waiting for it, not the agent", C::Send).on_typing(Button, "Send to the sign-in", Some(icon::KEY)),
@@ -456,8 +453,8 @@ impl ActionProvider for ChatStreamState {
             ChatCommand::OpenPage(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
             ChatCommand::CopyLoginLink => {
                 if let Some(url) = self.sign_in_now().and_then(|n| n.waiting.url) {
+                    *cx.note = Some(crate::nav::Copyable::new("the sign-in link", url.as_str()).said());
                     ctx.copy_text(url);
-                    *cx.note = Some("Copied the sign-in link.".into());
                 }
             }
             ChatCommand::OpenLoginPage => {
@@ -478,20 +475,15 @@ impl ActionProvider for ChatStreamState {
             // Its defaults change: what was folded or opened by hand starts
             // afresh (the same one: nothing changes).
             ChatCommand::Verbosity => {
-                if let Some(verbosity) = value.as_deref().and_then(rows::Verbosity::from_name) {
-                    self.ui.folds.set_verbosity(verbosity);
-                }
-            }
-            ChatCommand::Copy => {
-                if let Some((what, text)) = self.copy_here() {
-                    let lines = text.lines().count();
-                    ctx.copy_text(text);
-                    *cx.note = Some(if lines == 1 { format!("Copied {what} (1 line).") } else { format!("Copied {what} ({lines} lines).") });
+                if let Some(verbosity) = value.as_deref().and_then(Named::named) {
+                    self.ui.picked.shows = Some(verbosity);
+                    self.settle();
                 }
             }
             ChatCommand::Indicator => {
-                if let Some(shown) = value.as_deref().and_then(crate::indicator::Shown::named) {
-                    self.ui.indicator = shown;
+                if let Some(kind) = value.as_deref().and_then(Named::named) {
+                    self.ui.picked.at_work = Some(kind);
+                    self.settle();
                 }
             }
         }

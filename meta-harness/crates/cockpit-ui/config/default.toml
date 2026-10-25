@@ -190,6 +190,9 @@ t = "Tags"
 # Hints: label what's on screen, type a label to go there (F: and open it).
 "nav.hint" = { keys = ["f"] }
 "nav.hint_open" = { keys = ["F"] }
+# Copy what you're on: a selection, a code block picked with f, else the
+# item (the file, a terminal's line, a message).
+"nav.copy" = { keys = ["c"] }
 # Search the view (/ then type, Enter), next/previous match.
 "nav.search" = { keys = ["/"] }
 "nav.search_next" = { keys = ["n"] }
@@ -248,8 +251,6 @@ t = "Tags"
 "chat.clear" = { keys = ["x"] }
 "chat.next_slot" = { keys = ["J"], gestures = ["swipe_left"] }
 "chat.prev_slot" = { keys = ["K"], gestures = ["swipe_right"] }
-# Copy the code block you're on (picked with f, else the message's first).
-"chat.copy" = { keys = ["c"] }
 
 "session.new" = { leader = "s n" }
 "session.resume" = { leader = "s r" }
@@ -271,10 +272,8 @@ t = "Tags"
 "inbox.open_chat" = { keys = ["o"] }
 "inbox.dismiss" = { keys = ["x"] }
 # A terminal's own (not typing: typing, every key is its program's): type
-# into it, copy the selection (or the cursor's line: y and Y answer requests
-# everywhere), its neighbours.
+# into it, its neighbours.
 "terminal.type" = { keys = ["i"] }
-"terminal.copy" = { keys = ["c"] }
 "terminal.next" = { keys = ["J"], gestures = ["swipe_left"] }
 "terminal.prev" = { keys = ["K"], gestures = ["swipe_right"] }
 
@@ -292,6 +291,8 @@ t = "Tags"
 "config.category.model" = { leader = "m m" }
 "config.category.mode" = { leader = "o o" }
 "config.*" = { leader = "m #" }
+"chat.verbosity" = { leader = "m v" }
+"chat.indicator" = { leader = "m a" }
 "model.next" = { leader = "m m" }
 "mode.native" = { leader = "o o" }
 "mode.runtime" = { leader = "o o" }
@@ -354,7 +355,7 @@ t = "Tags"
 "discussion.reply" = { keys = ["r"] }
 "discussion.settle" = { keys = ["a"] }
 "discussion.reopen" = { keys = ["x"] }
-"discussion.change" = { keys = ["c"] }
+"discussion.change" = { keys = ["e"] }
 
 # Queue view: the plan's work, one job per component (Enter shows why a job
 # failed).

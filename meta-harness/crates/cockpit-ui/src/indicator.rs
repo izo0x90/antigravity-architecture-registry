@@ -64,27 +64,57 @@ pub trait Indicator {
     fn draw(&mut self, spot: &egui::Painter, over: &egui::Painter, activity: &Activity, stage: &Stage, now: f64) -> Next;
 }
 
-/// How one is made (none: nothing shows).
-type Make = fn() -> Option<Box<dyn Indicator>>;
+/// The ones there are (the chat's setting picks one).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Kind {
+    #[default]
+    Heartbeat,
+    None,
+}
 
-/// The ones there are, by name, in one table (the chat's setting picks
-/// one; the first is the default).
-pub static ALL: &[(&str, Make)] = &[("heartbeat", || Some(Box::new(Heartbeat))), ("none", || None)];
+impl crate::config::Named for Kind {
+    const WHAT: &'static str = "indicator";
+    const ALL: &'static [Self] = &[Self::Heartbeat, Self::None];
 
-/// The one picked: its name, and it (none: nothing shows).
+    fn name(self) -> &'static str {
+        match self {
+            Self::Heartbeat => "heartbeat",
+            Self::None => "none",
+        }
+    }
+
+    fn words(self) -> &'static str {
+        match self {
+            Self::Heartbeat => "A heartbeat",
+            Self::None => "Nothing",
+        }
+    }
+
+    fn detail(self) -> &'static str {
+        match self {
+            Self::Heartbeat => "A trace that blips with each update, beside the running turn's words",
+            Self::None => "The words alone",
+        }
+    }
+}
+
+/// The one picked, and it (none: nothing shows).
 pub struct Shown {
-    name: &'static str,
+    kind: Kind,
     drawer: Option<Box<dyn Indicator>>,
 }
 
 impl Shown {
-    /// The one named `name` (none: there's no such one).
-    pub fn named(name: &str) -> Option<Self> {
-        ALL.iter().find(|(n, _)| *n == name).map(|(name, make)| Self { name, drawer: make() })
+    pub fn of(kind: Kind) -> Self {
+        let drawer: Option<Box<dyn Indicator>> = match kind {
+            Kind::Heartbeat => Some(Box::new(Heartbeat)),
+            Kind::None => None,
+        };
+        Self { kind, drawer }
     }
 
-    pub fn name(&self) -> &'static str {
-        self.name
+    pub fn kind(&self) -> Kind {
+        self.kind
     }
 
     pub fn drawer(&mut self) -> Option<&mut (dyn Indicator + 'static)> {
@@ -94,8 +124,7 @@ impl Shown {
 
 impl Default for Shown {
     fn default() -> Self {
-        let (name, make) = ALL[0];
-        Self { name, drawer: make() }
+        Self::of(Kind::default())
     }
 }
 
@@ -163,8 +192,7 @@ mod tests {
     use super::*;
 
     /// Moving while a blip is in sight or it waits, still otherwise; all it
-    /// draws inside its spot (the breathing dot too); the named ones are
-    /// there, one table.
+    /// draws inside its spot (the breathing dot too); "none" draws nothing.
     #[test]
     fn the_heartbeat_moves_only_while_there_is_something_to_move_and_draws_in_its_spot() {
         let ctx = egui::Context::default();
@@ -184,6 +212,6 @@ mod tests {
         let dot = output.shapes.iter().find(|s| matches!(s.shape, egui::Shape::Circle(_))).expect("the breathing dot");
         assert!(spot.contains_rect(dot.shape.visual_bounding_rect()), "inside its spot: {:?} in {spot:?}", dot.shape.visual_bounding_rect());
         assert!(output.shapes.iter().all(|s| spot.expand(1.0).contains_rect(s.shape.visual_bounding_rect())), "all of it in its spot");
-        assert!(Shown::named("heartbeat").is_some_and(|s| s.name() == "heartbeat") && Shown::named("none").is_some_and(|mut s| s.drawer().is_none()) && Shown::named("lemmings").is_none());
+        assert!(Shown::of(Kind::None).drawer().is_none() && Shown::of(Kind::Heartbeat).drawer().is_some());
     }
 }

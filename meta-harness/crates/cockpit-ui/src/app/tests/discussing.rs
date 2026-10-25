@@ -76,12 +76,12 @@ fn a_discussion_is_started_on_what_youre_on_opened_and_replied_to_settled_and_re
     told_discussion(&app, question.clone());
     frame(&ctx, &mut app, vec![]);
     app.desk.typed_mut::<crate::discussion::DiscussionView>(BufferKind::Discussion).writing = Default::default();
-    keys(&ctx, &mut app, "c");
+    keys(&ctx, &mut app, "e");
     assert_eq!(bodies(&app, "POST /api/discussions/d1/change"), [serde_json::json!({})], "open: at once");
     question.status = harness_contracts::DiscussionStatus::Answered;
     told_discussion(&app, question);
     frame(&ctx, &mut app, vec![]);
-    keys(&ctx, &mut app, "c");
+    keys(&ctx, &mut app, "e");
     keys(&ctx, &mut app, "Name the step.");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert_eq!(bodies(&app, "POST /api/discussions/d1/change"), [serde_json::json!({ "text": "Name the step." })], "answered: why first");

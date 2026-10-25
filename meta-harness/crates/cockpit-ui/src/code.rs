@@ -888,7 +888,6 @@ fn find_word(text: &str, word: &str) -> Option<usize> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CodeCommand {
     Def { forward: bool },
-    Copy,
     Reload,
     Deleted,
     Reread,
@@ -938,7 +937,6 @@ impl ActionProvider for CodeViewerState {
         }
         out.push(Action::new("code.deleted", "Show deleted lines in place", "Lines the comparison removed, struck through where they were", CodeCommand::Deleted).focused().param(Param::Toggle { on: self.show_deleted }).setting("Deleted lines", None).group(Group::View).importance(MINOR));
         out.push(Action::new("code.reload", "Load the file again", "Reads the file from disk again (it changed outside)", CodeCommand::Reload).focused().group(Group::View).importance(MINOR));
-        out.push(Action::new("code.copy", "Copy the file", "The whole file, to the clipboard", CodeCommand::Copy).focused().importance(MINOR));
         // Its file, read into the index again (from anywhere).
         out.push(Action::new("index.file", format!("Re-read {}", self.current_file), "The index reads this file again (what it says of it is out of date)", CodeCommand::Reread).group(Group::Act).importance(MINOR));
         out
@@ -951,7 +949,6 @@ impl ActionProvider for CodeViewerState {
                     *cx.note = Some(why);
                 }
             }
-            Some(CodeCommand::Copy) => cx.ctx.copy_text(self.content.clone()),
             Some(CodeCommand::Reread) => self.asks.push(Ask::Reread(self.current_file.clone())),
             Some(CodeCommand::Deleted) => {
                 self.show_deleted = match value.as_deref() {
@@ -1049,6 +1046,11 @@ impl crate::nav::DrawsThings for CodeViewerState {
 }
 
 impl Navigable for CodeViewerState {
+    /// The whole file.
+    fn copy_here(&self) -> Option<crate::nav::Copyable> {
+        (!self.content.is_empty()).then(|| crate::nav::Copyable::new("the file", self.content.clone()))
+    }
+
     /// A place in a file (a line, lines, a change, a message's file link),
     /// or a component: the go-to finds where its code is (what the index
     /// knows) and lands here on those lines.

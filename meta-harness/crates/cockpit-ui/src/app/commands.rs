@@ -109,6 +109,11 @@ impl CockpitApp {
             .importance(SECONDARY),
             nav("nav.line", "Go to line or row", "By its number (a terminal's lines by the numbers they keep for life)", S::Line).param(Param::Text { hint: "line or row number".into(), start: String::new() }).importance(MINOR),
         ];
+        // What the view has where you are (a selection, a block picked,
+        // the item), copied.
+        if let Some(copied) = self.desk.view(here.kind).copy_here() {
+            out.push(Action::new("nav.copy", format!("Copy {}", copied.what), "To the clipboard: what you're on (a selection, a code block picked with f, else the item)", S::Copy).group(Group::Act).importance(SECONDARY).on_item(crate::actions::Style::Button, "Copy", Some(egui_phosphor::regular::COPY)));
+        }
         out.extend(self.tag_actions(here));
         out.extend(self.link_actions(here));
         out.extend(self.item_actions(here));
@@ -431,6 +436,13 @@ impl CockpitApp {
                 None => self.note = Some("Give a line number.".into()),
             },
             ShellCommand::Hint { open } => self.start_hint(open),
+            ShellCommand::Copy => match self.desk.view(kind).copy_here() {
+                Some(copied) => {
+                    self.note = Some(copied.said());
+                    ctx.copy_text(copied.text);
+                }
+                None => self.note = Some("Nothing to copy here.".into()),
+            },
             ShellCommand::Search => {
                 self.capture = Some(Capture::Search(Searching { kind, query: String::new(), before: self.jump_here() }));
                 self.input_mode = InputMode::Capture { at: self.here().at };

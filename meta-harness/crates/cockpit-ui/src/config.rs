@@ -123,30 +123,83 @@ impl Default for ChangesUi {
     }
 }
 
-/// The chat: how much it shows at first, what shows the agent at work,
-/// and how long after its last update it's said to be receiving still,
-/// and quiet too long.
+/// The chat: how much a chat shows and what shows the agent at work, till
+/// it's picked there; how long after its last update it's said to be
+/// receiving still, and quiet too long.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct ChatUi {
-    pub shows: crate::chat::Verbosity,
-    #[serde(deserialize_with = "indicator_name")]
-    pub indicator: String,
+    #[serde(deserialize_with = "named")]
+    pub shows: Verbosity,
+    #[serde(deserialize_with = "named")]
+    pub indicator: crate::indicator::Kind,
     pub receiving_s: f64,
     pub quiet_after_s: f64,
 }
 
 impl Default for ChatUi {
     fn default() -> Self {
-        Self { shows: crate::chat::Verbosity::default(), indicator: crate::indicator::ALL[0].0.to_owned(), receiving_s: 1.5, quiet_after_s: 60.0 }
+        Self { shows: Verbosity::default(), indicator: crate::indicator::Kind::default(), receiving_s: 1.5, quiet_after_s: 60.0 }
     }
 }
 
-/// One of the indicators there are, by name.
-fn indicator_name<'de, D: serde::Deserializer<'de>>(to: D) -> Result<String, D::Error> {
+/// A setting's choices, each by its name (in the config, in what's kept)
+/// and in words for the screen.
+pub trait Named: Sized + Copy + PartialEq + 'static {
+    /// What a choice is ("verbosity").
+    const WHAT: &'static str;
+    const ALL: &'static [Self];
+    fn name(self) -> &'static str;
+    fn words(self) -> &'static str;
+    fn detail(self) -> &'static str;
+
+    fn named(name: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|c| c.name() == name)
+    }
+}
+
+/// One of a setting's choices, by name.
+pub fn named<'de, D: serde::Deserializer<'de>, T: Named>(to: D) -> Result<T, D::Error> {
     let name = String::deserialize(to)?;
-    match crate::indicator::Shown::named(&name) {
-        Some(_) => Ok(name),
-        None => Err(serde::de::Error::custom(format!("no indicator named {name:?} (there are: {})", crate::indicator::ALL.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")))),
+    T::named(&name).ok_or_else(|| serde::de::Error::custom(format!("unknown {} `{name}` (there are: {})", T::WHAT, T::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", "))))
+}
+
+/// How much of what the agent does a chat shows: messages and what
+/// needs you (everything between two messages one folded line), the calls
+/// folded into runs, or every call and its output open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Verbosity {
+    Quiet,
+    #[default]
+    Normal,
+    Everything,
+}
+
+impl Named for Verbosity {
+    const WHAT: &'static str = "verbosity";
+    const ALL: &'static [Self] = &[Self::Quiet, Self::Normal, Self::Everything];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Quiet => "quiet",
+            Self::Normal => "normal",
+            Self::Everything => "everything",
+        }
+    }
+
+    fn words(self) -> &'static str {
+        match self {
+            Self::Quiet => "Quiet",
+            Self::Normal => "Normal",
+            Self::Everything => "Everything",
+        }
+    }
+
+    fn detail(self) -> &'static str {
+        match self {
+            Self::Quiet => "Messages and what needs you: what it did between them is one folded line",
+            Self::Normal => "Calls folded into runs, each a line; their output folded",
+            Self::Everything => "Every call and its output, open",
+        }
     }
 }
 

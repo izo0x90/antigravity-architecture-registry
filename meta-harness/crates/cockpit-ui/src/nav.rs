@@ -359,6 +359,28 @@ pub enum Fold {
     CloseAll,
 }
 
+/// What a view has to copy where you are: what it is, in words ("the
+/// selection", "your message"), and its text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Copyable {
+    pub what: String,
+    pub text: String,
+}
+
+impl Copyable {
+    pub fn new(what: impl Into<String>, text: impl Into<String>) -> Self {
+        Self { what: what.into(), text: text.into() }
+    }
+
+    /// What's said once it's copied: what, and how many lines.
+    pub fn said(&self) -> String {
+        match self.text.lines().count() {
+            1 => format!("Copied {} (1 line).", self.what),
+            n => format!("Copied {} ({n} lines).", self.what),
+        }
+    }
+}
+
 /// The moves every view shares: one vocabulary, each with its fixed id
 /// (what the keymap binds), run the same way for every view (the app's
 /// `run_move`: counts, the jump list, then the view's `Navigable`). A view
@@ -851,6 +873,12 @@ pub trait Navigable {
 
     /// Everything search can find, in document order.
     fn items(&self) -> Vec<Item>;
+
+    /// What it has where you are to copy (a selection, a block picked,
+    /// the item; the host's one copy action copies it).
+    fn copy_here(&self) -> Option<Copyable> {
+        None
+    }
 
     /// What is drawn now that hints can label (from the last frame).
     fn spots(&self) -> Vec<Spot>;
