@@ -589,14 +589,15 @@ impl SlotManager {
             Origin::User => message,
             Origin::Lead => Message::text(message.text),
         };
-        let typed = message.clone().valid();
+        // A message of the user's linking things: what was typed goes
+        // with it, and is kept by what's sent (its replayed history shows
+        // it so).
+        let typed = (from == Origin::User && !message.links.is_empty()).then(|| message.clone().valid());
         let text = self.expanded(message, Some(to.clone())).await.text;
-        // What it links handed on with it: what was typed kept, by what's sent.
-        if from == Origin::User
-            && text != typed.text
-            && let Err(e) = self.store.keep_typed(&text, &typed)
+        if let Some(typed) = &typed
+            && let Err(e) = self.store.keep_typed(&text, typed)
         {
-            tracing::warn!("what was typed isn't kept (it shows as sent): {e}");
+            tracing::warn!("what was typed isn't kept (a replay shows it as sent): {e}");
         }
         let text = match &from {
             Origin::User => text,
@@ -604,7 +605,7 @@ impl SlotManager {
         };
         // Listening first: a quick turn's end isn't missed.
         let mut events = session.events();
-        let input = TurnInput { text, attachments: Vec::new() };
+        let input = TurnInput { typed, ..TurnInput::of(text) };
         let turn = match delivery {
             Delivery::Queue => session.start_turn(input).await?,
             Delivery::AddToRunning => session.inject(input).await?,
@@ -650,7 +651,7 @@ impl SlotManager {
         match slot.current_thread().and_then(|t| self.sessions.get(t).ok()) {
             Some(session) => {
                 let prompt = format!("From {from}:\n\n{text}");
-                session.start_turn(TurnInput { text: prompt, attachments: Vec::new() }).await?;
+                session.start_turn(TurnInput::of(prompt)).await?;
                 Ok(Reported::Delivered)
             }
             None => {
@@ -678,7 +679,7 @@ impl SlotManager {
         }
         let text = each.join("\n\n---\n\n");
         let sent = match self.sessions.get(thread) {
-            Ok(session) => session.start_turn(TurnInput { text, attachments: Vec::new() }).await.map(|_| ()),
+            Ok(session) => session.start_turn(TurnInput::of(text)).await.map(|_| ()),
             Err(e) => Err(e),
         };
         if let Err(e) = sent {

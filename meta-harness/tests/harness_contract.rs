@@ -63,8 +63,13 @@ impl Harness {
     }
 }
 
+/// A sub-agent's update's `_meta` as each agent writes it (Claude Code:
+/// claude-agent-acp 0.89, `stampParentToolUseId`), its Task call's id
+/// `toolu_task`.
+const SUB_AGENT_META: &[(&str, &str)] = &[("claude-code", r#"{"claudeCode":{"parentToolUseId":"toolu_task"}}"#)];
+
 fn say(text: &str) -> TurnInput {
-    TurnInput { text: text.into(), attachments: Vec::new() }
+    TurnInput::of(text)
 }
 
 async fn until(events: &mut (impl futures::Stream<Item = AdapterEvent> + Unpin), what: &str, done: impl Fn(&AdapterEvent) -> bool) -> AdapterEvent {
@@ -179,8 +184,10 @@ async fn what_it_declares_works() {
             assert_eq!(answer, serde_json::json!({ "action": "accept", "content": { "question_0": "Redis" } }), "{}", h.name);
         }
         // Whose a sub-agent's work is, if it says: under the call that
-        // started it.
-        if settings.parent_call.is_some() {
+        // started it. Where the pack looks is where its agent writes it.
+        if let Some(pointer) = &settings.parent_call {
+            let recorded = SUB_AGENT_META.iter().find(|(pack, _)| *pack == h.name).map(|(_, meta)| serde_json::from_str::<serde_json::Value>(meta).unwrap()).unwrap_or_else(|| panic!("{}: what its agent sends with a sub-agent's update, recorded here", h.name));
+            assert_eq!(recorded.pointer(pointer).and_then(|v| v.as_str()), Some("toolu_task"), "{}: its pointer finds the call in what its agent sends", h.name);
             let session = h.open(RuntimeMode::ApprovalRequired).await;
             let mut events = session.events();
             session.start_turn(say("[sub-agent]")).await.unwrap();

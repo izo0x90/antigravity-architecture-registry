@@ -444,7 +444,7 @@ fn a_messages_code_blocks_are_coloured_picked_and_copied() {
         frame(&ctx, &mut app, vec![]);
     }
     let asked: Vec<serde_json::Value> = bodies(&app, "POST /api/code/highlight");
-    assert_eq!(asked, [serde_json::json!({ "language": "rust", "text": "fn main() {}" }), serde_json::json!({ "language": "py", "text": "print(1)\nprint(2)" })], "each once");
+    assert_eq!(asked, [serde_json::json!({ "blocks": [{ "language": "rust", "text": "fn main() {}" }, { "language": "py", "text": "print(1)\nprint(2)" }] })], "each once, in one call");
     app.desk.shared.highlighter.get_mut().knows("rust", "fn main() {}", arch_graph::code::Highlights { names: vec!["keyword".into()], runs: vec![[0, 2, 0]] });
     let keyword = app.desk.shared.highlighter.get_mut().colour("keyword").expect("the keyword's colour");
     let output = frame(&ctx, &mut app, vec![]);

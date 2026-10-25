@@ -105,6 +105,8 @@ pub enum Ask {
     Terminals { id: Option<harness_contracts::TerminalId>, act: crate::terminals::TermAct },
     /// Something for the tags to do.
     Tags(crate::tags::TagAct),
+    /// Code blocks' colours wanted (each its fence and text).
+    Colour(Vec<(String, String)>),
 }
 
 /// What's read again on a buffer's word.

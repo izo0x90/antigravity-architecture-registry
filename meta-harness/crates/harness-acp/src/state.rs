@@ -9,7 +9,7 @@ use agent_client_protocol::schema::v1 as acp;
 use harness_contracts::{
     AdapterEvent, ApprovalOption, CatalogUpdate, ContentBlock, Failure, ItemBody, ItemId, ItemStatus,
     NativeId, PlanArtifact, PlanBody, PlanId, PlanStatus, Question, RequestId, RequestKind, RequestStatus,
-    RuntimeRequest, SignIn, Thread, ThreadStatus, ToolKind, Turn, TurnId, TurnItem, TurnStatus, Usage,
+    RuntimeRequest, SignIn, Thread, ThreadStatus, ToolKind, Turn, TurnId, TurnInput, TurnItem, TurnStatus, Usage,
 };
 use tokio::sync::broadcast;
 
@@ -26,9 +26,11 @@ pub struct SessionState {
     item_index: HashMap<ItemId, usize>,
     /// Native tool call id -> item.
     tool_items: HashMap<String, ItemId>,
-    /// Item currently receiving streamed text, closed by any other item kind.
-    open_message: Option<ItemId>,
-    open_reasoning: Option<ItemId>,
+    /// Items receiving streamed text (a message, reasoning), by whose
+    /// they are (none: the agent's own; a sub-agent's call's item): each
+    /// sender's closed by anything else it sends, the others' left open.
+    open_message: HashMap<Option<ItemId>, ItemId>,
+    open_reasoning: HashMap<Option<ItemId>, ItemId>,
     requests: Vec<RuntimeRequest>,
     plan: Option<PlanArtifact>,
     usage: Option<Usage>,
@@ -45,8 +47,10 @@ pub struct SessionState {
     /// in (its end ends that one).
     continues: HashMap<TurnId, TurnId>,
     /// Where an update's `_meta` names the tool call whose sub-agent sent
-    /// it (a JSON pointer, its pack's); the item of the call whose
-    /// sub-agent sent the update being applied (none: the agent's own).
+    /// it (a JSON pointer, its pack's); whose the item being made is: the
+    /// call whose sub-agent sent the update being applied, or a request's
+    /// call's (none: the agent's own, and what isn't an update: your
+    /// messages).
     parent_call: Option<String>,
     parent: Option<ItemId>,
     events: broadcast::Sender<AdapterEvent>,
@@ -63,8 +67,8 @@ impl SessionState {
             items: Vec::new(),
             item_index: HashMap::new(),
             tool_items: HashMap::new(),
-            open_message: None,
-            open_reasoning: None,
+            open_message: HashMap::new(),
+            open_reasoning: HashMap::new(),
             requests: Vec::new(),
             plan: None,
             usage: None,
@@ -149,17 +153,17 @@ impl SessionState {
         self.running.front()
     }
 
-    /// A turn for `prompt`: running if none is, else queued behind those
-    /// that are. Its message is in it either way.
-    pub fn begin_turn(&mut self, prompt: &str) -> TurnId {
+    /// A turn for `input`: running if none is, else queued behind those
+    /// that are. Its message is in it either way (as typed, when it was).
+    pub fn begin_turn(&mut self, input: &TurnInput) -> TurnId {
         let starts = self.running.is_empty();
         if starts {
-            self.close_streams();
+            self.close_all_streams();
             self.replay_turn = None;
         }
         let turn_id = self.start_turn_record(if starts { TurnStatus::Running } else { TurnStatus::Queued });
         self.running.push_back(turn_id.clone());
-        self.push_item_in(turn_id.clone(), ItemBody::UserMessage { text: prompt.to_owned(), typed: None }, ItemStatus::Completed, None, None);
+        self.push_item_in(turn_id.clone(), ItemBody::UserMessage { text: input.text.clone(), typed: input.typed.clone() }, ItemStatus::Completed, None, None);
         if starts {
             self.set_thread(|t| t.status = ThreadStatus::Running);
         }
@@ -168,10 +172,10 @@ impl SessionState {
 
     /// A message added to the running turn (steering), and its item; none
     /// running: None. It's in that turn until the agent takes it (`steered`).
-    pub fn inject(&mut self, text: &str) -> Option<(TurnId, ItemId)> {
+    pub fn inject(&mut self, input: &TurnInput) -> Option<(TurnId, ItemId)> {
         let turn_id = self.running.front()?.clone();
-        self.close_streams();
-        let item = self.push_item_in(turn_id.clone(), ItemBody::UserMessage { text: text.to_owned(), typed: None }, ItemStatus::Completed, None, None);
+        self.close_all_streams();
+        let item = self.push_item_in(turn_id.clone(), ItemBody::UserMessage { text: input.text.clone(), typed: input.typed.clone() }, ItemStatus::Completed, None, None);
         Some((turn_id, item))
     }
 
@@ -233,7 +237,7 @@ impl SessionState {
         self.running.remove(at);
         let mut cancelled = Vec::new();
         if at == 0 {
-            self.close_streams();
+            self.close_all_streams();
             cancelled = self.requests.iter().filter(|r| r.status == RequestStatus::Pending && r.turn_id.as_ref().is_some_and(|t| chain.contains(t))).map(|r| r.id.clone()).collect();
             for id in &cancelled {
                 self.set_request_status(id, RequestStatus::Cancelled);
@@ -341,8 +345,21 @@ impl SessionState {
         }
     }
 
+    /// What the sender of the update being applied was streaming, ended.
     fn close_streams(&mut self) {
-        for id in [self.open_message.take(), self.open_reasoning.take()].into_iter().flatten() {
+        let whose = self.parent.clone();
+        let ended: Vec<ItemId> = [self.open_message.remove(&whose), self.open_reasoning.remove(&whose)].into_iter().flatten().collect();
+        self.end_streamed(ended);
+    }
+
+    /// What every sender was streaming, ended (a turn begins or ends).
+    fn close_all_streams(&mut self) {
+        let ended: Vec<ItemId> = self.open_message.drain().chain(self.open_reasoning.drain()).map(|(_, id)| id).collect();
+        self.end_streamed(ended);
+    }
+
+    fn end_streamed(&mut self, ended: Vec<ItemId>) {
+        for id in ended {
             self.update_item(&id, |item| {
                 item.status = ItemStatus::Completed;
                 match &mut item.body {
@@ -368,12 +385,13 @@ impl SessionState {
 
     pub fn apply(&mut self, update: &acp::SessionUpdate) {
         // Whose it is: a sub-agent's (under the call that started it) or
-        // the agent's own. Another's than before ends what was streaming.
-        let parent = self.parent_of(update);
-        if parent != self.parent {
-            self.close_streams();
-            self.parent = parent;
-        }
+        // the agent's own; only while it's applied.
+        self.parent = self.parent_of(update);
+        self.apply_as_sent(update);
+        self.parent = None;
+    }
+
+    fn apply_as_sent(&mut self, update: &acp::SessionUpdate) {
         match update {
             acp::SessionUpdate::UserMessageChunk(chunk) => self.user_chunk(chunk),
             acp::SessionUpdate::AgentMessageChunk(chunk) => self.message_chunk(&chunk.content),
@@ -446,8 +464,8 @@ impl SessionState {
         self.replayed_message = id;
         if let Some(last) = self.items.last().map(|i| i.id.clone())
             && same
-            && self.open_message.is_none()
-            && self.open_reasoning.is_none()
+            && self.open_message.is_empty()
+            && self.open_reasoning.is_empty()
             && matches!(self.items.last().map(|i| &i.body), Some(ItemBody::UserMessage { .. }))
         {
             self.update_item(&last, |item| {
@@ -457,7 +475,7 @@ impl SessionState {
             });
             return;
         }
-        self.close_streams();
+        self.close_all_streams();
         self.replay_turn = None;
         self.push_item(ItemBody::UserMessage { text, typed: None }, ItemStatus::Completed, None, None);
     }
@@ -465,7 +483,7 @@ impl SessionState {
     fn message_chunk(&mut self, content: &acp::ContentBlock) {
         self.close_reasoning();
         let block = convert::content_block(content);
-        match self.open_message.clone() {
+        match self.open_message.get(&self.parent).cloned() {
             Some(id) => self.update_item(&id, |item| {
                 if let ItemBody::AssistantMessage { content, .. } = &mut item.body {
                     append_block(content, block);
@@ -478,7 +496,7 @@ impl SessionState {
                     None,
                     None,
                 );
-                self.open_message = Some(id);
+                self.open_message.insert(self.parent.clone(), id);
             }
         }
     }
@@ -488,7 +506,7 @@ impl SessionState {
             ContentBlock::Text { text } => text,
             _ => return,
         };
-        match self.open_reasoning.clone() {
+        match self.open_reasoning.get(&self.parent).cloned() {
             Some(id) => self.update_item(&id, |item| {
                 if let ItemBody::Reasoning { text: existing, .. } = &mut item.body {
                     existing.push_str(&text);
@@ -496,13 +514,13 @@ impl SessionState {
             }),
             None => {
                 let id = self.push_item(ItemBody::Reasoning { text, streaming: true }, ItemStatus::InProgress, None, None);
-                self.open_reasoning = Some(id);
+                self.open_reasoning.insert(self.parent.clone(), id);
             }
         }
     }
 
     fn close_reasoning(&mut self) {
-        if let Some(id) = self.open_reasoning.take() {
+        if let Some(id) = self.open_reasoning.remove(&self.parent) {
             self.update_item(&id, |item| {
                 item.status = ItemStatus::Completed;
                 if let ItemBody::Reasoning { streaming, .. } = &mut item.body {
@@ -601,8 +619,10 @@ impl SessionState {
     /// Something the agent waits on the user for: about a tool call
     /// (`native_tool_id`), with options to choose or questions to answer.
     pub fn open_request(&mut self, native_tool_id: Option<&str>, kind: RequestKind, title: String, detail: Option<String>, options: Vec<ApprovalOption>, questions: Vec<Question>) -> RequestId {
-        self.close_streams();
         let item_id = native_tool_id.and_then(|id| self.tool_items.get(id).cloned());
+        // Its call's sender's (a sub-agent's request nests where its call is).
+        self.parent = item_id.as_ref().and_then(|id| self.item_index.get(id)).and_then(|&at| self.items[at].parent_id.clone());
+        self.close_streams();
         let request = RuntimeRequest {
             id: RequestId::new(new_id()),
             thread_id: self.thread.id.clone(),
@@ -620,6 +640,7 @@ impl SessionState {
         self.requests.push(request.clone());
         self.emit(AdapterEvent::RequestUpdated { request });
         self.push_item(ItemBody::Request { request_id: id.clone() }, ItemStatus::Pending, None, None);
+        self.parent = None;
         self.set_thread(|t| t.status = ThreadStatus::WaitingForInput);
         id
     }
@@ -715,7 +736,7 @@ mod tests {
     #[test]
     fn a_sub_agents_work_nests_under_the_call_that_started_it() {
         let mut s = nesting(Some("/claudeCode/parentToolUseId"));
-        let turn = s.begin_turn("look around");
+        let turn = s.begin_turn(&TurnInput::of("look around"));
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("Asking a helper. ")));
         s.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("task-1", "Explore the parser")));
         let task = s.tool_items["task-1"].clone();
@@ -738,17 +759,41 @@ mod tests {
         assert_eq!(s.turns.len(), 1, "its prompt isn't a turn");
 
         let mut plain = state();
-        let turn = plain.begin_turn("look around");
+        let turn = plain.begin_turn(&TurnInput::of("look around"));
         plain.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("task-1", "Explore")));
         plain.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("read-1", "Read").meta(by("task-1"))));
         plain.end_turn(&turn, TurnStatus::Completed, None);
         assert!(plain.items.iter().all(|i| i.parent_id.is_none()), "no pointer: nothing nests");
     }
 
+    /// Two senders streaming at once each keep their own message; your
+    /// message added meanwhile is yours (not under a sub-agent's call); a
+    /// request for a sub-agent's call nests where the call is.
+    #[test]
+    fn senders_stream_apart_and_only_their_own_nest() {
+        let mut s = nesting(Some("/claudeCode/parentToolUseId"));
+        let turn = s.begin_turn(&TurnInput::of("look around"));
+        s.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("task-1", "Explore")));
+        let task = s.tool_items["task-1"].clone();
+        for (words, by_it) in [("mine ", false), ("its ", true), ("too", false), ("own", true)] {
+            let chunk = chunk(words);
+            s.apply(&acp::SessionUpdate::AgentMessageChunk(if by_it { chunk.meta(by("task-1")) } else { chunk }));
+        }
+        let said: Vec<(String, Option<&ItemId>)> = s.items.iter().filter(|i| matches!(i.body, ItemBody::AssistantMessage { .. })).map(|i| (i.body.said().unwrap_or_default(), i.parent_id.as_ref())).collect();
+        assert_eq!(said, [("mine too".to_owned(), None), ("its own".to_owned(), Some(&task))], "each sender's text in one message of its own");
+        let (_, added) = s.inject(&TurnInput::of("also this")).unwrap();
+        assert_eq!(s.items[s.item_index[&added]].parent_id, None, "your message is yours");
+        s.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("run-1", "Run tests").meta(by("task-1"))));
+        let request = s.open_request(Some("run-1"), RequestKind::Question, "Run them?".into(), None, Vec::new(), Vec::new());
+        let item = s.items.iter().find(|i| matches!(&i.body, ItemBody::Request { request_id } if *request_id == request)).unwrap();
+        assert_eq!(item.parent_id.as_ref(), Some(&task), "the request where its call is");
+        s.end_turn(&turn, TurnStatus::Completed, None);
+    }
+
     #[test]
     fn live_prompt_ignores_user_echo_and_closes_streams_on_end() {
         let mut s = state();
-        let turn = s.begin_turn("hello");
+        let turn = s.begin_turn(&TurnInput::of("hello"));
         s.apply(&acp::SessionUpdate::UserMessageChunk(chunk("hello")));
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("hi")));
         s.end_turn(&turn, TurnStatus::Completed, None);
@@ -760,8 +805,8 @@ mod tests {
     #[test]
     fn turns_sent_while_one_runs_wait_and_start_in_order() {
         let mut s = state();
-        let first = s.begin_turn("one");
-        let second = s.begin_turn("two");
+        let first = s.begin_turn(&TurnInput::of("one"));
+        let second = s.begin_turn(&TurnInput::of("two"));
         assert_eq!(s.turns[1].status, TurnStatus::Queued);
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("for one")));
         let ask = s.open_request(None, RequestKind::Approval { action: harness_contracts::ToolAction::Tool }, "ok?".into(), None, Vec::new(), Vec::new());
@@ -778,10 +823,10 @@ mod tests {
     #[test]
     fn a_message_added_to_the_running_turn_lands_in_it() {
         let mut s = state();
-        assert_eq!(s.inject("late"), None, "nothing running");
-        let turn = s.begin_turn("start");
+        assert_eq!(s.inject(&TurnInput::of("late")), None, "nothing running");
+        let turn = s.begin_turn(&TurnInput::of("start"));
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("working")));
-        assert_eq!(s.inject("also this").map(|(t, _)| t), Some(turn));
+        assert_eq!(s.inject(&TurnInput::of("also this")).map(|(t, _)| t), Some(turn));
         assert!(matches!(&s.items[1].body, ItemBody::AssistantMessage { streaming: false, .. }), "what streamed before it is done");
         assert!(matches!(&s.items[2].body, ItemBody::UserMessage { text, .. } if text == "also this"));
     }
@@ -804,10 +849,10 @@ mod tests {
     #[test]
     fn a_message_the_agent_took_while_it_ran_starts_the_next_turn_as_a_replay_numbers_it() {
         let mut s = state();
-        let first = s.begin_turn("start");
+        let first = s.begin_turn(&TurnInput::of("start"));
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("working")));
-        let queued = s.begin_turn("later");
-        let (_, item) = s.inject("also this").unwrap();
+        let queued = s.begin_turn(&TurnInput::of("later"));
+        let (_, item) = s.inject(&TurnInput::of("also this")).unwrap();
         // Before the agent says it took it: still the turn that runs.
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("still on the first")));
         let ask = s.open_request(None, RequestKind::Approval { action: harness_contracts::ToolAction::Tool }, "ok?".into(), None, Vec::new(), Vec::new());

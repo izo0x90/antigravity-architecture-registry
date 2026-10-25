@@ -10,7 +10,7 @@
 
 mod draw;
 mod lines;
-mod links;
+use crate::places as links;
 mod view;
 
 use std::collections::BTreeMap;
@@ -349,7 +349,7 @@ impl TerminalBuffer {
         let line = self.cursor?;
         let text = self.lines.text(line)?;
         let folder = self.info().map(|t| t.folder).unwrap_or_default();
-        let found = links::links(&text, &folder);
+        let found = links::links(&text, &folder, links::Names::Bare);
         match self.cursor_col {
             Some(col) => found.into_iter().find(|l| col >= l.col && col < l.col + l.len),
             None => found.into_iter().next(),

@@ -36,14 +36,25 @@ pub struct SessionManager {
     typed: Arc<OnceLock<Typed>>,
 }
 
-/// `event`, a message of the user's sent with what it links given what
-/// was typed for it (`typed`), when that was kept.
-fn with_typed(mut event: AdapterEvent, typed: Option<&Typed>) -> AdapterEvent {
-    if let (AdapterEvent::ItemUpdated { item }, Some(typed)) = (&mut event, typed)
-        && let ItemBody::UserMessage { text, typed: unknown @ None } = &mut item.body
-        && text.contains(HANDED_ON)
+/// The text sent of `event`'s message of the user's, when it was sent with
+/// what it links and what was typed for it isn't with it (a replayed
+/// history's): what was typed is to be looked up by it.
+fn typed_wanted(event: &AdapterEvent) -> Option<String> {
+    match event {
+        AdapterEvent::ItemUpdated { item } => match &item.body {
+            ItemBody::UserMessage { text, typed: None } if text.contains(HANDED_ON) => Some(text.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `event`'s message of the user's with what was typed for it.
+fn with_typed(mut event: AdapterEvent, found: Option<Message>) -> AdapterEvent {
+    if let AdapterEvent::ItemUpdated { item } = &mut event
+        && let ItemBody::UserMessage { typed, .. } = &mut item.body
     {
-        *unknown = typed(text);
+        *typed = found;
     }
     event
 }
@@ -79,7 +90,15 @@ impl SessionManager {
                 if let AdapterEvent::CatalogUpdated { update } = &event {
                     instance.apply_catalog(update);
                 }
-                hub.publish(ClientEvent::Session { event: with_typed(event, typed.get()) });
+                // (What was typed, read off the runtime's threads.)
+                let event = match typed_wanted(&event).zip(typed.get().cloned()) {
+                    Some((sent, read)) => {
+                        let found = tokio::task::spawn_blocking(move || read(&sent)).await.ok().flatten();
+                        with_typed(event, found)
+                    }
+                    None => event,
+                };
+                hub.publish(ClientEvent::Session { event });
             }
             hub.publish(ClientEvent::ThreadClosed { thread_id: closed_id });
         });
@@ -131,19 +150,19 @@ mod tests {
         }
     }
 
-    /// A message sent with what it links gets what was typed for it, when
-    /// that was kept; one without isn't looked up.
+    /// A replayed message sent with what it links is looked up by its text
+    /// (one with what was typed, or a plain one, isn't); it gets what's
+    /// found.
     #[test]
-    fn a_message_sent_with_its_links_gets_what_was_typed() {
-        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let seen = asked.clone();
-        let typed: Typed = Arc::new(move |sent: &str| {
-            seen.lock().unwrap().push(sent.to_owned());
-            sent.starts_with("look").then(|| Message::text("look"))
-        });
+    fn a_replayed_message_sent_with_its_links_gets_what_was_typed() {
         let sent = format!("look{HANDED_ON}\n\n#x\n- a thing");
-        assert_eq!(typed_of(&with_typed(said(&sent), Some(&typed))), Some(&Message::text("look")));
-        assert_eq!(typed_of(&with_typed(said("plain"), Some(&typed))), None);
-        assert_eq!(*asked.lock().unwrap(), [sent], "a plain message isn't looked up");
+        assert_eq!(typed_wanted(&said(&sent)), Some(sent.clone()));
+        assert_eq!(typed_wanted(&said("plain")), None);
+        let mut known = said(&sent);
+        if let AdapterEvent::ItemUpdated { item } = &mut known {
+            item.body = ItemBody::UserMessage { text: sent.clone(), typed: Some(Message::text("look")) };
+        }
+        assert_eq!(typed_wanted(&known), None, "live: what was typed came with it");
+        assert_eq!(typed_of(&with_typed(said(&sent), Some(Message::text("look")))), Some(&Message::text("look")));
     }
 }

@@ -934,10 +934,11 @@ impl Pack {
     }
 
     /// The compiled pack (this one or a dialect) a code block's fence
-    /// names: by the language's name, or one of its extensions.
-    pub fn for_fence(&self, fence: &str) -> Option<&Pack> {
+    /// names (in lower case): by the language's name, or one of its
+    /// extensions.
+    fn for_fence(&self, fence: &str) -> Option<&Pack> {
         let names = |p: &Pack| p.name() == fence || p.spec.language.extensions.iter().any(|x| x == fence);
-        if names(self) { Some(self) } else { self.dialects.iter().find(|d| d.spec.language.extensions.iter().any(|x| x == fence)) }
+        std::iter::once(self).chain(&self.dialects).find(|p| names(p))
     }
 
     /// Every definition's type must be known to `types`, and so must the

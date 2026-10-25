@@ -52,7 +52,7 @@ async fn open(mode: RuntimeMode) -> (Box<dyn SessionRuntime>, MockAgent) {
 }
 
 fn say(text: &str) -> TurnInput {
-    TurnInput { text: text.into(), attachments: Vec::new() }
+    TurnInput::of(text)
 }
 
 /// Collects events until `done` matches one (or times out).
@@ -153,6 +153,36 @@ async fn a_permission_answered_once_lets_the_agent_go_on() {
     assert!(said(&seen, &turn).iter().any(|t| t.contains("permission: allow-once")), "{:?}", said(&seen, &turn));
     let again = session.respond(&request.id, RequestResponse { option_id: Some(once.id.clone()), ..Default::default() }).await;
     assert!(again.is_err(), "an answered request can't be answered again");
+}
+
+/// Two asked at once (two sub-agents in parallel) are both waiting, and
+/// each answer goes to its own, whichever is answered first.
+#[tokio::test]
+async fn two_permissions_asked_at_once_are_each_answered() {
+    let (session, agent) = open(RuntimeMode::ApprovalRequired).await;
+    let mut events = session.events();
+    let mut seen = Vec::new();
+    session.start_turn(say("[two-asks]")).await.unwrap();
+    let both_waiting = |seen: &[AdapterEvent]| {
+        let mut waiting = std::collections::BTreeMap::new();
+        for e in seen {
+            if let AdapterEvent::RequestUpdated { request } = e {
+                waiting.insert(request.id.clone(), request.status == RequestStatus::Pending);
+            }
+        }
+        waiting.values().filter(|w| **w).count() == 2
+    };
+    while !both_waiting(&seen) {
+        collect_until(&mut events, &mut seen, pending_request).await;
+    }
+    let asked: Vec<harness_contracts::RuntimeRequest> = seen.iter().filter_map(|e| if let AdapterEvent::RequestUpdated { request } = e { Some(request.clone()) } else { None }).collect();
+    let titled = |t: &str| asked.iter().find(|r| r.title.contains(t)).cloned().unwrap_or_else(|| panic!("{t}: {asked:?}"));
+    let (a, b) = (titled("a.rs"), titled("b.rs"));
+    let option = |r: &harness_contracts::RuntimeRequest, d: ApprovalDecision| r.options.iter().find(|o| o.decision == d).unwrap().id.clone();
+    session.respond(&b.id, RequestResponse { option_id: Some(option(&b, ApprovalDecision::Decline)), ..Default::default() }).await.unwrap();
+    session.respond(&a.id, RequestResponse { option_id: Some(option(&a, ApprovalDecision::Accept)), ..Default::default() }).await.unwrap();
+    collect_until(&mut events, &mut seen, turn_ended(1)).await;
+    assert_eq!(agent.seen().permission.as_deref(), Some("a: allow-once, b: reject"));
 }
 
 #[tokio::test]

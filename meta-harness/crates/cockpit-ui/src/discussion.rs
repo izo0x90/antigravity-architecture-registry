@@ -203,7 +203,7 @@ impl crate::buffer::Buffer for DiscussionView {
             stop(ui, 0, &mut spots, &mut |ui| self.draw_on(ui, &d));
             ui.add_space(look.space_s);
             for (i, said) in d.said.iter().enumerate() {
-                stop(ui, i + 1, &mut spots, &mut |ui| { messages.draw(ui, &crate::conversation::said(&d, said)); });
+                stop(ui, i + 1, &mut spots, &mut |ui| { messages.draw(ui, egui::Id::new((&d.id, i)), &crate::conversation::said(&d, said)); });
             }
         });
         for s in &spots {
@@ -211,6 +211,7 @@ impl crate::buffer::Buffer for DiscussionView {
         }
         self.scrolling.drawn(&output);
         self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
+        self.asks.extend(messages.colours_wanted());
         self.messages = messages;
         if d.status != DiscussionStatus::Settled || self.purpose == Writing::Reopen {
             ui.label(RichText::new(self.box_says(&d)).size(look.text_small).color(colors().muted));

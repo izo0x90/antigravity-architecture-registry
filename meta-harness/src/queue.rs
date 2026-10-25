@@ -63,7 +63,7 @@ impl JobRunner for SessionRunner {
             let mut events = session.events();
             // A brief is plain text (agents write what it's made of: a plan's
             // contract); nothing in it is a link.
-            let turn = session.start_turn(TurnInput { text: ticket.brief.clone(), attachments: Vec::new() }).await.map_err(|e| format!("couldn't start the turn: {e}"))?;
+            let turn = session.start_turn(TurnInput::of(ticket.brief.clone())).await.map_err(|e| format!("couldn't start the turn: {e}"))?;
             while let Some(event) = events.next().await {
                 if let AdapterEvent::TurnUpdated { turn: t } = event
                     && t.id == turn

@@ -207,4 +207,3 @@ mod tests {
         assert_eq!(stop_reason(&acp::StopReason::Refusal), TurnStatus::Failed);
     }
 }
-

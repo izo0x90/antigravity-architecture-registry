@@ -1060,6 +1060,7 @@ dependencies = [
  "log",
  "petgraph 0.6.5",
  "proptest",
+ "pulldown-cmark",
  "serde",
  "serde_json",
  "similar",

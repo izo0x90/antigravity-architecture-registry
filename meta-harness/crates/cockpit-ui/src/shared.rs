@@ -41,6 +41,24 @@ impl<T: PartialEq> Kept<T> {
     }
 }
 
+/// The colour each link is drawn in: a tag's own (the shell says, from
+/// the tags), anything else the accent.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LinkColours(std::collections::BTreeMap<harness_contracts::TagId, egui::Color32>);
+
+impl LinkColours {
+    pub fn new(tags: std::collections::BTreeMap<harness_contracts::TagId, egui::Color32>) -> Self {
+        Self(tags)
+    }
+
+    pub fn of(&self, to: &harness_contracts::Linked) -> egui::Color32 {
+        match to {
+            harness_contracts::Linked::Tag { tag } => self.0.get(tag).copied().unwrap_or(crate::theme::colors().accent),
+            harness_contracts::Linked::Thing { .. } => crate::theme::colors().accent,
+        }
+    }
+}
+
 /// A service the desk keeps (the agents, the terminals), held by the
 /// shell: it alone changes it; buffers get a `Reader`.
 pub struct Held<T>(Rc<RefCell<T>>);
@@ -154,6 +172,8 @@ pub struct Shared {
     pub drafts: Held<crate::drafts::Drafts>,
     /// Code blocks' colours, as the server reads them.
     pub highlighter: Held<crate::highlighter::Highlighter>,
+    /// Each link's colour (a tag's own), as the shell says from the tags.
+    pub link_colours: Kept<LinkColours>,
     /// The desk's server (`here`: home's own).
     pub server: String,
     /// Every server's open notifications, in the order they're gone through.

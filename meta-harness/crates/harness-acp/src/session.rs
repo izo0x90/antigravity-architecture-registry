@@ -183,7 +183,7 @@ impl SessionRuntime for AcpSession {
     async fn start_turn(&self, input: TurnInput) -> Result<TurnId> {
         let (turn, now) = {
             let mut state = lock(&self.shared().state);
-            let turn = state.begin_turn(&input.text);
+            let turn = state.begin_turn(&input);
             let now = self.declared.queueing || state.active_turn() == Some(&turn);
             (turn, now)
         };
@@ -200,7 +200,7 @@ impl SessionRuntime for AcpSession {
             return Err(HarnessError::Unsupported { operation: "adding to a running turn" });
         }
         // In the turn before it's sent: what the agent says to it comes after.
-        let Some((turn, item)) = lock(&self.shared().state).inject(&input.text) else {
+        let Some((turn, item)) = lock(&self.shared().state).inject(&input) else {
             return self.start_turn(input).await;
         };
         let params = serde_json::json!({

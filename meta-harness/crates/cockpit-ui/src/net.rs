@@ -823,10 +823,12 @@ impl NetClient {
         self.call("GET", &format!("/api/code/analysis?path={}", urlencoding::encode(path)), None, ctx, on_done);
     }
 
-    /// A code block's colours, read as the language `fence` names (none: no
-    /// language pack knows it).
-    pub fn code_highlight(&self, fence: &str, text: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<Option<arch_graph::code::Highlights>>) + Send + 'static) {
-        self.call("POST", "/api/code/highlight", Some(serde_json::json!({ "language": fence, "text": text })), ctx, on_done);
+    /// Code blocks' colours (each its fence and text), each read as the
+    /// language its fence names (none: no language pack knows it), in the
+    /// order asked.
+    pub fn code_highlight(&self, blocks: &[(String, String)], ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<Option<arch_graph::code::Highlights>>>) + Send + 'static) {
+        let blocks: Vec<serde_json::Value> = blocks.iter().map(|(fence, text)| serde_json::json!({ "language": fence, "text": text })).collect();
+        self.call("POST", "/api/code/highlight", Some(serde_json::json!({ "blocks": blocks })), ctx, on_done);
     }
 
     /// The views' settings: descriptions, depths and the sizes trees are laid out with.

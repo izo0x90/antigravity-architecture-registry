@@ -139,7 +139,7 @@ impl TerminalBuffer {
         for l in rows(top) {
             let text = self.lines.text(l).unwrap_or_default();
             let y = grid_rect.top() + (l - top) as f32 * row_h;
-            for link in super::links::links(&text, &folder) {
+            for link in crate::places::links(&text, &folder, crate::places::Names::Bare) {
                 let at = Rect::from_min_size(pos2(grid_rect.left() + f32::from(link.col) * char_w, y), vec2(f32::from(link.len) * char_w, row_h));
                 if at.intersects(grid_rect) {
                     spots.push(crate::nav::Spot { key: format!("{l}:{}", link.col), rect: at });

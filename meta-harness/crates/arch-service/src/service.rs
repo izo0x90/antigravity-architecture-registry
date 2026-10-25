@@ -404,12 +404,6 @@ impl ArchitectureService {
     /// same text (by its content hash), its colours and what each named place
     /// refers to, from what's kept. A file whose text isn't what was analysed
     /// (changed since, or never read) comes with its text only, marked stale.
-    /// A code block's colours: `text` read as the language `fence` names
-    /// (none: no language pack knows it, or it has no highlight query).
-    pub fn highlight(&self, fence: &str, text: &str) -> Option<arch_graph::code::Highlights> {
-        code_analyzer::highlight::of_text(self.core.packs.for_fence(fence)?, text)
-    }
-
     pub fn code_analysis(&self, file: &str) -> Result<arch_graph::code::CodeAnalysis, ServiceError> {
         self.timed("code", file.to_owned(), |t| {
             let path = RepoPath::new(file).map_err(|e| ServiceError::InvalidOp(e.to_string()))?;
@@ -447,6 +441,12 @@ impl ArchitectureService {
             t.size(out.occurrences.len(), "occurrences");
             Ok(out)
         })
+    }
+
+    /// A code block's colours: `text` read as the language `fence` names
+    /// (none: no language pack knows it, or it has no highlight query).
+    pub fn highlight(&self, fence: &str, text: &str) -> Option<arch_graph::code::Highlights> {
+        code_analyzer::highlight::of_text(self.core.packs.for_fence(fence)?, text)
     }
 
     /// Waits up to `timeout` for the languages' servers to be ready and to

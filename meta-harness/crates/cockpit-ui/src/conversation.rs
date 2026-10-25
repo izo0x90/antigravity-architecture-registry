@@ -48,12 +48,17 @@ impl<'a> Message<'a> {
     }
 }
 
-/// What a view draws messages with: the markdown's cache, and code
-/// blocks' colours (the desk's, read).
+/// What a view draws messages with: the markdown's cache, code blocks'
+/// colours (the desk's, read), and each link's colour (the shell's).
 #[derive(Default)]
 pub struct Messages {
     markdown: CommonMarkCache,
     code: crate::shared::Reader<crate::highlighter::Highlighter>,
+    /// The code blocks drawn whose colours aren't known yet (each its fence
+    /// and text), till the view asks for them.
+    wanted: Vec<(String, String)>,
+    links: crate::shared::LinkColours,
+    seen_links: u64,
 }
 
 /// Where a message's parts were drawn: its code blocks, its links' chips,
@@ -65,29 +70,39 @@ pub struct Drawn {
 }
 
 impl Messages {
-    /// The desk's code colours, read from now on.
+    /// The desk's code colours read from now on; the links' colours when
+    /// they changed.
     pub fn follow(&mut self, shared: &crate::shared::Shared) {
         self.code.follow(&shared.highlighter);
+        if let Some(links) = shared.link_colours.since(&mut self.seen_links) {
+            self.links.clone_from(links);
+        }
     }
 
-    /// Draws `m` (see `message`); its links as chips in the links' colour
-    /// (a tag's own colour is the shell's to say, as tags are).
-    pub fn draw(&mut self, ui: &mut egui::Ui, m: &Message<'_>) -> Drawn {
-        let chips: Vec<Chip> = m.links.iter().map(|link| Chip { link: link.clone(), colour: colors().accent }).collect();
-        message(ui, &mut self.markdown, &self.code.get(), &chips, m)
+    /// Draws `m` (see `message`; `salt`: which message it is), its links
+    /// as chips in their colours.
+    pub fn draw(&mut self, ui: &mut egui::Ui, salt: egui::Id, m: &Message<'_>) -> Drawn {
+        let chips: Vec<Chip> = m.links.iter().map(|link| Chip { link: link.clone(), colour: self.links.of(&link.to) }).collect();
+        message(ui, &mut self.markdown, &self.code.get(), &mut self.wanted, salt, &chips, m)
     }
 
-    /// Draws markdown `text`, its parts as a message's are: where its code
-    /// blocks were drawn.
-    pub fn markdown(&mut self, ui: &mut egui::Ui, text: &str) -> Vec<Rect> {
-        markdown(ui, &mut self.markdown, &self.code.get(), text)
+    /// Draws markdown `text` (`salt`: what it is), its parts as a
+    /// message's are: where its code blocks were drawn.
+    pub fn markdown(&mut self, ui: &mut egui::Ui, salt: egui::Id, text: &str) -> Vec<Rect> {
+        markdown(ui, &mut self.markdown, &self.code.get(), &mut self.wanted, salt, text)
+    }
+
+    /// What the code blocks it drew need (colours not known yet), as an
+    /// ask: the view pushes it once it's drawn.
+    pub fn colours_wanted(&mut self) -> Option<crate::nav::Ask> {
+        (!self.wanted.is_empty()).then(|| crate::nav::Ask::Colour(std::mem::take(&mut self.wanted)))
     }
 }
 
 /// Draws `m`: who said it (and what, and when) above, the text (its links
 /// as `chips`), what's under it. Its code blocks coloured as `code` has
 /// them.
-fn message(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highlighter::Highlighter, chips: &[Chip], m: &Message<'_>) -> Drawn {
+fn message(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highlighter::Highlighter, wanted: &mut Vec<(String, String)>, salt: egui::Id, chips: &[Chip], m: &Message<'_>) -> Drawn {
     let look = crate::theme::look();
     let mut drawn = Drawn::default();
     let mut head = who(m.by).to_owned();
@@ -100,7 +115,7 @@ fn message(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highlig
     ui.label(RichText::new(head).size(look.text_small).color(m.tone.unwrap_or(colors().muted)));
     if !m.text.is_empty() {
         if m.markdown {
-            drawn.codes = markdown(ui, cache, code, m.text);
+            drawn.codes = markdown(ui, cache, code, wanted, salt, m.text);
         } else if chips.is_empty() {
             let text = RichText::new(m.text).size(look.text_body).color(colors().text_strong);
             ui.label(if m.by == harness_contracts::USER { text.strong() } else { text });
@@ -117,33 +132,45 @@ fn message(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highlig
     drawn
 }
 
-/// Markdown `text`, part by part. Its words wrap in the width it's given;
-/// a table's rows and a code block's lines can't, so each scrolls
-/// sideways in a box of that width, never widening what holds it.
-fn markdown(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highlighter::Highlighter, text: &str) -> Vec<Rect> {
+/// Markdown `text`, part by part (`salt`: what it is, so each part's box
+/// is itself from frame to frame). Its words wrap in the width it's given;
+/// a table's rows and a code block's lines can't, so each scrolls sideways
+/// in a box of that width, never widening what holds it. Code blocks not
+/// known yet are asked for (`wanted`); where they were drawn.
+fn markdown(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highlighter::Highlighter, wanted: &mut Vec<(String, String)>, salt: egui::Id, text: &str) -> Vec<Rect> {
     let mut drawn = Vec::new();
-    for part in parts(text) {
+    for (n, part) in parts(text).into_iter().enumerate() {
+        let id = salt.with(n);
         match part {
             Part::Words(words) => {
                 CommonMarkViewer::new().show(ui, cache, words);
             }
             Part::Table(table) => {
-                egui::ScrollArea::horizontal().id_salt(ui.next_auto_id()).auto_shrink([false, true]).show(ui, |ui| {
+                egui::ScrollArea::horizontal().id_salt(id).auto_shrink([false, true]).show(ui, |ui| {
                     CommonMarkViewer::new().show(ui, cache, table);
                 });
             }
-            Part::Code { fence, code: text } => drawn.push(code_block(ui, code, fence, text)),
+            Part::Code { fence, code: text, closed } => drawn.push(code_block(ui, code, wanted, id, fence, &text, closed)),
         }
     }
     drawn
 }
 
 /// A code block: its text in the code's face, coloured as the language its
-/// fence names (as the code view colours a file), in a box of the width
-/// it's given. Where it was drawn.
-fn code_block(ui: &mut egui::Ui, code: &crate::highlighter::Highlighter, fence: &str, text: &str) -> Rect {
+/// fence names (as the code view colours a file; one still being written,
+/// `closed` not, plain till it is: asked for once whole), in a box of the
+/// width it's given. Where it was drawn.
+fn code_block(ui: &mut egui::Ui, code: &crate::highlighter::Highlighter, wanted: &mut Vec<(String, String)>, id: egui::Id, fence: &str, text: &str, closed: bool) -> Rect {
     let look = crate::theme::look();
-    let colours = code.colours(fence, text);
+    let colours = match code.colours(fence, text) {
+        crate::highlighter::Colours::Known(colours) => colours,
+        crate::highlighter::Colours::Unknown { asked } => {
+            if closed && !asked {
+                wanted.push((fence.to_owned(), text.to_owned()));
+            }
+            None
+        }
+    };
     let font = egui::FontId::monospace(look.text_body);
     let format = |color: Color32| egui::text::TextFormat { font_id: font.clone(), color, ..Default::default() };
     let job = crate::highlighter::coloured(text, 0..text.len(), colours.as_deref(), |capture| code.colour(capture), colors().text, format);
@@ -153,7 +180,7 @@ fn code_block(ui: &mut egui::Ui, code: &crate::highlighter::Highlighter, fence: 
         .inner_margin(crate::theme::margin(look.space_sm))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            egui::ScrollArea::horizontal().id_salt(ui.next_auto_id()).auto_shrink([false, true]).show(ui, |ui| {
+            egui::ScrollArea::horizontal().id_salt(id).auto_shrink([false, true]).show(ui, |ui| {
                 ui.add(egui::Label::new(job).extend());
             });
         })
@@ -162,142 +189,84 @@ fn code_block(ui: &mut egui::Ui, code: &crate::highlighter::Highlighter, fence: 
 }
 
 /// A part of a message's markdown: words, a table, a code block (the
-/// language its fence names, its text).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// language its fence names, its text, whether its closing fence has come).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Part<'a> {
     Words(&'a str),
     Table(&'a str),
-    Code { fence: &'a str, code: &'a str },
+    Code { fence: &'a str, code: String, closed: bool },
 }
 
-/// Markdown cut into its parts, in order: its fenced code blocks (three
-/// or more backticks or tildes; one not closed yet runs to the end, as one
-/// being written does), and around them its tables and words.
-pub fn parts(text: &str) -> Vec<Part<'_>> {
+/// Markdown cut into its parts, in order, as CommonMark reads it: its code
+/// blocks and tables at the top (not inside a list or a quote: those stay
+/// with their words), and the words between them.
+pub fn parts<'a>(text: &'a str) -> Vec<Part<'a>> {
+    use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
     let mut out = Vec::new();
-    // (Where the words before the next block start; where a line starts.)
-    let (mut words, mut at) = (0, 0);
-    let mut lines = text.split_inclusive('\n');
-    while let Some(line) = lines.next() {
-        let start = at;
-        at += line.len();
-        let Some((mark, fence)) = opening(line) else { continue };
-        out.extend(tables_apart(&text[words..start]));
-        // Its lines, to the one closing it (or the end).
-        let (body, mut end) = (at, text.len());
-        for line in lines.by_ref() {
-            let line_start = at;
-            at += line.len();
-            if closes(line, mark) {
-                end = line_start;
-                break;
+    // (How deep in containers; where the words not cut out yet start; the
+    // code block being read: its fence's words, its start, its text.)
+    let mut depth = 0usize;
+    let mut words = 0;
+    let mut code: Option<(&str, usize, String)> = None;
+    let push_words = |out: &mut Vec<Part<'a>>, from: usize, to: usize| {
+        if !text[from..to].trim().is_empty() {
+            out.push(Part::Words(&text[from..to]));
+        }
+    };
+    for (event, range) in Parser::new_ext(text, Options::ENABLE_TABLES).into_offset_iter() {
+        match event {
+            Event::Start(Tag::CodeBlock(kind)) if depth == 0 => {
+                push_words(&mut out, words, range.start);
+                let fence = match kind {
+                    CodeBlockKind::Fenced(_) => fence_words(&text[range.clone()]),
+                    CodeBlockKind::Indented => "",
+                };
+                code = Some((fence, range.start, String::new()));
             }
-        }
-        out.push(Part::Code { fence, code: text[body..end].trim_end_matches(['\n', '\r']) });
-        words = at;
-    }
-    out.extend(tables_apart(&text[words..]));
-    out
-}
-
-/// A fence opening a code block: its mark (backticks or tildes, as many as
-/// are written) and the language it names.
-fn opening(line: &str) -> Option<(&str, &str)> {
-    let trimmed = line.trim_start_matches(' ');
-    if line.len() - trimmed.len() > 3 {
-        return None;
-    }
-    let mark_char = trimmed.chars().next().filter(|c| *c == '`' || *c == '~')?;
-    let mark_len = trimmed.chars().take_while(|c| *c == mark_char).count();
-    if mark_len < 3 {
-        return None;
-    }
-    let (mark, info) = trimmed.split_at(mark_len);
-    // (A backtick fence's words can't hold a backtick.)
-    if mark_char == '`' && info.contains('`') {
-        return None;
-    }
-    Some((mark, info.split_whitespace().next().unwrap_or("")))
-}
-
-/// Whether `line` closes a block opened with `mark`: the same character,
-/// at least as many, nothing after, at most three spaces in.
-fn closes(line: &str, mark: &str) -> bool {
-    let trimmed = line.trim();
-    let c = mark.as_bytes()[0] as char;
-    trimmed.len() >= mark.len() && trimmed.chars().all(|x| x == c) && line.len() - line.trim_start_matches(' ').len() <= 3
-}
-
-/// The most places a message's words are read for.
-const PLACES_MOST: usize = 12;
-
-/// The files a message's words name, in order, each once: a path (a
-/// folder in it, or a line after it: `src/a.rs`, `lib.rs:12`, `a.rs:12:5`
-/// is line 12), not a web address or a version number.
-pub fn places(text: &str) -> Vec<(String, Option<usize>)> {
-    let mut out: Vec<(String, Option<usize>)> = Vec::new();
-    let apart = |c: char| c.is_whitespace() || matches!(c, '`' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\'' | '<' | '>' | ',' | ';' | '*');
-    for word in text.split(apart) {
-        if out.len() == PLACES_MOST {
-            break;
-        }
-        if word.contains("://") {
-            continue;
-        }
-        let word = word.trim_end_matches(['.', ':', '!', '?']);
-        let (path, line) = match word.split_once(':') {
-            Some((path, rest)) => {
-                let digits = &rest[..rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len())];
-                match digits.parse::<usize>() {
-                    Ok(line) if line > 0 => (path, Some(line)),
-                    // (Something after a colon that isn't a line: not a place.)
-                    _ => continue,
+            Event::Text(t) if code.is_some() => {
+                if let Some((_, _, body)) = code.as_mut() {
+                    body.push_str(&t);
                 }
             }
-            None => (word, None),
-        };
-        let path = path.strip_prefix("./").unwrap_or(path);
-        if is_path(path) && (path.contains('/') || line.is_some()) && !out.iter().any(|(p, l)| p == path && *l == line) {
-            out.push((path.to_owned(), line));
+            Event::End(TagEnd::CodeBlock) if depth == 0 => {
+                if let Some((fence, start, body)) = code.take() {
+                    let closed = closes(&text[start..range.end]);
+                    out.push(Part::Code { fence, code: body.trim_end_matches(['\n', '\r']).to_owned(), closed });
+                }
+                words = range.end;
+            }
+            Event::Start(Tag::Table(_)) if depth == 0 => {
+                push_words(&mut out, words, range.start);
+                out.push(Part::Table(&text[range.clone()]));
+                words = range.end;
+                depth += 1;
+            }
+            Event::End(TagEnd::Table) => depth -= 1,
+            Event::Start(Tag::List(_) | Tag::BlockQuote(_) | Tag::FootnoteDefinition(_)) => depth += 1,
+            Event::End(TagEnd::List(_) | TagEnd::BlockQuote(_) | TagEnd::FootnoteDefinition) => depth -= 1,
+            _ => {}
         }
     }
+    push_words(&mut out, words.min(text.len()), text.len());
     out
 }
 
-/// Whether `word` reads as a file's path: path characters, a name with an
-/// extension (letters in it) last.
-fn is_path(word: &str) -> bool {
-    let name = word.rsplit('/').next().unwrap_or(word);
-    let Some((stem, extension)) = name.rsplit_once('.') else { return false };
-    let path_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/');
-    !stem.is_empty() && !word.starts_with('/') && word.chars().all(path_char) && (1..=8).contains(&extension.len()) && extension.chars().all(|c| c.is_ascii_alphanumeric()) && extension.chars().any(|c| c.is_ascii_alphabetic())
+/// The language a fenced code block's opening line names (`text`: the
+/// block as written).
+fn fence_words(text: &str) -> &str {
+    let first = text.lines().next().unwrap_or_default().trim_start();
+    first.trim_start_matches(['`', '~']).split_whitespace().next().unwrap_or("")
 }
 
-/// Markdown cut around its tables (lines of cells, `| … |`, with a
-/// `|---|` line among them), in order.
-fn tables_apart(text: &str) -> Vec<Part<'_>> {
-    // Runs of lines that are rows of cells, or aren't, by where they are.
-    let mut runs: Vec<(usize, usize, bool)> = Vec::new();
-    let mut at = 0;
-    for line in text.split_inclusive('\n') {
-        let row = line.trim_start().starts_with('|');
-        match runs.last_mut() {
-            Some((_, end, rows)) if *rows == row => *end = at + line.len(),
-            _ => runs.push((at, at + line.len(), row)),
-        }
-        at += line.len();
-    }
-    // Rows are a table only with their `|---|` line; else they're text,
-    // joined with the text around them.
-    let mut parts: Vec<(usize, usize, bool)> = Vec::new();
-    for (from, to, rows) in runs {
-        let table = rows && text[from..to].lines().any(|l| l.contains("--"));
-        match parts.last_mut() {
-            Some((_, end, false)) if !table => *end = to,
-            _ => parts.push((from, to, table)),
-        }
-    }
-    parts.into_iter().filter(|(from, to, _)| !text[*from..*to].trim().is_empty()).map(|(from, to, table)| if table { Part::Table(&text[from..to]) } else { Part::Words(&text[from..to]) }).collect()
+/// Whether a fenced code block (as written) ends with its closing fence:
+/// its last line the opening's mark, at least as long.
+fn closes(text: &str) -> bool {
+    let first = text.lines().next().unwrap_or_default().trim_start();
+    let Some(mark) = first.chars().next().filter(|c| *c == '`' || *c == '~') else { return true };
+    let opening = first.chars().take_while(|c| *c == mark).count();
+    let mut lines = text.trim_end_matches(['\n', '\r']).lines();
+    let last = lines.next_back().unwrap_or_default().trim();
+    lines.next().is_some() && last.len() >= opening && last.chars().all(|c| c == mark)
 }
 
 /// What's said in a discussion, as a message: an answer (what it changed
@@ -403,6 +372,28 @@ fn span_rect(galley: &egui::Galley, text: &str, link: &harness_contracts::Link) 
     let (start, end) = (galley.pos_from_cursor(egui::text::CCursor::new(link.start)), galley.pos_from_cursor(egui::text::CCursor::new(link.end)));
     let right = if (start.min.y - end.min.y).abs() < 1.0 { end.max.x } else { galley.rect.right() };
     Some(Rect::from_min_max(start.min, egui::pos2(right, start.max.y)))
+}
+
+/// The most places a message's words are read for.
+const PLACES_MOST: usize = 12;
+
+/// The files a message's words name, in order, each once, as a terminal's
+/// lines are read (`crate::places`): `src/a.rs`, `lib.rs:12`, `a.rs:12:5`
+/// is line 12.
+pub fn places(text: &str) -> Vec<(String, Option<usize>)> {
+    let mut out: Vec<(String, Option<usize>)> = Vec::new();
+    for link in text.lines().flat_map(|line| crate::places::links(line, "", crate::places::Names::Placed)) {
+        if let crate::places::To::File { path, line } = link.to {
+            let place = (path, line.map(|l| l as usize));
+            if !out.contains(&place) {
+                out.push(place);
+            }
+        }
+        if out.len() == PLACES_MOST {
+            break;
+        }
+    }
+    out
 }
 
 /// What you sent, as you typed it: the text, what it links, and what was
@@ -627,44 +618,39 @@ pub fn caret_to_end(ctx: &egui::Context, id: egui::Id, text: &str) {
 mod tests {
     use super::*;
 
-    /// A message's markdown cut around its tables: text, a table (its rows
-    /// with a `|---|` line), text; rows without that line stay text.
+    /// A message's markdown cut around its tables: text, a table, text;
+    /// rows without the line under their header stay text.
     #[test]
     fn tables_are_cut_apart_from_the_words_around_them() {
         let text = "Here:\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nand after.\n| not | a table |\n";
         let cut = parts(text);
-        assert!(matches!(cut[..], [Part::Words(_), Part::Table("| a | b |\n|---|---|\n| 1 | 2 |\n"), Part::Words(after)] if after.contains("and after") && after.contains("| not | a table |")), "{cut:?}");
-        let whole: String = cut.iter().map(|p| match p { Part::Words(w) | Part::Table(w) => *w, Part::Code { .. } => "" }).collect();
-        assert_eq!(whole, text, "nothing lost");
+        assert!(matches!(cut[..], [Part::Words(_), Part::Table(table), Part::Words(after)] if table.starts_with("| a | b |") && table.contains("| 1 | 2 |") && after.contains("and after") && after.contains("| not | a table |")), "{cut:?}");
         assert_eq!(parts("just words"), [Part::Words("just words")]);
     }
 
-    /// Fenced code blocks are parts of their own (the language their fence
-    /// names, their lines without the fences), with the words and tables
-    /// around them; a fence of tildes, or longer than three, closes only
-    /// with its own; one not closed runs to the end; a table in a block is
-    /// code.
+    /// Code blocks are parts of their own (the language their fence names,
+    /// their lines, whether closed), with the words and tables around
+    /// them; a fence of tildes, or longer than three, closes only with its
+    /// own; one not closed runs to the end; a table in a block is code;
+    /// one in a list stays with the list's words.
     #[test]
     fn code_blocks_are_cut_apart_with_their_language() {
         let text = "Try:\n```rust\nfn main() {}\n```\nThen:\n~~~~ py extra\nprint(1)\n```\n~~~~\n| a |\n|---|\n";
-        assert_eq!(parts(text), [
-            Part::Words("Try:\n"),
-            Part::Code { fence: "rust", code: "fn main() {}" },
-            Part::Words("Then:\n"),
-            Part::Code { fence: "py", code: "print(1)\n```" },
-            Part::Table("| a |\n|---|\n"),
-        ]);
-        assert_eq!(parts("```\n| a |\n|---|\nstill"), [Part::Code { fence: "", code: "| a |\n|---|\nstill" }], "not closed yet: to the end");
-        assert_eq!(parts("    ```\nindented: words"), [Part::Words("    ```\nindented: words")], "four spaces in: no fence");
+        let code = |fence: &'static str, code: &str, closed| Part::Code { fence, code: code.to_owned(), closed };
+        assert_eq!(parts(text), [Part::Words("Try:\n"), code("rust", "fn main() {}", true), Part::Words("\nThen:\n"), code("py", "print(1)\n```", true), Part::Table("| a |\n|---|\n")]);
+        assert_eq!(parts("```\n| a |\n|---|\nstill"), [code("", "| a |\n|---|\nstill", false)], "not closed yet: to the end");
+        let listed = "- one\n  ```sh\n  ls\n  ```\n- two\n";
+        assert_eq!(parts(listed), [Part::Words(listed)], "in a list: with its words");
     }
 
-    /// A message's words name files: paths with a folder, or a line after
-    /// them; each once, in order; not a web address, a version, a bare name,
-    /// or a colon with no line after it.
+    /// A message's words name files as a terminal's lines do: paths with a
+    /// folder, or a line after them (in prose, not a bare name); each once,
+    /// in order; not a web address, a version, or a colon with no line
+    /// after it.
     #[test]
     fn the_files_a_message_names_are_read_from_its_words() {
         let text = "See src/chat/render.rs:42, and `lib.rs:7` (and lib.rs:7 again); ./crates/a.rs too.\n\
-                    Not https://x.io/a.rs:3, v1.2.3, render.rs, e.g. this, note: that, /abs/a.rs or a.rs:x.";
+                    Not https://x.io/a.rs:3, v1.2.3, render.rs, e.g. this, note: that, or a.rs:x.";
         assert_eq!(places(text), [("src/chat/render.rs".to_owned(), Some(42)), ("lib.rs".to_owned(), Some(7)), ("crates/a.rs".to_owned(), None)]);
         assert_eq!(places("Cargo.toml:5:3 and [the file](src/x.ts)"), [("Cargo.toml".to_owned(), Some(5)), ("src/x.ts".to_owned(), None)]);
     }

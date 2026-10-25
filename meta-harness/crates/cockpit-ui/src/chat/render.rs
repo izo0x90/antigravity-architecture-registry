@@ -113,6 +113,8 @@ impl ChatStreamState {
             // measured either way, for the first move from it.
             let area = self.ui.scrolling.area(area, ui.input(|i| i.time));
             let stream = area.show(ui, |ui| self.render_stream(ui));
+            // The colours its code blocks need, asked for.
+            self.asks.extend(self.ui.messages.colours_wanted());
             // The agent at work, where it shows; each item's stop, in the
             // stream's order.
             let rects = std::mem::take(&mut self.ui.item_rects);
@@ -516,7 +518,7 @@ impl ChatStreamState {
             // folded under it.
             ItemBody::UserMessage { text, typed } => {
                 let (shown, links, handed_on) = crate::conversation::as_typed(text, typed.as_ref());
-                let drawn = self.ui.messages.draw(ui, &crate::conversation::Message { links, ..crate::conversation::Message::new("user", shown) });
+                let drawn = self.ui.messages.draw(ui, egui::Id::new(&item.id), &crate::conversation::Message { links, ..crate::conversation::Message::new("user", shown) });
                 for (n, rect) in drawn.chips.iter().enumerate() {
                     self.ui.drawing.push(Spot { key: format!("{index}:l{n}"), rect: *rect });
                 }
@@ -534,7 +536,7 @@ impl ChatStreamState {
                 let text = item.body.said().unwrap_or_default();
                 let by = self.slot().map(|s| s.name.clone()).unwrap_or_else(|| "the agent".into());
                 let under = content.iter().filter(|b| !matches!(b, ContentBlock::Text { .. })).map(block_summary).collect();
-                let drawn = self.ui.messages.draw(ui, &crate::conversation::Message { markdown: true, under, ..crate::conversation::Message::new(&by, &text) });
+                let drawn = self.ui.messages.draw(ui, egui::Id::new(&item.id), &crate::conversation::Message { markdown: true, under, ..crate::conversation::Message::new(&by, &text) });
                 self.code_spots(index, &drawn.codes);
                 // The files its words name, as a call's places are.
                 let places = nav::links_of(item);
@@ -619,9 +621,9 @@ impl ChatStreamState {
             ItemBody::ProposedPlan { markdown, .. } => {
                 Frame::NONE.fill(colors().surface).inner_margin(crate::theme::margin(crate::theme::look().space_sm)).show(ui, |ui| {
                     ui.label(RichText::new(format!("{} Proposed plan", icon::CLIPBOARD_TEXT)).strong().size(crate::theme::look().text_body));
-                    let drawn = self.ui.messages.markdown(ui, markdown);
+                    let drawn = self.ui.messages.markdown(ui, egui::Id::new(&item.id), markdown);
                     self.code_spots(index, &drawn);
-                });
+                    });
             }
             ItemBody::TodoList { steps, .. } => render_steps(ui, steps),
             // Waiting on you: kept in sight under the stream (this says it

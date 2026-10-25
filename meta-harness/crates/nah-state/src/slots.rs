@@ -104,6 +104,9 @@ impl StateDb {
     }
 }
 
+/// Messages whose typed form is kept, at the most (the newest).
+const TYPED_KEPT: i64 = 10_000;
+
 /// A message as sent, as its typed form is kept by (its hash).
 fn sent_key(sent: &str) -> String {
     use sha2::Digest;
@@ -150,6 +153,8 @@ impl SlotStore for StateDb {
         let at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
         self.transaction(|tx| {
             tx.execute("INSERT OR REPLACE INTO typed_messages (sent, json, at_ms) VALUES (?1, ?2, ?3)", params![sent_key(sent), json, at_ms]).map_err(failed)?;
+            // The newest kept: older ones show as sent once replayed.
+            tx.execute("DELETE FROM typed_messages WHERE sent NOT IN (SELECT sent FROM typed_messages ORDER BY at_ms DESC LIMIT ?1)", params![TYPED_KEPT]).map_err(failed)?;
             Ok(())
         })
         .map_err(|e| e.to_string())

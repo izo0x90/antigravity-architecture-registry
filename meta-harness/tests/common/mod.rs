@@ -115,8 +115,12 @@ impl SessionRuntime for FakeSession {
             self.asked.lock().unwrap().push((request, turn.clone()));
             return Ok(turn.id);
         }
-        // As a harness does: the turn runs, then ends.
+        // As a harness does: the turn runs (your message in it, as typed
+        // when it was), then ends.
         self.emit(AdapterEvent::TurnUpdated { turn: Turn { status: TurnStatus::Running, failure: None, ..turn.clone() } });
+        self.emit(AdapterEvent::ItemUpdated {
+            item: TurnItem { id: ItemId::new(format!("yours-{}", turn.id)), thread_id: self.thread.id.clone(), turn_id: turn.id.clone(), native_id: None, parent_id: None, ordinal: 0, status: ItemStatus::Completed, title: None, body: ItemBody::UserMessage { text: input.text.clone(), typed: input.typed.clone() } },
+        });
         // "[tool]": it runs a tool first (what the tool gave, two lines).
         if input.text.contains("[tool]") {
             let output = vec![ContentBlock::Text { text: "tool line one\ntool line two".into() }];

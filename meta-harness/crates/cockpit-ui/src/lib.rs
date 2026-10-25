@@ -28,6 +28,7 @@ pub mod kind;
 mod lint;
 pub mod nav;
 pub mod pick_list;
+pub mod places;
 pub mod code_search;
 pub mod sheet;
 pub mod viewport;

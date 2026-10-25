@@ -1,13 +1,12 @@
 //! Code coloured as the code view colours a file. A code block in a
 //! message is read by the server with the language pack its fence names
 //! (`/api/code/highlight`), once per block; what comes back is kept for
-//! every view that draws one. Views read it (`Reader<Highlighter>`):
-//! asking for a block not known yet queues it, and the shell sends what's
-//! queued each frame. One way of turning colours into text (`coloured`),
-//! for the code view's lines and for code blocks.
+//! every view that draws one. Views read it (`Reader<Highlighter>`) and
+//! ask for a block not known yet (`Ask::Colour`); the shell sends what's
+//! asked each frame, many blocks in one call. One way of turning colours
+//! into text (`coloured`), for the code view's lines and for code blocks.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -18,50 +17,69 @@ use egui::Color32;
 
 use crate::config::CodeUi;
 
-/// Blocks kept at the most; past that, what's kept starts afresh (what's
-/// on screen is asked for again).
+/// Blocks kept at the most; past that, the longest unused go first.
 const KEPT: usize = 1024;
 
-/// A block's colours: asked for, or come (none: no pack knows its fence).
+/// Blocks in one call at the most, and their text (bytes): the server's
+/// bound.
+const CALL_BLOCKS: usize = 64;
+const CALL_BYTES: usize = 256 * 1024;
+
+/// A call that wasn't answered (the server out of reach): asked again
+/// after this long (seconds).
+const RETRY_S: f64 = 30.0;
+
+/// A block's colours as known here.
+#[derive(Clone)]
 enum Known {
+    /// Asked for, not come yet.
     Asked,
+    /// Come: none when no pack knows its fence.
     Got(Option<Rc<Highlights>>),
+    /// Its call failed, at this time: asked again after a while.
+    Failed(f64),
 }
 
-/// What came back, by block.
-type Mailbox = Arc<Mutex<Vec<(u64, Option<Highlights>)>>>;
+/// A block's colours, as a view finds them.
+pub enum Colours {
+    /// Known: none when no pack knows its fence.
+    Known(Option<Rc<Highlights>>),
+    /// Not known yet: drawn plain; `asked` when it's on its way.
+    Unknown { asked: bool },
+}
+
+/// What came back, by block: its colours, or that the call failed.
+type Mailbox = Arc<Mutex<Vec<(u64, Result<Option<Highlights>, ()>)>>>;
 
 #[derive(Default)]
 pub struct Highlighter {
     known: HashMap<u64, Known>,
-    /// Blocks asked for since the last frame: their key, fence and text.
-    queued: RefCell<Vec<(u64, String, String)>>,
+    /// The blocks known, the least recently asked first.
+    order: VecDeque<u64>,
+    /// Blocks asked for and not sent yet: their key, fence and text.
+    wanted: Vec<(u64, String, String)>,
     mailbox: Mailbox,
     /// Each capture's theme token (the code view's settings), and which
     /// change of the settings it took.
     tokens: CodeUi,
     seen_settings: u64,
+    /// The clock (seconds) as of this frame.
+    now: f64,
 }
 
 impl Highlighter {
-    /// `text`'s colours as the language `fence` names; none while they
-    /// haven't come (asked for, the first time), or when no pack knows it.
-    pub fn colours(&self, fence: &str, text: &str) -> Option<Rc<Highlights>> {
+    /// `text`'s colours as the language `fence` names. A fence that names
+    /// none (an empty one) is known: plain.
+    pub fn colours(&self, fence: &str, text: &str) -> Colours {
         let fence = fence.trim();
         if fence.is_empty() {
-            return None;
+            return Colours::Known(None);
         }
-        let key = key(fence, text);
-        match self.known.get(&key) {
-            Some(Known::Got(colours)) => colours.clone(),
-            Some(Known::Asked) => None,
-            None => {
-                let mut queued = self.queued.borrow_mut();
-                if !queued.iter().any(|(k, _, _)| *k == key) {
-                    queued.push((key, fence.to_owned(), text.to_owned()));
-                }
-                None
-            }
+        match self.known.get(&key(fence, text)) {
+            Some(Known::Got(colours)) => Colours::Known(colours.clone()),
+            Some(Known::Asked) => Colours::Unknown { asked: true },
+            Some(Known::Failed(at)) => Colours::Unknown { asked: self.now - at < RETRY_S },
+            None => Colours::Unknown { asked: false },
         }
     }
 
@@ -71,48 +89,81 @@ impl Highlighter {
         self.tokens.token(capture).and_then(|t| crate::theme::colors().token(t))
     }
 
+    /// Blocks a view asked for (`Ask::Colour`: each its fence and text):
+    /// sent with the next frame's call.
+    pub fn want(&mut self, blocks: Vec<(String, String)>) {
+        for (fence, text) in blocks {
+            let key = key(fence.trim(), &text);
+            if let Colours::Unknown { asked: false } = self.colours(&fence, &text)
+                && !self.wanted.iter().any(|(k, _, _)| *k == key)
+            {
+                self.wanted.push((key, fence.trim().to_owned(), text));
+            }
+        }
+    }
+
     /// Once a frame (the shell): the code view's settings taken when they
-    /// changed (each capture's token), what came back kept, what's queued
-    /// asked for.
+    /// changed (each capture's token), what came back kept, what's asked
+    /// sent, in calls of a bounded size.
     pub fn tick(&mut self, net: &crate::net::NetClient, ctx: &egui::Context, settings: &crate::shared::Kept<crate::shared::Settings>) {
+        self.now = ctx.input(|i| i.time);
         if let Some(settings) = settings.since(&mut self.seen_settings) {
             self.tokens = settings.code.clone();
         }
         self.take_came();
-        let queued = std::mem::take(self.queued.get_mut());
-        if queued.is_empty() {
-            return;
-        }
-        if self.known.len() + queued.len() > KEPT {
-            self.known.clear();
-        }
-        for (key, fence, text) in queued {
-            if self.known.contains_key(&key) {
-                continue;
+        let mut wanted = std::mem::take(&mut self.wanted).into_iter().peekable();
+        while wanted.peek().is_some() {
+            let mut call: Vec<(u64, String, String)> = Vec::new();
+            let mut bytes = 0;
+            while let Some(next) = wanted.next_if(|(_, _, text)| call.is_empty() || (call.len() < CALL_BLOCKS && bytes + text.len() <= CALL_BYTES)) {
+                bytes += next.2.len();
+                call.push(next);
             }
-            self.known.insert(key, Known::Asked);
+            for (key, _, _) in &call {
+                self.keep(*key, Known::Asked);
+            }
+            let keys: Vec<u64> = call.iter().map(|(key, _, _)| *key).collect();
+            let blocks: Vec<(String, String)> = call.into_iter().map(|(_, fence, text)| (fence, text)).collect();
             let mailbox = self.mailbox.clone();
-            // (Refused, or not reached: plain, not asked again.)
-            net.code_highlight(&fence, &text, ctx.clone(), move |result| {
-                mailbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((key, result.ok().flatten()));
+            net.code_highlight(&blocks, ctx.clone(), move |result| {
+                let mut came = mailbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                match result {
+                    Ok(each) if each.len() == keys.len() => came.extend(keys.into_iter().zip(each).map(|(key, colours)| (key, Ok(colours)))),
+                    _ => came.extend(keys.into_iter().map(|key| (key, Err(())))),
+                }
             });
         }
-    }
-}
-
-impl Highlighter {
-    /// As if the server had said `fence`'s `text` is coloured so.
-    #[cfg(test)]
-    pub(crate) fn knows(&mut self, fence: &str, text: &str, colours: Highlights) {
-        self.known.insert(key(fence, text), Known::Got(Some(Rc::new(colours))));
     }
 
     /// What came back, kept.
     fn take_came(&mut self) {
         let came = std::mem::take(&mut *self.mailbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for (key, colours) in came {
-            self.known.insert(key, Known::Got(colours.map(Rc::new)));
+            let known = match colours {
+                Ok(colours) => Known::Got(colours.map(Rc::new)),
+                Err(()) => Known::Failed(self.now),
+            };
+            self.keep(key, known);
         }
+    }
+
+    /// `known` kept for `key`, as the most recently asked; past `KEPT`,
+    /// the least recently asked go.
+    fn keep(&mut self, key: u64, known: Known) {
+        if self.known.insert(key, known).is_none() {
+            self.order.push_back(key);
+        }
+        while self.order.len() > KEPT {
+            if let Some(oldest) = self.order.pop_front() {
+                self.known.remove(&oldest);
+            }
+        }
+    }
+
+    /// As if the server had said `fence`'s `text` is coloured so.
+    #[cfg(test)]
+    pub(crate) fn knows(&mut self, fence: &str, text: &str, colours: Highlights) {
+        self.keep(key(fence, text), Known::Got(Some(Rc::new(colours))));
     }
 }
 
@@ -158,21 +209,25 @@ pub fn coloured(text: &str, span: std::ops::Range<usize>, highlights: Option<&Hi
 mod tests {
     use super::*;
 
-    /// A block is asked for once, its colours kept when they come; a block
-    /// with no fence isn't asked for.
+    /// What came back is kept, a failed call asked again only after a
+    /// while; past what's kept, the least recently asked go first.
     #[test]
-    fn a_block_is_asked_for_once_and_kept() {
+    fn what_comes_back_is_kept_and_a_failure_retried_later() {
         let mut h = Highlighter::default();
-        assert!(h.colours("rust", "fn x() {}").is_none() && h.colours("rust", "fn x() {}").is_none());
-        assert!(h.colours("", "plain").is_none());
-        assert_eq!(h.queued.borrow().len(), 1, "asked once");
-        let key = key("rust", "fn x() {}");
-        h.known.insert(key, Known::Asked);
-        h.queued.borrow_mut().clear();
-        assert!(h.colours("rust", "fn x() {}").is_none() && h.queued.borrow().is_empty(), "asked: not again");
-        h.mailbox.lock().unwrap().push((key, Some(Highlights { names: vec!["keyword".into()], runs: vec![[0, 2, 0]] })));
+        let (got, failed) = (key("rust", "fn x() {}"), key("rust", "fn y() {}"));
+        h.mailbox.lock().unwrap().extend([(got, Ok(Some(Highlights { names: vec!["keyword".into()], runs: vec![[0, 2, 0]] }))), (failed, Err(()))]);
+        h.now = 100.0;
         h.take_came();
-        assert_eq!(h.colours("rust", "fn x() {}").map(|c| c.names.clone()), Some(vec!["keyword".to_owned()]));
+        assert!(matches!(h.colours("rust", "fn x() {}"), Colours::Known(Some(c)) if c.names == ["keyword"]));
+        assert!(matches!(h.colours("rust", "fn y() {}"), Colours::Unknown { asked: true }), "failed just now: not asked again yet");
+        h.now = 100.0 + RETRY_S + 1.0;
+        h.want(vec![("rust".into(), "fn y() {}".into())]);
+        assert_eq!(h.wanted.len(), 1, "asked again after a while");
+        for n in 0..KEPT {
+            h.keep(key("rust", &n.to_string()), Known::Asked);
+        }
+        assert!(matches!(h.colours("rust", "fn x() {}"), Colours::Unknown { asked: false }), "the least recently asked gone");
+        assert_eq!(h.known.len(), KEPT);
     }
 
     /// Text is coloured by its runs within the span asked for; the rest in

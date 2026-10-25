@@ -289,6 +289,7 @@ impl SpecState {
             None => Vec::new(),
         };
         self.draw_item_with(ui, &on, &mut messages);
+        self.asks.extend(messages.colours_wanted());
         self.messages = messages;
     }
 
@@ -342,7 +343,7 @@ impl SpecState {
                         ui.set_width(ui.available_width());
                         crate::conversation::heading(ui, d);
                         for said in &d.said {
-                            messages.draw(ui, &crate::conversation::said(d, said));
+                            messages.draw(ui, egui::Id::new((&d.id, said.at_ms)), &crate::conversation::said(d, said));
                         }
                     });
                 }
@@ -815,6 +816,7 @@ impl SpecState {
                     for discussion in &here {
                         render_thread(ui, discussion, point.as_ref(), section, &mut item, &mut self.messages);
                     }
+                    self.asks.extend(self.messages.colours_wanted());
                 });
             }
         });
@@ -848,7 +850,7 @@ fn render_thread(ui: &mut egui::Ui, c: &Discussion, point: Option<&DiscussionId>
                 if i == 0 {
                     crate::conversation::heading(ui, c);
                 }
-                messages.draw(ui, &crate::conversation::said(c, said));
+                messages.draw(ui, egui::Id::new((&c.id, said.at_ms)), &crate::conversation::said(c, said));
             });
         }
     });

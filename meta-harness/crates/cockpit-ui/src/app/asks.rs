@@ -64,6 +64,7 @@ impl CockpitApp {
             Ask::Agents { slot, act } => self.desk.shared.agents.get_mut().act(slot, act, &self.desk.net, ctx),
             Ask::Terminals { id, act } => self.desk.shared.terminals.get_mut().act(id, act, &self.desk.net, ctx),
             Ask::Tags(act) => self.desk.shared.tags.get_mut().act(act, &self.desk.net, ctx, &self.notes_later),
+            Ask::Colour(blocks) => self.desk.shared.highlighter.get_mut().want(blocks),
         }
     }
 

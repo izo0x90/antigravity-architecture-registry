@@ -1,6 +1,6 @@
-//! What on a terminal's line can be gone to: files (`src/a.rs`,
-//! `src/a.rs:12`, `src/a.rs:12:5`, an absolute path in the project) and web
-//! links.
+//! What in text can be gone to: files (`src/a.rs`, `src/a.rs:12`,
+//! `src/a.rs:12:5`, an absolute path in the project) and web links. One
+//! reading of them, for a terminal's lines and a message's words.
 
 /// Something on a line to go to: where it starts (its column) and how long
 /// it is, and what it is.
@@ -23,9 +23,19 @@ fn breaks(c: char) -> bool {
     c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ';' | '|')
 }
 
+/// Which names count as files: any with an extension (`Cargo.toml`, a
+/// terminal's output), or only with a folder or a line (`src/a.rs`,
+/// `a.rs:12`: in prose, where `e.g` isn't one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Names {
+    Bare,
+    Placed,
+}
+
 /// The links on `text` (a line as shown: a column a character), its paths
-/// read from `folder` (an absolute path in it becomes the project's).
-pub fn links(text: &str, folder: &str) -> Vec<Link> {
+/// read from `folder` (an absolute path in it becomes the project's), its
+/// files as `names` says.
+pub fn links(text: &str, folder: &str, names: Names) -> Vec<Link> {
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
     let mut start = 0;
@@ -44,7 +54,7 @@ pub fn links(text: &str, folder: &str) -> Vec<Link> {
             stop -= 1;
         }
         let word: String = chars[start..stop].iter().collect();
-        if let Some(to) = link(&word, folder) {
+        if let Some(to) = link(&word, folder, names) {
             out.push(Link { col: start as u16, len: (stop - start) as u16, to });
         }
         start = end;
@@ -52,7 +62,7 @@ pub fn links(text: &str, folder: &str) -> Vec<Link> {
     out
 }
 
-fn link(word: &str, folder: &str) -> Option<To> {
+fn link(word: &str, folder: &str, names: Names) -> Option<To> {
     if word.starts_with("http://") || word.starts_with("https://") {
         return (word.len() > "https://".len()).then(|| To::Url(word.to_owned()));
     }
@@ -66,7 +76,7 @@ fn link(word: &str, folder: &str) -> Option<To> {
     let plausible = !path.starts_with('-')
         && path.chars().all(|c| c.is_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '~' | '+' | '@'))
         && path.chars().any(char::is_alphabetic)
-        && (path.contains('/') || has_extension(path));
+        && (path.contains('/') || has_extension(path) && (names == Names::Bare || matches!(line, Some(Some(_)))));
     if !plausible {
         return None;
     }
@@ -97,14 +107,14 @@ mod tests {
 
     #[test]
     fn files_lines_and_web_links_are_found_where_they_are() {
-        let found = links("error: src/a.rs:12:5: expected `;` (see https://doc.rust-lang.org/x).", "/p");
+        let found = links("error: src/a.rs:12:5: expected `;` (see https://doc.rust-lang.org/x).", "/p", Names::Bare);
         assert_eq!(found.iter().map(|l| (l.col, l.to.clone())).collect::<Vec<_>>(), [(7, file("src/a.rs", Some(12))), (40, To::Url("https://doc.rust-lang.org/x".into()))]);
-        assert_eq!(links("Cargo.toml  src", "/p")[0], Link { col: 0, len: 10, to: file("Cargo.toml", None) });
-        assert_eq!(links("/p/crates/x/lib.rs:3", "/p")[0].to, file("crates/x/lib.rs", Some(3)), "an absolute path in the project is the project's");
-        assert_eq!(links("./build.sh", "/p")[0].to, file("build.sh", None));
-        assert!(links("version 1.2.3 took 0.5s, done.", "/p").is_empty(), "numbers and sentences aren't files");
-        assert!(links("--release -v", "/p").is_empty(), "flags aren't");
-        assert!(links("a.rs:x", "/p").is_empty(), "a line is a number");
+        assert_eq!(links("Cargo.toml  src", "/p", Names::Bare)[0], Link { col: 0, len: 10, to: file("Cargo.toml", None) });
+        assert_eq!(links("/p/crates/x/lib.rs:3", "/p", Names::Bare)[0].to, file("crates/x/lib.rs", Some(3)), "an absolute path in the project is the project's");
+        assert_eq!(links("./build.sh", "/p", Names::Bare)[0].to, file("build.sh", None));
+        assert!(links("version 1.2.3 took 0.5s, done.", "/p", Names::Bare).is_empty(), "numbers and sentences aren't files");
+        assert!(links("--release -v", "/p", Names::Bare).is_empty(), "flags aren't");
+        assert!(links("a.rs:x", "/p", Names::Bare).is_empty(), "a line is a number");
     }
 
     use proptest::prelude::*;
@@ -114,7 +124,7 @@ mod tests {
         #[test]
         fn links_found_are_in_the_line(text in "[ -~é漢]{0,80}") {
             let width = text.chars().count();
-            for link in links(&text, "/p") {
+            for link in links(&text, "/p", Names::Bare) {
                 prop_assert!(link.len > 0 && usize::from(link.col) + usize::from(link.len) <= width, "{link:?} in {text:?}");
             }
         }

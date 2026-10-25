@@ -239,9 +239,21 @@ pub enum McpTransport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnInput {
+    /// What the agent is handed.
     pub text: String,
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    /// What the user typed for it, when it's another (what it links handed
+    /// on after it): its own item shows it so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typed: Option<crate::Message>,
+}
+
+impl TurnInput {
+    /// `text`, as it's handed on (nothing typed apart from it).
+    pub fn of(text: impl Into<String>) -> Self {
+        Self { text: text.into(), attachments: Vec::new(), typed: None }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

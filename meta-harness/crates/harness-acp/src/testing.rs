@@ -8,6 +8,8 @@
 //! - `[permission]`: asks to edit a file, then says which option it got;
 //! - `[question]`: asks two questions in a form, then says the answers;
 //! - `[hold]`: waits until [`MockAgent::release`];
+//! - `[two-asks]`: asks two permissions at once (two sub-agents' edits),
+//!   then says each answer it got;
 //! - `[sub-agent]`: starts a sub-agent with a tool call; the sub-agent's
 //!   message and call say whose they are in their `_meta`, where its
 //!   settings look (`parent_call`);
@@ -243,6 +245,24 @@ impl MockAgent {
         }
         if text.contains("[sub-agent]") {
             return sub_agent(cx, self.setup.parent_call.as_deref());
+        }
+        // Two asked at once, as two sub-agents ask in parallel: each its
+        // own answer.
+        if text.contains("[two-asks]") {
+            let ask = |id: &str, title: &str| {
+                notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new(id.to_owned(), title.to_owned()).kind(acp::ToolKind::Edit).status(acp::ToolCallStatus::Pending)))?;
+                let options = vec![acp::PermissionOption::new("allow-once", "Allow", acp::PermissionOptionKind::AllowOnce), acp::PermissionOption::new("reject", "Reject", acp::PermissionOptionKind::RejectOnce)];
+                Ok::<_, agent_client_protocol::Error>(cx.send_request(acp::RequestPermissionRequest::new(SESSION, acp::ToolCallUpdate::new(id.to_owned(), acp::ToolCallUpdateFields::new().title(title.to_owned())), options)))
+            };
+            let (first, second) = (ask("edit-a", "Edit a.rs")?, ask("edit-b", "Edit b.rs")?);
+            let (first, second) = futures::join!(first.block_task(), second.block_task());
+            let said = |answer: agent_client_protocol::Result<acp::RequestPermissionResponse>| match answer.map(|a| a.outcome) {
+                Ok(acp::RequestPermissionOutcome::Selected(s)) => s.option_id.to_string(),
+                _ => "cancelled".into(),
+            };
+            let answers = format!("a: {}, b: {}", said(first), said(second));
+            lock(&self.seen).permission = Some(answers.clone());
+            return say(cx, &answers);
         }
         if text.contains("[permission]") {
             notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new("edit-1", "Edit main.rs").kind(acp::ToolKind::Edit).status(acp::ToolCallStatus::Pending)))?;

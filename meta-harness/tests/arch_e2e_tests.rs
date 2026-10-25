@@ -62,14 +62,14 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     assert!(named.iter().any(|o| o["target"] == "rust:sample::run" && o["definition"] == true), "{body}");
     assert!(named.iter().any(|o| o["target"] == "rust:sample::store::Store::save" && o.get("definition").is_none()), "{body}");
     assert!(code["targets"].as_array().unwrap().iter().any(|t| t["id"] == "rust:sample::store::Store::save" && t["signature"].as_str().is_some_and(|s| s.contains("save("))), "{body}");
-    // A code block's colours, by the language its fence names; none for a
-    // fence no pack knows; too long, refused.
-    let (status, body) = http(addr, "POST", "/api/code/highlight", Some(r#"{"language":"rs","text":"fn main() {}"}"#)).await;
+    // Code blocks' colours, each by the language its fence names, in the
+    // order asked; none for a fence no pack knows; too much, refused.
+    let blocks = json!({ "blocks": [{ "language": "rs", "text": "fn main() {}" }, { "language": "cobol", "text": "MOVE A TO B." }] }).to_string();
+    let (status, body) = http(addr, "POST", "/api/code/highlight", Some(&blocks)).await;
     assert_eq!(status, 200, "{body}");
-    assert!(parse(&body)["names"].as_array().unwrap().iter().any(|n| n == "keyword"), "{body}");
-    let (status, body) = http(addr, "POST", "/api/code/highlight", Some(r#"{"language":"cobol","text":"MOVE A TO B."}"#)).await;
-    assert_eq!((status, body.as_str()), (200, "null"));
-    let long = json!({ "language": "rust", "text": "x".repeat(300 * 1024) }).to_string();
+    let coloured = parse(&body);
+    assert!(coloured[0]["names"].as_array().unwrap().iter().any(|n| n == "keyword") && coloured[1].is_null(), "{body}");
+    let long = json!({ "blocks": [{ "language": "rust", "text": "x".repeat(300 * 1024) }] }).to_string();
     let (status, _) = http(addr, "POST", "/api/code/highlight", Some(&long)).await;
     assert_eq!(status, 400);
     // Edited since it was read: nothing it says applies.

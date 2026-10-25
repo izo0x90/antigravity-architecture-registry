@@ -108,12 +108,9 @@ impl Tags {
         self.tags.get(id)
     }
 
-    /// A link's colour: its tag's, else the accent (a thing).
-    pub fn link_colour(&self, to: &harness_contracts::Linked) -> egui::Color32 {
-        match to {
-            harness_contracts::Linked::Tag { tag } => self.get(tag).map_or(crate::theme::colors().accent, |t| crate::theme::colors().tag(t.colour)),
-            harness_contracts::Linked::Thing { .. } => crate::theme::colors().accent,
-        }
+    /// Each tag's colour, as links to it are drawn.
+    pub fn link_colours(&self) -> crate::shared::LinkColours {
+        crate::shared::LinkColours::new(self.tags.values().map(|t| (t.id.clone(), crate::theme::colors().tag(t.colour))).collect())
     }
 
     /// The tag named `name` (in capitals or not, as the server finds it).

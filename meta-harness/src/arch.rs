@@ -128,25 +128,33 @@ async fn code_analysis(_: Needs<can::ViewRead>, State(state): State<ProjectState
     Ok(Json(blocking(&state.arch, move |a| a.code_analysis(&q.path)).await?))
 }
 
-/// A code block to colour: the language its fence names, and its text.
+/// Code blocks to colour: each the language its fence names, and its text.
 // An argument it doesn't know is refused, never ignored.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HighlightAsk {
+    blocks: Vec<CodeBlock>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CodeBlock {
     language: String,
     text: String,
 }
 
-/// The most of a code block coloured (bytes): more is refused.
+/// The most text coloured in one ask (bytes, all its blocks): more is
+/// refused.
 const HIGHLIGHT_MOST: usize = 256 * 1024;
 
-/// A code block's colours, as a file of its language is coloured (none: no
-/// language pack knows its fence).
-async fn code_highlight(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Json(ask): Json<HighlightAsk>) -> ArchResult<Option<arch_graph::code::Highlights>> {
-    if ask.text.len() > HIGHLIGHT_MOST {
-        return Err(ArchError(ServiceError::InvalidOp(format!("a code block of {} bytes is too long to colour (the most is {HIGHLIGHT_MOST})", ask.text.len()))));
+/// Code blocks' colours, each as a file of its language is coloured (none:
+/// no language pack knows its fence), in the order asked.
+async fn code_highlight(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Json(ask): Json<HighlightAsk>) -> ArchResult<Vec<Option<arch_graph::code::Highlights>>> {
+    let size: usize = ask.blocks.iter().map(|b| b.text.len()).sum();
+    if size > HIGHLIGHT_MOST {
+        return Err(ArchError(ServiceError::InvalidOp(format!("{size} bytes of code blocks is too much to colour at once (the most is {HIGHLIGHT_MOST})"))));
     }
-    Ok(Json(blocking(&state.arch, move |a| Ok(a.highlight(&ask.language, &ask.text))).await?))
+    Ok(Json(blocking(&state.arch, move |a| Ok(ask.blocks.iter().map(|b| a.highlight(&b.language, &b.text)).collect())).await?))
 }
 
 /// What a read shows: `code` (the default) or `plan:<id>`.
