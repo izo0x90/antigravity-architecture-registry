@@ -227,3 +227,24 @@ fn a_running_turn_says_what_its_doing_and_how_live_it_is() {
     app.invoke(Invocation { action: none.action, origin: none.origin, value: Some("none".into()) }, &ctx);
     assert!(app.desk.chat().ui.live.is_none() && line(&ctx, &mut app, 82.0).0 == "No word for 1 min");
 }
+
+/// How much the chat shows is a setting on its line ("Shows:"): quiet folds
+/// even one call into a line, everything opens every call; switching starts
+/// what was folded by hand afresh.
+#[test]
+fn how_much_the_chat_shows_is_its_setting() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Chat);
+    let text = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(text.contains("Shows:"), "on its settings row: {text}");
+    let set = |ctx: &egui::Context, app: &mut CockpitApp, to: &str| {
+        let shows = app.bound_actions().into_iter().find(|b| b.action.id == "chat.verbosity").expect("the setting");
+        app.invoke(Invocation { action: shows.action, origin: shows.origin, value: Some(to.into()) }, ctx);
+        app.desk.chat().rows().len()
+    };
+    let normal = app.desk.chat().rows().len();
+    let everything = set(&ctx, &mut app, "everything");
+    let quiet = set(&ctx, &mut app, "quiet");
+    assert!(everything > normal && quiet <= normal, "quiet {quiet}, normal {normal}, everything {everything}");
+    assert_eq!(set(&ctx, &mut app, "normal"), normal, "back: as it was");
+}

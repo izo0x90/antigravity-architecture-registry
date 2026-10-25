@@ -45,6 +45,7 @@ enum ChatCommand {
     DismissError,
     Answer { thread: ThreadId, request: harness_contracts::RequestId, option: String },
     Indicator,
+    Verbosity,
 }
 
 impl ActionProvider for ChatStreamState {
@@ -271,6 +272,9 @@ impl ActionProvider for ChatStreamState {
                 out.extend(crate::request_card::offer(request, at, C::OpenPage, answer));
             }
         }
+        // How much of what the agent does it shows (what's folded at first).
+        let verbosity = crate::chat::rows::Verbosity::ALL.into_iter().map(|v| Choice::new(v.name(), v.name()).detail(Some(v.detail().into())).current(v == self.ui.folds.verbosity)).collect();
+        out.push(Action::new("chat.verbosity", "How much it shows", "Quiet: messages and what needs you; normal: calls folded into runs; everything: every call and its output", C::Verbosity).param(Param::Choice(verbosity)).setting("Shows", None).importance(MINOR));
         // What shows the agent at work, on the running turn's line.
         let shown = crate::indicator::NAMES.iter().map(|name| Choice::new(*name, *name).current(*name == self.ui.indicator)).collect();
         out.push(Action::new("chat.indicator", "Show the agent at work as…", "Beside the running turn's words: a heartbeat of its updates, or nothing", C::Indicator).param(Param::Choice(shown)).group(crate::actions::Group::View).importance(MINOR));
@@ -464,6 +468,13 @@ impl ActionProvider for ChatStreamState {
             ChatCommand::Answer { thread, request, option } => {
                 if let Err(why) = self.answer(thread, request, option) {
                     *cx.note = Some(why);
+                }
+            }
+            // Its defaults change: what was folded or opened by hand starts
+            // afresh.
+            ChatCommand::Verbosity => {
+                if let Some(verbosity) = value.as_deref().and_then(crate::chat::rows::Verbosity::from_name) {
+                    self.ui.folds = crate::chat::rows::Folds::at_verbosity(verbosity);
                 }
             }
             ChatCommand::Indicator => {

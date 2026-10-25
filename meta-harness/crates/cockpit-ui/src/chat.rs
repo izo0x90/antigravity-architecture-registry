@@ -29,7 +29,7 @@ pub(crate) mod actions;
 mod live;
 mod nav;
 mod render;
-mod rows;
+pub(crate) mod rows;
 mod session;
 pub(crate) mod things;
 pub(crate) mod slots;

@@ -27,13 +27,50 @@ impl Row {
     }
 }
 
+/// How much of what the agent does the chat shows: messages and what
+/// needs you (everything between two messages one folded line), the calls
+/// folded into runs, or every call and its output open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Verbosity {
+    Quiet,
+    #[default]
+    Normal,
+    Everything,
+}
+
+impl Verbosity {
+    pub(crate) const ALL: [Self; 3] = [Self::Quiet, Self::Normal, Self::Everything];
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Quiet => "quiet",
+            Self::Normal => "normal",
+            Self::Everything => "everything",
+        }
+    }
+
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.name() == name)
+    }
+
+    /// What it shows, in words.
+    pub(crate) fn detail(self) -> &'static str {
+        match self {
+            Self::Quiet => "Messages and what needs you: what it did between them is one folded line",
+            Self::Normal => "Calls folded into runs, each a line; their output folded",
+            Self::Everything => "Every call and its output, open",
+        }
+    }
+}
+
 /// What's been folded or opened against its default, by item id: runs (by
-/// their first call's id), and an item's own fold (a call's output, the
-/// reasoning).
+/// their first item's id), and an item's own fold (a call's output, the
+/// reasoning); and the verbosity, which says the defaults.
 #[derive(Default, Debug)]
 pub(crate) struct Folds {
     runs: BTreeSet<ItemId>,
     items: BTreeSet<ItemId>,
+    pub(crate) verbosity: Verbosity,
 }
 
 /// A call: a tool call, a command, a file change.
@@ -52,15 +89,29 @@ pub(crate) fn folds(item: &TurnItem) -> bool {
 }
 
 impl Folds {
-    /// Whether a run (its calls) shows each call.
-    pub(crate) fn run_open(&self, calls: &[&TurnItem]) -> bool {
-        let failed = calls.iter().any(|c| c.status == ItemStatus::Failed);
-        failed != calls.first().is_some_and(|c| self.runs.contains(&c.id))
+    /// Nothing folded or opened by hand, at `verbosity`.
+    pub(crate) fn at_verbosity(verbosity: Verbosity) -> Self {
+        Self { verbosity, ..Self::default() }
     }
 
-    /// Whether an item's own fold is open (a failed call's output is).
+    /// A fold's default, open or folded (`failed`: it holds a failed call).
+    fn open_by_default(&self, failed: bool) -> bool {
+        match self.verbosity {
+            Verbosity::Quiet => false,
+            Verbosity::Normal => failed,
+            Verbosity::Everything => true,
+        }
+    }
+
+    /// Whether a run (its items) shows each of them.
+    pub(crate) fn run_open(&self, calls: &[&TurnItem]) -> bool {
+        let failed = calls.iter().any(|c| c.status == ItemStatus::Failed);
+        self.open_by_default(failed) != calls.first().is_some_and(|c| self.runs.contains(&c.id))
+    }
+
+    /// Whether an item's own fold is open.
     pub(crate) fn item_open(&self, item: &TurnItem) -> bool {
-        (item.status == ItemStatus::Failed) != self.items.contains(&item.id)
+        self.open_by_default(item.status == ItemStatus::Failed) != self.items.contains(&item.id)
     }
 
     pub(crate) fn toggle_run(&mut self, first: &ItemId) {
@@ -75,11 +126,33 @@ impl Folds {
         }
     }
 
-    /// Everything in `items` open (`open`) or folded: each run and fold
-    /// toggled to it where its default isn't.
-    pub(crate) fn all(items: &[&TurnItem], open: bool) -> Self {
-        let mut all = Self::default();
-        for run in runs(items) {
+    /// The runs in `items` (the stream, in order): items in a row in one
+    /// turn that fold together (calls; quiet, reasoning too), two or more
+    /// (quiet, even one).
+    pub(crate) fn runs(&self, items: &[&TurnItem]) -> Vec<std::ops::RangeInclusive<usize>> {
+        let quiet = self.verbosity == Verbosity::Quiet;
+        let joins = |item: &TurnItem| is_call(item) || quiet && matches!(item.body, ItemBody::Reasoning { .. });
+        let fewest = if quiet { 0 } else { 1 };
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < items.len() {
+            let mut end = i;
+            while joins(items[i]) && end + 1 < items.len() && joins(items[end + 1]) && items[end + 1].turn_id == items[i].turn_id {
+                end += 1;
+            }
+            if joins(items[i]) && end - i >= fewest {
+                out.push(i..=end);
+            }
+            i = end + 1;
+        }
+        out
+    }
+
+    /// Everything in `items` open (`open`) or folded, at this verbosity:
+    /// each run and fold toggled to it where its default isn't.
+    pub(crate) fn all(&self, items: &[&TurnItem], open: bool) -> Self {
+        let mut all = Self { verbosity: self.verbosity, ..Self::default() };
+        for run in all.runs(items) {
             let calls: Vec<&TurnItem> = run.clone().map(|i| items[i]).collect();
             if all.run_open(&calls) != open {
                 all.runs.insert(calls[0].id.clone());
@@ -96,7 +169,7 @@ impl Folds {
     /// What folds at item `at` of `items`: the item's own fold when it has
     /// one, else the run it's in; whether it's open now.
     pub(crate) fn at(&self, items: &[&TurnItem], at: usize) -> Option<(Folding, bool)> {
-        let run = runs(items).into_iter().find(|r| r.contains(&at));
+        let run = self.runs(items).into_iter().find(|r| r.contains(&at));
         let calls = |r: &std::ops::RangeInclusive<usize>| r.clone().map(|i| items[i]).collect::<Vec<_>>();
         let item = items.get(at)?;
         match run {
@@ -108,8 +181,8 @@ impl Folds {
     }
 }
 
-/// What a fold is: a run (its first call, how many calls), or an item's
-/// own (its id; whether it's reasoning, else a call's output).
+/// What a fold is: a run (its first item, how many it holds), or an
+/// item's own (its id; whether it's reasoning, else a call's output).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Folding {
     Run(ItemId, usize),
@@ -120,6 +193,7 @@ impl Folding {
     /// It, in words.
     pub(crate) fn words(&self) -> String {
         match self {
+            Self::Run(_, 1) => "what it did here".to_owned(),
             Self::Run(_, n) => format!("the {n} calls"),
             Self::Item(_, true) => "the reasoning".to_owned(),
             Self::Item(_, false) => "its output".to_owned(),
@@ -130,7 +204,7 @@ impl Folding {
 impl Folds {
     /// Whether anything in `items` is folded, and whether anything is open.
     pub(crate) fn any(&self, items: &[&TurnItem]) -> (bool, bool) {
-        let runs: Vec<bool> = runs(items).into_iter().map(|r| self.run_open(&r.map(|i| items[i]).collect::<Vec<_>>())).collect();
+        let runs: Vec<bool> = self.runs(items).into_iter().map(|r| self.run_open(&r.map(|i| items[i]).collect::<Vec<_>>())).collect();
         let own: Vec<bool> = items.iter().filter(|i| folds(i)).map(|i| self.item_open(i)).collect();
         let all = || runs.iter().chain(&own);
         (all().any(|open| !open), all().any(|open| *open))
@@ -144,31 +218,14 @@ impl Folds {
     }
 }
 
-/// The runs of calls in `items` (the stream, in order): two or more calls
-/// in a row in one turn.
-pub(crate) fn runs(items: &[&TurnItem]) -> Vec<std::ops::RangeInclusive<usize>> {
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < items.len() {
-        let mut end = i;
-        while is_call(items[i]) && end + 1 < items.len() && is_call(items[end + 1]) && items[end + 1].turn_id == items[i].turn_id {
-            end += 1;
-        }
-        if end > i {
-            out.push(i..=end);
-        }
-        i = end + 1;
-    }
-    out
-}
-
-/// The rows of `items` (the stream, in order), as `folds` has them.
+/// The rows of `items` (the stream, in order), as `folds` has them: in one
+/// pass, each run met as the items reach it.
 pub(crate) fn rows(items: &[&TurnItem], folds: &Folds) -> Vec<Row> {
-    let runs = runs(items);
+    let mut runs = folds.runs(items).into_iter().peekable();
     let mut out = Vec::with_capacity(items.len());
     let mut i = 0;
     while i < items.len() {
-        if let Some(run) = runs.iter().find(|r| *r.start() == i) {
+        if let Some(run) = runs.next_if(|r| *r.start() == i) {
             let calls: Vec<&TurnItem> = run.clone().map(|j| items[j]).collect();
             if !folds.run_open(&calls) {
                 out.push(Row { first: *run.start(), last: *run.end(), run: Some(summary(&calls)) });
@@ -206,6 +263,7 @@ pub(crate) fn summary(calls: &[&TurnItem]) -> String {
             },
             ItemBody::CommandExecution { .. } => count("ran", "command"),
             ItemBody::FileChange { .. } => count("changed", "file"),
+            ItemBody::Reasoning { .. } => count("thought", ""),
             _ => {}
         }
     }
@@ -260,9 +318,9 @@ mod tests {
         folds.toggle_run(&ItemId::new("i1"));
         let open = super::rows(&items, &folds);
         assert_eq!(open.len(), 9, "open: each call a row");
-        let folds = Folds::all(&items, false);
+        let folds = folds.all(&items, false);
         assert_eq!(super::rows(&items, &folds).len(), 5, "all folded again");
-        assert_eq!(super::rows(&items, &Folds::all(&items, true)).len(), 9, "all open");
+        assert_eq!(super::rows(&items, &folds.all(&items, true)).len(), 9, "all open");
         assert_eq!(folds.at(&items, 3).map(|(f, open)| (f.words(), open)), Some(("the 5 calls".to_owned(), false)), "in a folded run: the run");
     }
 
@@ -281,4 +339,24 @@ mod tests {
         folds.toggle_run(&ItemId::new("i1"));
         assert_eq!(rows(&items, &folds).len(), 1, "folded by hand");
     }
+
+    /// Quiet: everything between two messages is one folded line, even one
+    /// call, reasoning too; a failed call doesn't open it. Everything:
+    /// every run and output open.
+    #[test]
+    fn the_verbosity_says_what_shows_by_default() {
+        let mut failed = call(3, "a", ToolKind::Execute);
+        failed.status = ItemStatus::Failed;
+        let thought = item(1, "a", ItemBody::Reasoning { text: "hmm".into(), streaming: false }, ItemStatus::Completed);
+        let stream = [said(0, "a"), thought, call(2, "a", ToolKind::Read), failed, said(4, "a"), call(5, "a", ToolKind::Read), said(6, "a")];
+        let items: Vec<&TurnItem> = stream.iter().collect();
+        let quiet = Folds { verbosity: Verbosity::Quiet, ..Folds::default() };
+        let shown: Vec<Option<String>> = rows(&items, &quiet).into_iter().map(|r| r.run).collect();
+        assert_eq!(shown, [None, Some("Thought once, read 1 file, ran 1 command (1 failed)".into()), None, Some("Read 1 file".into()), None]);
+        let everything = Folds { verbosity: Verbosity::Everything, ..Folds::default() };
+        assert_eq!(rows(&items, &everything).len(), 7, "every one a row");
+        assert!(items.iter().filter(|i| folds(i)).all(|i| everything.item_open(i)), "every output open");
+        assert_eq!(rows(&items, &Folds::default()).len(), 7, "normal: the run with a failed call open, each its row");
+    }
 }
+

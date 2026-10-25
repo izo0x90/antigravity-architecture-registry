@@ -262,10 +262,9 @@ impl Navigable for ChatStreamState {
     /// The run or the item's own fold under the cursor (its own first);
     /// or every one.
     fn fold(&mut self, fold: Fold) {
-        use crate::chat::rows::Folds;
         match fold {
             Fold::OpenAll | Fold::CloseAll => {
-                if let Some(all) = self.with_items(|items, _| Folds::all(items, fold == Fold::OpenAll)) {
+                if let Some(all) = self.with_items(|items, folds| folds.all(items, fold == Fold::OpenAll)) {
                     self.ui.folds = all;
                 }
             }
