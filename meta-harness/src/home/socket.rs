@@ -81,12 +81,12 @@ fn stop(following: HashMap<String, tokio::task::AbortHandle>) {
     }
 }
 
-/// One server's events: `Resync` and its replay, then live; again after
-/// falling behind.
+/// One server's events: `Resync`, its replay and `Replayed`, then live;
+/// again after falling behind.
 async fn forward(server: String, hub: Arc<EventHub>, tx: mpsc::Sender<HomeEvent>) {
     loop {
         let (replay, mut live) = hub.subscribe();
-        for event in std::iter::once(ClientEvent::Resync).chain(replay) {
+        for event in std::iter::once(ClientEvent::Resync).chain(replay).chain([ClientEvent::Replayed]) {
             if tx.send(HomeEvent::Event { server: server.clone(), event: Box::new(event) }).await.is_err() {
                 return;
             }

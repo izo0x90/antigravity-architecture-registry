@@ -71,6 +71,20 @@ impl ItemBody {
     /// What a message says, put together one way for every reader (the
     /// chat, `slot_read`, what's tagged and discussed): your text, or an
     /// answer's text parts a line apart. None: it isn't a message.
+    /// Whether it has more than its line, folded under it: a call's
+    /// output, a change's diff, reasoning's text, what went with your
+    /// message.
+    pub fn has_detail(&self) -> bool {
+        match self {
+            Self::ToolCall { output, .. } => !output.is_empty(),
+            Self::CommandExecution { output, .. } => output.is_some(),
+            Self::FileChange { diff, .. } => diff.is_some(),
+            Self::Reasoning { .. } => true,
+            Self::UserMessage { text, .. } => text.contains(crate::HANDED_ON),
+            _ => false,
+        }
+    }
+
     pub fn said(&self) -> Option<String> {
         match self {
             Self::UserMessage { text, .. } => Some(text.clone()),

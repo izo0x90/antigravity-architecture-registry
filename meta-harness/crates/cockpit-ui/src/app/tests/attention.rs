@@ -147,7 +147,9 @@ fn the_look_has_the_keyboard_its_keys_move_and_label_its_parts_and_nothing_reach
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.focused_kind(), BufferKind::Inbox, "the inbox it holds has the keys");
     assert_eq!(app.desk.inbox().cursor_key().as_deref(), Some("1"), "it opens on what waits on you: its request");
-    // Its answers show under it; clicked, one answers.
+    // Its answers show under it, the bar offers them; clicked, one answers.
+    let bar_keys = |app: &CockpitApp| -> Vec<String> { app.bar_keys(&app.bound_actions()).iter().map(|b| b.action.id.clone()).collect() };
+    assert!(bar_keys(&app).iter().any(|id| id.starts_with("request.")), "{:?}", bar_keys(&app));
     sent(&app);
     click_on(&ctx, &mut app, "Deny");
     assert_eq!(sent(&app), ["POST /api/threads/t/requests/r1"], "Deny, under its request");
@@ -161,9 +163,8 @@ fn the_look_has_the_keyboard_its_keys_move_and_label_its_parts_and_nothing_reach
     let Some(Capture::Hint(hint)) = &app.capture else { panic!("hint mode") };
     assert_eq!(hint.labels.len(), app.desk.inbox().spots().len(), "its parts, labelled");
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
-    let bound = app.bound_actions();
-    let bar: Vec<String> = app.bar_keys(&bound).iter().map(|b| b.action.id.clone()).collect();
-    assert!(bar.iter().any(|id| id == "inbox.next") && bar.iter().any(|id| id.starts_with("request.")), "{bar:?}");
+    let bar = bar_keys(&app);
+    assert!(bar.iter().any(|id| id == "inbox.next") && !bar.iter().any(|id| id.starts_with("request.")), "answered, its answer on its way: nothing to answer; {bar:?}");
 }
 
 #[test]

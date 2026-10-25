@@ -94,7 +94,6 @@ impl ChatStreamState {
     pub(crate) fn draw(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, typing: bool, cx: &mut RunCx<'_>) {
         let host = cx.at.name();
         let ctx = ui.ctx().clone();
-        self.tend_folds();
         let panel = ui.clip_rect();
 
         ui.vertical(|ui| {
@@ -167,16 +166,44 @@ impl ChatStreamState {
         });
     }
 
-    /// The folds, and the rows' heights, are the shown thread's: another
-    /// shown after one, they start afresh.
-    fn tend_folds(&mut self) {
-        let thread = self.active_thread();
-        if self.ui.folds_for.is_some() && self.ui.folds_for != thread {
-            self.ui.folds.afresh();
+    /// What it keeps of the thread it shows, kept true to it (as it's
+    /// shared, each frame, before keys): another thread shown, the folds
+    /// start afresh; a new view of it (a resync), the rows' heights and
+    /// the changes worked out go; items put in before the cursor's (a
+    /// sub-agent's), the cursor stays on its item.
+    pub(super) fn tend(&mut self) {
+        let agents = self.agents.clone();
+        let agents = agents.get();
+        let Some(view) = agents.thread_in(&self.ui.slot) else { return };
+        if self.ui.folds_for.as_ref() != Some(&view.thread.id) {
+            if self.ui.folds_for.is_some() {
+                self.ui.folds.afresh();
+            }
+            self.ui.folds_for = Some(view.thread.id.clone());
+        }
+        let epoch = view.shape_of().0;
+        if self.ui.epoch != Some(epoch) {
             self.ui.heights.clear();
             self.ui.diffs.clear();
+            self.ui.epoch = Some(epoch);
         }
-        self.ui.folds_for = thread;
+        if let (Some(at), Some(id)) = (self.ui.cursor, &self.ui.cursor_on)
+            && view.in_stream(at).is_none_or(|item| item.id != *id)
+            && let Some(now) = view.shown_at(id)
+        {
+            self.ui.cursor = Some(now);
+        }
+        // (Put there before its item came: on what's there now.)
+        if self.ui.cursor_on.is_none() {
+            self.ui.cursor_on = self.ui.cursor.and_then(|at| Some(view.in_stream(at)?.id.clone()));
+        }
+    }
+
+    /// The cursor put at `at` (in the order shown), on the item there;
+    /// none: following the latest.
+    pub(super) fn cursor_to(&mut self, at: Option<usize>) {
+        self.ui.cursor = at;
+        self.ui.cursor_on = at.and_then(|at| Some(self.thread()?.in_stream(at)?.id.clone()));
     }
 
     /// An item as the chat draws it, in the stream or where what waits is
@@ -455,7 +482,7 @@ impl ChatStreamState {
             self.ui.scrolling.relaid();
         }
         let Some(row) = self.shape().row_of(index) else { return };
-        self.ui.cursor = Some(index);
+        self.cursor_to(Some(index));
         self.ui.pick = None;
         self.ui.scrolling.show(row, show);
     }
@@ -466,7 +493,7 @@ impl ChatStreamState {
         let shape = self.shape();
         let from = self.ui.cursor.and_then(|c| shape.row_of(c)).or(shape.rows.len().checked_sub(1));
         if let Some(at) = self.ui.scrolling.go(shape.rows.len(), from, go) {
-            self.ui.cursor = Some(shape.rows[at].first);
+            self.cursor_to(Some(shape.rows[at].first));
             self.ui.pick = None;
         }
     }

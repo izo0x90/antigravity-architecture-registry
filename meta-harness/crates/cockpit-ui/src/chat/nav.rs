@@ -177,6 +177,7 @@ impl Navigable for ChatStreamState {
         self.agents.follow(&shared.agents);
         self.unsent.follow(&shared.drafts);
         self.ui.messages.follow(shared);
+        self.tend();
         self.took();
         let (timeline, read) = shared.changes.timeline();
         if read != self.turn_files_read {
@@ -232,7 +233,7 @@ impl Navigable for ChatStreamState {
             });
         };
         self.ui.slot = slot;
-        self.ui.cursor = None;
+        self.cursor_to(None);
         Ok(())
     }
 
@@ -245,7 +246,7 @@ impl Navigable for ChatStreamState {
             if let Some(slot) = slot {
                 self.ui.slot = slot;
             }
-            self.ui.cursor = message;
+            self.cursor_to(message);
             self.ui.pick = None;
             if let Some(row) = message.and_then(|at| self.shape().row_of(at)) {
                 self.ui.scrolling.show(row, crate::viewport::Show::Middle);
@@ -313,9 +314,10 @@ impl Navigable for ChatStreamState {
     /// Lets go of the cursor: the stream goes to the latest and follows it
     /// again.
     fn leave(&mut self) -> Step {
-        let Some(at) = self.ui.cursor.take() else {
+        let Some(at) = self.ui.cursor else {
             return Step::Nothing("Already following the latest.".into());
         };
+        self.cursor_to(None);
         let shape = self.shape();
         self.ui.scrolling.go(shape.rows.len(), shape.row_of(at), crate::viewport::Go::Last);
         Step::Done

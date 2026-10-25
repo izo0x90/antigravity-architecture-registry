@@ -122,14 +122,7 @@ pub(crate) fn is_call(item: &TurnItem) -> bool {
 /// Whether an item folds on its own: a call with output, a change with
 /// its diff, reasoning, your message with what went with it.
 pub(crate) fn folds(item: &TurnItem) -> bool {
-    match &item.body {
-        ItemBody::ToolCall { output, .. } => !output.is_empty(),
-        ItemBody::CommandExecution { output, .. } => output.is_some(),
-        ItemBody::FileChange { diff, .. } => diff.is_some(),
-        ItemBody::UserMessage { text, .. } => text.contains(harness_contracts::HANDED_ON),
-        ItemBody::Reasoning { .. } => true,
-        _ => false,
-    }
+    item.body.has_detail()
 }
 
 impl Folds {

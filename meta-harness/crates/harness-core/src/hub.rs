@@ -45,7 +45,7 @@ impl Cache {
         let (key, thread) = match event {
             ClientEvent::InstanceUpdated { snapshot } => (Key::Instance(snapshot.instance_id.clone()), None),
             // Said to one client by its stream, never kept.
-            ClientEvent::Resync => return,
+            ClientEvent::Resync | ClientEvent::Replayed => return,
             ClientEvent::SlotUpdated { slot } => (Key::Slot(slot.id.clone()), None),
             ClientEvent::SlotClosed { slot_id } => {
                 self.entries.remove(&Key::Slot(slot_id.clone()));

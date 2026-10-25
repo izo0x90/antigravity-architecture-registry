@@ -94,6 +94,11 @@ pub struct ChatView {
     /// for which thread; the stream's shape as last worked out from them.
     pub(crate) folds: rows::Folds,
     pub(crate) folds_for: Option<ThreadId>,
+    /// The item the cursor's on (it follows the item as others are put in
+    /// before it: `tend`); which view of the thread the rows' heights and
+    /// changes were worked out for.
+    pub(crate) cursor_on: Option<harness_contracts::ItemId>,
+    pub(crate) epoch: Option<u64>,
     shape: std::cell::RefCell<Option<(ShapeOf, std::rc::Rc<rows::Shape>)>>,
     /// What shows the agent at work (the setting's pick); where the running
     /// turn's line was drawn this frame.
@@ -135,6 +140,8 @@ impl Default for ChatView {
             cursor: None,
             folds: rows::Folds::default(),
             folds_for: None,
+            cursor_on: None,
+            epoch: None,
             shape: Default::default(),
             indicator: Default::default(),
             live_at: None,
@@ -232,9 +239,9 @@ impl ChatView {
 /// A change's hunks, compared once.
 pub(crate) type Hunks = std::rc::Rc<Vec<harness_contracts::changes::Hunk>>;
 
-/// What a stream's shape was worked out from: its thread, as of which
-/// update, and which change of the folds.
-type ShapeOf = (ThreadId, u64, u64);
+/// What a stream's shape was worked out from: its thread, which view of it
+/// and as of which change of its shape, and which change of the folds.
+type ShapeOf = (ThreadId, (u64, u64), u64);
 
 /// How often a chat on screen says its slot's updates were seen (seconds).
 const SEEN_EVERY: f64 = 2.0;
@@ -270,25 +277,12 @@ impl ChatStreamState {
     }
 
     /// What waits on you: each request pending with no answer on its way,
-    /// with its item's place in the stream (none: its item isn't there
-    /// yet), in the stream's order (read in place; none waiting: nothing
-    /// read).
+    /// as it was asked (the first asked first), with its item's place in
+    /// the stream (none: its item isn't there yet).
     pub(crate) fn pending(&self) -> Vec<(Option<usize>, harness_contracts::RuntimeRequest)> {
         let Some(view) = self.thread() else { return Vec::new() };
         let agents = self.agents();
-        let waiting: Vec<&harness_contracts::RuntimeRequest> = view.requests.iter().filter(|r| agents.waits(r)).collect();
-        if waiting.is_empty() {
-            return Vec::new();
-        }
-        let mut at = std::collections::BTreeMap::new();
-        for (index, item) in view.stream().enumerate() {
-            if let ItemBody::Request { request_id } = &item.body {
-                at.insert(request_id.clone(), index);
-            }
-        }
-        let mut out: Vec<(Option<usize>, harness_contracts::RuntimeRequest)> = waiting.into_iter().map(|r| (at.get(&r.id).copied(), r.clone())).collect();
-        out.sort_by_key(|(index, _)| index.unwrap_or(usize::MAX));
-        out
+        view.requests().iter().filter(|r| agents.waits(r)).map(|r| (view.request_shown_at(&r.id), r.clone())).collect()
     }
 
     /// The stream's shape (its rows, a folded run one of them; whether
@@ -296,7 +290,7 @@ impl ChatStreamState {
     /// change of the thread or the folds.
     pub(crate) fn shape(&self) -> std::rc::Rc<rows::Shape> {
         let Some(view) = self.thread() else { return Default::default() };
-        let of = (view.thread.id.clone(), view.activity, self.ui.folds.changes());
+        let of = (view.thread.id.clone(), view.shape_of(), self.ui.folds.changes());
         if let Some((was, shape)) = &*self.ui.shape.borrow()
             && *was == of
         {

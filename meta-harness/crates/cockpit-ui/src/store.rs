@@ -8,13 +8,13 @@ use harness_contracts::{
     Turn, TurnId, TurnItem, TurnStatus, Usage, Slot, SlotId, Notification, NotificationId, NotificationState,
 };
 
-/// The agent's updates kept per thread (each tenth of a second once): a
-/// minute's at the most it can send.
+/// The agent's updates kept per thread (each tenth of a second once, the
+/// newest): a minute of steady updates.
 const ARRIVALS_KEPT: usize = 600;
 
-/// How long after a resync what comes is the state replayed (what's the
-/// same as before isn't news).
-const REPLAY_S: f64 = 10.0;
+/// Each thread view made, numbered (so what's worked out from one isn't
+/// taken for another's, a resync's new view of the same thread).
+static EPOCHS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 pub struct ThreadView {
@@ -24,18 +24,30 @@ pub struct ThreadView {
     /// as of which event each last changed.
     items: Vec<TurnItem>,
     changed: Vec<u64>,
-    pub requests: Vec<RuntimeRequest>,
+    requests: Vec<RuntimeRequest>,
+    request_at: HashMap<RequestId, usize>,
     pub plan: Option<PlanArtifact>,
     pub usage: Option<Usage>,
-    /// Events applied to this thread; drives the AGENT activity LED.
+    /// Events applied to this thread (each changes what's shown).
     pub activity: u64,
+    /// Which view of the thread this is (a new one after a resync), and
+    /// as of which change its stream's shape is (an item put in, moved,
+    /// or changed in kind, status, parent, turn or whether it has more).
+    epoch: u64,
+    shape: u64,
+    /// How many updates came from the agent (its news): the AGENT light.
+    pub news: u64,
     /// The items in the order shown (by their turn's place, then as they
     /// came), each with its turn's place: places in `items`. An item whose
     /// turn hasn't come yet waits for it.
     stream: Vec<(usize, usize)>,
-    /// Where each item and turn is (in `items`, `turns`).
+    /// Where each item and turn is (in `items`, `turns`); each item's
+    /// place in the order shown (none: its turn hasn't come); each
+    /// request's item.
     item_at: HashMap<ItemId, usize>,
     turn_at: HashMap<TurnId, usize>,
+    shown_at: Vec<Option<usize>>,
+    request_items: HashMap<RequestId, usize>,
     /// When the agent's updates came (the clock's seconds), oldest first:
     /// each tenth of a second that had any, and how many. An update is
     /// news from it: a turn, an item, its plan or usage changed, a
@@ -45,11 +57,24 @@ pub struct ThreadView {
 
 impl ThreadView {
     fn new(thread: Thread) -> Self {
-        Self { thread, turns: Vec::new(), items: Vec::new(), requests: Vec::new(), plan: None, usage: None, activity: 0, changed: Vec::new(), stream: Vec::new(), item_at: HashMap::new(), turn_at: HashMap::new(), arrivals: VecDeque::new() }
+        let epoch = EPOCHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self { thread, turns: Vec::new(), items: Vec::new(), requests: Vec::new(), request_at: HashMap::new(), plan: None, usage: None, activity: 0, epoch, shape: 0, news: 0, changed: Vec::new(), stream: Vec::new(), item_at: HashMap::new(), turn_at: HashMap::new(), shown_at: Vec::new(), request_items: HashMap::new(), arrivals: VecDeque::new() }
     }
 
     pub fn request(&self, id: &RequestId) -> Option<&RuntimeRequest> {
-        self.requests.iter().find(|r| &r.id == id)
+        self.request_at.get(id).map(|i| &self.requests[*i])
+    }
+
+    /// Its requests, as they were asked.
+    pub fn requests(&self) -> &[RuntimeRequest] {
+        &self.requests
+    }
+
+    /// Which view of the thread this is, and as of which change its
+    /// stream's shape is: what's worked out from the stream's shape is
+    /// kept by them.
+    pub fn shape_of(&self) -> (u64, u64) {
+        (self.epoch, self.shape)
     }
 
     pub fn turns(&self) -> &[Turn] {
@@ -67,6 +92,16 @@ impl ThreadView {
     /// Its items in the order shown.
     pub fn stream(&self) -> impl DoubleEndedIterator<Item = &TurnItem> + ExactSizeIterator + Clone {
         self.stream.iter().map(|(_, i)| &self.items[*i])
+    }
+
+    /// Where item `id` is in the order shown.
+    pub fn shown_at(&self, id: &ItemId) -> Option<usize> {
+        self.item_at.get(id).and_then(|i| self.shown_at[*i])
+    }
+
+    /// Where request `id`'s item is in the order shown.
+    pub fn request_shown_at(&self, id: &RequestId) -> Option<usize> {
+        self.request_items.get(id).and_then(|i| self.shown_at[*i])
     }
 
     /// The item at `at` in the order shown.
@@ -104,6 +139,7 @@ impl ThreadView {
 
     /// An update from the agent came at `now`.
     fn arrived(&mut self, now: f64) {
+        self.news += 1;
         match self.arrivals.back_mut() {
             Some((at, n)) if (*at * 10.0).floor() == (now * 10.0).floor() => *n += 1,
             _ => self.arrivals.push_back((now, 1)),
@@ -114,24 +150,56 @@ impl ThreadView {
     }
 
     /// `item` put in (replacing the one with its id): whether it changed.
+    /// A new turn moves it there (a message the agent took into a turn of
+    /// its own).
     fn put_item(&mut self, item: TurnItem) -> bool {
-        if let Some(at) = self.item_at.get(&item.id) {
-            let changed = self.items[*at] != item;
+        if let Some(&at) = self.item_at.get(&item.id) {
+            let changed = self.items[at] != item;
             if changed {
-                self.changed[*at] = self.activity;
+                self.changed[at] = self.activity;
+                if shape_facts(&self.items[at]) != shape_facts(&item) {
+                    self.shape += 1;
+                }
             }
-            self.items[*at] = item;
+            let moved = self.items[at].turn_id != item.turn_id;
+            self.items[at] = item;
+            if moved {
+                self.stream.retain(|(_, i)| *i != at);
+                self.shown_at[at] = None;
+                if let Some(turn) = self.turn_at.get(&self.items[at].turn_id).copied() {
+                    self.place(turn, at);
+                } else {
+                    self.number_shown();
+                }
+            }
             return changed;
         }
         let at = self.items.len();
         self.item_at.insert(item.id.clone(), at);
+        if let harness_contracts::ItemBody::Request { request_id } = &item.body {
+            self.request_items.insert(request_id.clone(), at);
+        }
         self.changed.push(self.activity);
+        self.shown_at.push(None);
         let turn = self.turn_at.get(&item.turn_id).copied();
         self.items.push(item);
+        self.shape += 1;
         if let Some(turn) = turn {
             self.place(turn, at);
         }
         true
+    }
+
+    /// `request` put in (replacing the one with its id): whether it changed.
+    fn put_request(&mut self, request: RuntimeRequest) -> bool {
+        match self.request_at.get(&request.id) {
+            Some(&at) => std::mem::replace(&mut self.requests[at], request) != self.requests[at],
+            None => {
+                self.request_at.insert(request.id.clone(), self.requests.len());
+                self.requests.push(request);
+                true
+            }
+        }
     }
 
     /// `turn` put in (replacing the one with its id): whether it changed.
@@ -146,6 +214,7 @@ impl ThreadView {
         self.turn_at.insert(turn.id.clone(), at);
         let waiting: Vec<usize> = self.items.iter().enumerate().filter(|(_, i)| i.turn_id == turn.id).map(|(n, _)| n).collect();
         self.turns.push(turn);
+        self.shape += 1;
         for item in waiting {
             self.place(at, item);
         }
@@ -165,6 +234,14 @@ impl ThreadView {
             None => self.stream.partition_point(|(t, _)| *t <= turn),
         };
         self.stream.insert(at, (turn, item));
+        self.number_shown();
+    }
+
+    /// Each item's place in the order shown, as it is now.
+    fn number_shown(&mut self) {
+        for (n, (_, i)) in self.stream.iter().enumerate() {
+            self.shown_at[*i] = Some(n);
+        }
     }
 
     /// Whether item `item` (its place in `items`) is `ancestor`'s, at any
@@ -181,14 +258,10 @@ impl ThreadView {
     }
 }
 
-fn upsert<T: PartialEq>(list: &mut Vec<T>, value: T, same: impl Fn(&T, &T) -> bool) -> bool {
-    match list.iter_mut().find(|existing| same(existing, &value)) {
-        Some(existing) => std::mem::replace(existing, value) != *existing,
-        None => {
-            list.push(value);
-            true
-        }
-    }
+/// What of an item its stream's shape depends on: its kind, status,
+/// parent and turn, whether it has more than its line.
+fn shape_facts(item: &TurnItem) -> (std::mem::Discriminant<harness_contracts::ItemBody>, harness_contracts::ItemStatus, Option<&ItemId>, &TurnId, bool) {
+    (std::mem::discriminant(&item.body), item.status, item.parent_id.as_ref(), &item.turn_id, item.body.has_detail())
 }
 
 #[derive(Debug, Default)]
@@ -200,9 +273,11 @@ pub struct Store {
     pub notifications: BTreeMap<NotificationId, Notification>,
     /// Slots closed (a chat showing one goes back to the lead).
     pub closed: std::collections::BTreeSet<SlotId>,
-    /// The threads as they were before the last resync, and when it came
-    /// (what's replayed as it was isn't news from the agent).
-    before: Option<(f64, BTreeMap<ThreadId, ThreadView>)>,
+    /// The server's state as it was is all here (`Replayed`; till then,
+    /// what comes is replayed, not news); when the agent's updates came in
+    /// each thread, kept through a resync until the thread's back.
+    live: bool,
+    arrived_before: BTreeMap<ThreadId, VecDeque<(f64, u32)>>,
 }
 
 impl Store {
@@ -216,12 +291,17 @@ impl Store {
                 self.threads.remove(&thread_id);
             }
             ClientEvent::Session { event } => self.apply_session(event, now),
-            // The whole state follows: start from nothing (what was held
-            // kept a while, to tell what's replayed).
+            // The whole state follows: start from nothing (when the agent's
+            // updates came, kept).
             ClientEvent::Resync => {
-                let threads = std::mem::take(&mut self.threads);
+                let arrived = std::mem::take(&mut self.threads).into_iter().map(|(id, view)| (id, view.arrivals)).collect();
                 *self = Self::default();
-                self.before = Some((now, threads));
+                self.arrived_before = arrived;
+            }
+            // What follows is news.
+            ClientEvent::Replayed => {
+                self.live = true;
+                self.arrived_before.clear();
             }
             ClientEvent::SlotUpdated { slot } => {
                 self.closed.remove(&slot.id);
@@ -251,18 +331,11 @@ impl Store {
         Some(view)
     }
 
-    /// Whether what `same` finds was held before a resync just now (it's
-    /// replayed as it was).
-    fn replayed(&mut self, thread: &ThreadId, now: f64, same: impl Fn(&ThreadView) -> bool) -> bool {
-        if self.before.as_ref().is_some_and(|(at, _)| now - at > REPLAY_S) {
-            self.before = None;
-        }
-        self.before.as_ref().and_then(|(_, before)| before.get(thread)).is_some_and(same)
-    }
-
     /// A thread's event, at `now`: news from the agent (something of its
-    /// changed, a question asked) is an update that arrived.
+    /// changed, a question asked; once the state as it was is all here) is
+    /// an update that arrived.
     fn apply_session(&mut self, event: AdapterEvent, now: f64) {
+        let live = self.live;
         match event {
             AdapterEvent::ThreadUpdated { thread } => match self.threads.get_mut(&thread.id) {
                 Some(view) => {
@@ -272,45 +345,41 @@ impl Store {
                 // (Back after a resync: when the agent's updates came, kept.)
                 None => {
                     let mut view = ThreadView::new(thread);
-                    if let Some(before) = self.before.as_ref().and_then(|(_, b)| b.get(&view.thread.id)) {
-                        view.arrivals = before.arrivals.clone();
-                    }
+                    view.arrivals = self.arrived_before.remove(&view.thread.id).unwrap_or_default();
                     self.threads.insert(view.thread.id.clone(), view);
                 }
             },
             AdapterEvent::TurnUpdated { turn } => {
                 // (Queued is your prompt waiting, not the agent's news.)
-                let replayed = turn.status == TurnStatus::Queued || self.replayed(&turn.thread_id, now, |v| v.turn(&turn.id) == Some(&turn));
+                let news = live && turn.status != TurnStatus::Queued;
                 if let Some(view) = self.view(&turn.thread_id.clone())
                     && view.put_turn(turn)
-                    && !replayed
+                    && news
                 {
                     view.arrived(now);
                 }
             }
             AdapterEvent::ItemUpdated { item } => {
-                let replayed = self.replayed(&item.thread_id, now, |v| v.item(&item.id) == Some(&item));
                 if let Some(view) = self.view(&item.thread_id.clone())
                     && view.put_item(item)
-                    && !replayed
+                    && live
                 {
                     view.arrived(now);
                 }
             }
             AdapterEvent::RequestUpdated { request } => {
                 // Asked (an answer's echo isn't the agent's news).
-                let asked = request.status == RequestStatus::Pending && !self.replayed(&request.thread_id, now, |v| v.request(&request.id) == Some(&request));
+                let asked = live && request.status == RequestStatus::Pending;
                 if let Some(view) = self.view(&request.thread_id.clone())
-                    && upsert(&mut view.requests, request, |a, b| a.id == b.id)
+                    && view.put_request(request)
                     && asked
                 {
                     view.arrived(now);
                 }
             }
             AdapterEvent::PlanUpdated { plan } => {
-                let replayed = self.replayed(&plan.thread_id, now, |v| v.plan.as_ref() == Some(&plan));
                 if let Some(view) = self.view(&plan.thread_id.clone()) {
-                    let news = view.plan.as_ref() != Some(&plan) && !replayed;
+                    let news = live && view.plan.as_ref() != Some(&plan);
                     view.plan = Some(plan);
                     if news {
                         view.arrived(now);
@@ -318,9 +387,8 @@ impl Store {
                 }
             }
             AdapterEvent::UsageUpdated { thread_id, usage, .. } => {
-                let replayed = self.replayed(&thread_id, now, |v| v.usage.as_ref() == Some(&usage));
                 if let Some(view) = self.view(&thread_id) {
-                    let news = view.usage.as_ref() != Some(&usage) && !replayed;
+                    let news = live && view.usage.as_ref() != Some(&usage);
                     view.usage = Some(usage);
                     if news {
                         view.arrived(now);
@@ -439,17 +507,21 @@ mod tests {
     }
 
     /// News from the agent is an update that came (each tenth of a second
-    /// once, counted); the same again, an answer's echo, a turn queued,
-    /// what a resync replays as it was, and the thread's own changes
-    /// aren't.
+    /// once, counted), once the state as it was is all here: the replay,
+    /// the same again, an answer's echo, a turn queued and the thread's own
+    /// changes aren't. Through a resync, what came is kept; what's
+    /// replayed after it isn't news.
     #[test]
     fn what_came_from_the_agent_is_kept_with_its_thread() {
         let mut store = Store::default();
         let came = |store: &Store| store.threads[&ThreadId::new("t")].arrivals().iter().copied().collect::<Vec<_>>();
-        store.apply(thread(ThreadStatus::Running), 1.0);
-        store.apply(turn("one", 1, TurnStatus::Running), 1.0);
+        store.apply(thread(ThreadStatus::Running), 0.5);
+        store.apply(turn("one", 1, TurnStatus::Running), 0.5);
+        assert!(came(&store).is_empty(), "the state as it was: not news");
+        store.apply(ClientEvent::Replayed, 0.6);
+        store.apply(in_turn("a", "one"), 1.0);
         store.apply(in_turn("a", "one"), 1.02);
-        store.apply(in_turn("a", "one"), 2.0);
+        store.apply(in_turn("b", "one"), 1.05);
         store.apply(thread(ThreadStatus::Running), 3.0);
         store.apply(turn("two", 2, TurnStatus::Queued), 3.5);
         assert_eq!(came(&store), [(1.0, 2)], "two in one tenth; the same again, the thread's own and a turn queued aren't news");
@@ -462,9 +534,28 @@ mod tests {
         store.apply(thread(ThreadStatus::Running), 6.1);
         store.apply(turn("one", 1, TurnStatus::Running), 6.1);
         store.apply(in_turn("a", "one"), 6.1);
-        assert_eq!(came(&store), [(1.0, 2), (4.0, 1)], "replayed as it was: what came before, kept");
-        store.apply(in_turn("b", "one"), 6.2);
-        assert_eq!(came(&store).last(), Some(&(6.2, 1)), "new after a resync is news");
+        assert_eq!(came(&store), [(1.0, 2), (4.0, 1)], "replayed: what came before, kept");
+        store.apply(ClientEvent::Replayed, 6.15);
+        store.apply(in_turn("c", "one"), 6.2);
+        assert_eq!(came(&store).last(), Some(&(6.2, 1)), "new after it is news");
+    }
+
+    /// A message the agent takes into a turn of its own moves there in the
+    /// order shown.
+    #[test]
+    fn an_item_moved_to_another_turn_is_shown_there() {
+        let mut store = Store::default();
+        store.apply(thread(ThreadStatus::Running), 0.0);
+        store.apply(turn("one", 1, TurnStatus::Running), 0.0);
+        store.apply(in_turn("a", "one"), 0.0);
+        store.apply(in_turn("steered", "one"), 0.0);
+        store.apply(in_turn("b", "one"), 0.0);
+        store.apply(turn("two", 2, TurnStatus::Running), 0.0);
+        store.apply(in_turn("steered", "two"), 0.0);
+        store.apply(in_turn("c", "two"), 0.0);
+        let view = &store.threads[&ThreadId::new("t")];
+        assert_eq!(view.stream().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["a", "b", "steered", "c"]);
+        assert_eq!(view.items_of(&TurnId::new("two")).map(|i| i.id.as_str()).collect::<Vec<_>>(), ["steered", "c"]);
     }
 
     #[test]

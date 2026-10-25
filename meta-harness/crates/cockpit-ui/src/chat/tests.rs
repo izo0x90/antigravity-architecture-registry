@@ -86,6 +86,8 @@ pub(crate) fn conversation_events() -> Vec<ClientEvent> {
     let locations = vec![FileLocation { path: "src/parse.rs".into(), line: Some(12) }, FileLocation { path: "src/lex.rs".into(), line: None }];
     chat.push(item(2, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations }));
     chat.push(item(3, ItemBody::FileChange { path: "src/parse.rs".into(), diff: None }));
+    // (All of it the state as it was: what comes after is news.)
+    chat.push(ClientEvent::Replayed);
     chat
 }
 
@@ -412,3 +414,43 @@ fn a_run_of_calls_and_a_calls_output_fold_with_the_shared_keys() {
     assert_eq!((rows(&chat), open(&chat)), (5, true));
 }
 
+
+/// `event` (an item's) in turn `turn`.
+fn in_turn(mut event: ClientEvent, turn: &str) -> ClientEvent {
+    if let ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } } = &mut event {
+        item.turn_id = TurnId::new(turn);
+    }
+    event
+}
+
+/// The cursor stays on its item when another comes before it (the
+/// running turn's, placed before a queued turn's message); what was
+/// opened by hand stays open through a reconnect, a frame read before the
+/// thread came again included.
+#[test]
+fn the_cursor_stays_on_its_item_and_what_was_opened_through_a_reconnect() {
+    let mut chat = conversation();
+    let turn = |id: &str, ordinal, status| session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new(id), thread_id: ThreadId::new("t"), ordinal, status, failure: None, usage: None } });
+    chat.apply(turn("turn", 1, TurnStatus::Running));
+    chat.apply(turn("next", 2, TurnStatus::Queued));
+    chat.apply(in_turn(item(10, ItemBody::UserMessage { text: "then the lexer".into(), typed: None }), "next"));
+    let on = |chat: &Fed| chat.thread().and_then(|v| v.in_stream(chat.ui.cursor?).map(|i| i.id.to_string()));
+    chat.motion(Motion::Up, 1);
+    chat.motion(Motion::Last, 1);
+    assert_eq!(on(&chat).as_deref(), Some("i10"));
+    chat.apply(item(4, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Done.".into() }], streaming: false }));
+    assert_eq!(on(&chat).as_deref(), Some("i10"), "the running turn's item came before it: the cursor stayed on the message");
+    // The run opened by hand; the server gone and back.
+    chat.motion(Motion::Line(3), 1);
+    chat.fold(Fold::Toggle);
+    let rows = chat.shape().rows.len();
+    chat.apply(ClientEvent::Resync);
+    for event in conversation_events() {
+        chat.apply(event);
+    }
+    chat.apply(turn("turn", 1, TurnStatus::Running));
+    chat.apply(turn("next", 2, TurnStatus::Queued));
+    chat.apply(in_turn(item(10, ItemBody::UserMessage { text: "then the lexer".into(), typed: None }), "next"));
+    chat.apply(item(4, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Done.".into() }], streaming: false }));
+    assert_eq!(chat.shape().rows.len(), rows, "the run still open, its rows as they were");
+}

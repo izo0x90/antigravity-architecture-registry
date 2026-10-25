@@ -60,7 +60,7 @@ impl ChatStreamState {
             let made = self.agents().made().1.cloned();
             if let Some((_, made)) = made.filter(|(from, _)| *from == self.ui.slot) {
                 self.ui.slot = made;
-                self.ui.cursor = None;
+                self.cursor_to(None);
             }
         }
         if self.after_saved.is_some() && self.agents().saved().is_some() {
@@ -69,7 +69,7 @@ impl ChatStreamState {
         let gone = self.agents().store().closed.contains(&self.ui.slot);
         if gone {
             self.ui.slot = SlotId::new(LEAD);
-            self.ui.cursor = None;
+            self.cursor_to(None);
         }
     }
 

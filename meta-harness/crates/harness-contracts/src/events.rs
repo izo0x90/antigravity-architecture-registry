@@ -69,4 +69,7 @@ pub enum ClientEvent {
     DiscussionRemoved { discussion_id: DiscussionId },
     /// The stream fell behind: drop what you hold; the whole state follows.
     Resync,
+    /// The state as it was (sent first, and after `Resync`) is all here:
+    /// what follows happens now.
+    Replayed,
 }

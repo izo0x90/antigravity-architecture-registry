@@ -31,6 +31,9 @@ pub struct Shown {
     pub request: Option<RuntimeRequest>,
     /// What the agent said last.
     pub said: Option<String>,
+    /// Whether its request waits on you (pending, no answer on its way):
+    /// only then is it answered here.
+    pub waits: bool,
 }
 
 /// A part of the item, where the cursor can be.
@@ -92,7 +95,8 @@ impl InboxView {
             let from = [Some(crate::attention::detail(n, store, now_ms)), harness].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             let request = n.thread.as_ref().zip(n.request.as_ref()).and_then(|(t, r)| store.threads.get(t)?.request(r).cloned());
             let said = n.thread.as_ref().and_then(|t| agents.last_said(t)).filter(|s| n.detail.as_deref() != Some(s.as_str()));
-            Shown { notification: n.clone(), from, request, said }
+            let waits = request.as_ref().is_some_and(|r| agents.waits(r));
+            Shown { notification: n.clone(), from, request, said, waits }
         });
         let open = shared.open.get();
         self.at = self.item.as_ref().and_then(|id| open.iter().position(|(s, n)| *s == shared.server && n == id).map(|i| (i + 1, open.len())));
@@ -127,7 +131,7 @@ impl InboxView {
     /// its questions).
     fn answer(&mut self, option: String) -> Step {
         let Some(shown) = &self.shown else { return Step::Nothing("Nothing to answer: it was answered already.".into()) };
-        let Some(request) = &shown.request else { return Step::Nothing("Nothing to answer: it was answered already.".into()) };
+        let Some(request) = shown.request.as_ref().filter(|_| shown.waits) else { return Step::Nothing("Nothing to answer: it was answered already.".into()) };
         let says_yes = request.options.iter().find(|o| o.id == option).is_some_and(|o| matches!(o.decision, harness_contracts::ApprovalDecision::Accept | harness_contracts::ApprovalDecision::AcceptForSession | harness_contracts::ApprovalDecision::AcceptAlways));
         if says_yes && !self.drafts.complete(request) {
             return Step::Nothing("Answer the questions it needs first.".into());
@@ -359,7 +363,7 @@ impl ActionProvider for InboxView {
         let Some(shown) = &self.shown else { return out };
         // Under its request while you're on it (the one shown: its keys).
         let here = self.parts().get(self.cursor) == Some(&Part::Request);
-        if let Some(request) = &shown.request {
+        if let Some(request) = shown.request.as_ref().filter(|_| shown.waits) {
             out.extend(crate::request_card::offer(request, crate::request_card::Offer { here, keyed: true }, Command::OpenPage, Command::Answer));
         }
         // Opening it and putting it away: under what it says while you're on it.

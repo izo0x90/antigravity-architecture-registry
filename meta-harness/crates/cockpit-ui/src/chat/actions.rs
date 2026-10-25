@@ -341,13 +341,13 @@ impl ActionProvider for ChatStreamState {
             ChatCommand::PickSlot => {
                 if let Some(picked) = value.map(SlotId::new).filter(|s| self.agents().slot(s).is_some()) {
                     self.ui.slot = picked;
-                    self.ui.cursor = None;
+                    self.cursor_to(None);
                 }
             }
             ChatCommand::StepSlot(by) => match self.beside(*by) {
                 Some(next) => {
                     self.ui.slot = next;
-                    self.ui.cursor = None;
+                    self.cursor_to(None);
                 }
                 None => *cx.note = Some(if *by > 0 { "This is the last agent slot." } else { "This is the first agent slot." }.into()),
             },

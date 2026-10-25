@@ -263,7 +263,7 @@ impl Agents {
 
     /// How much the lead's session has done (the AGENT light blinks with it).
     pub fn lead_activity(&self) -> u64 {
-        self.thread_in(&SlotId::new(LEAD)).map_or(0, |t| t.activity)
+        self.thread_in(&SlotId::new(LEAD)).map_or(0, |t| t.news)
     }
 
     /// The agent's last message in `thread`, as text.
