@@ -279,7 +279,7 @@ impl MockAgent {
             lock(&self.seen).permission = Some(outcome.clone());
             return say(cx, &format!("permission: {outcome}"));
         }
-        // As Google's Antigravity server asks a question (1.1.1, 1.3.0):
+        // As Google's Antigravity server asks a question (1.1.1 to 1.4.3):
         // a made-up tool call, then a permission request whose options are
         // the answers, every one "allow once".
         if text.contains("[ask-by-permission]") {

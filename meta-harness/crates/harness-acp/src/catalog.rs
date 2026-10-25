@@ -26,7 +26,8 @@ impl AcpSessionCatalog {
 impl SessionCatalog for AcpSessionCatalog {
     /// The sessions saved in `cwd` (a relative one is in the project).
     async fn list(&self, cwd: &str, cursor: Option<&str>) -> Result<SavedSessionPage> {
-        let cwd = self.profile.project.join(cwd);
+        // As the agent saved it: no `.` parts (Antigravity matches the text).
+        let cwd: std::path::PathBuf = self.profile.project.join(cwd).components().collect();
         let request = acp::ListSessionsRequest::new().cwd(cwd).cursor(cursor.map(str::to_owned));
         let response = with_connection(&self.launcher, &self.profile, async move |cx, _| cx.send_request(request).block_task().await).await?;
         Ok(SavedSessionPage {

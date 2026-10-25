@@ -1,13 +1,13 @@
 [pack]
 name = "claude-code"
 kind = "harness"
-version = "1.0.0"
+version = "1.1.0"
 description = "Claude Code through its ACP adapter (Zed's claude-agent-acp, which brings its own Claude Code). Installed into its pack folder with npm; signs in with a Claude account."
 
 [tool]
 name = "claude-agent-acp"
-version = "0.89.1"
-supports = ">=0.89.0, <0.90.0"
+version = "0.95.0"
+supports = ">=0.95.0, <0.96.0"
 
 # Started and asked over ACP; it answers with its version.
 [tool.check]

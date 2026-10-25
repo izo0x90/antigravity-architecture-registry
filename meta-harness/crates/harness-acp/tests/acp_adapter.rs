@@ -218,8 +218,13 @@ async fn sessions_and_saved_sessions_work_in_the_project() {
     assert_eq!(agent.seen().cwd.as_deref(), Some(Path::new(PROJECT)), "no folder asked for: the project");
 
     let catalog = AcpSessionCatalog::new(Arc::new(agent.clone()), profile(MODES));
+    // The folder goes as the agent saved it: compared as text (Antigravity
+    // 1.4.3 finds nothing in `/work/project/.`), not as a `Path`, which
+    // ignores a trailing `.`.
     let page = catalog.list(".", None).await.unwrap();
-    assert_eq!(agent.seen().cwd.as_deref(), Some(Path::new("/work/project/.")));
+    assert_eq!(agent.seen().cwd.as_deref().map(Path::as_os_str), Some(Path::new("/work/project").as_os_str()));
+    catalog.list("./sub/./deeper", None).await.unwrap();
+    assert_eq!(agent.seen().cwd.as_deref().map(Path::as_os_str), Some(Path::new("/work/project/sub/deeper").as_os_str()));
     assert_eq!((page.sessions[0].native_id.as_str(), page.sessions[0].title.as_deref()), ("old-1", Some("Earlier work")));
     catalog.list("/elsewhere", None).await.unwrap();
     assert_eq!(agent.seen().cwd.as_deref(), Some(Path::new("/elsewhere")));

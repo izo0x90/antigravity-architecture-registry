@@ -64,7 +64,7 @@ impl Harness {
 }
 
 /// A sub-agent's update's `_meta` as each agent writes it (Claude Code:
-/// claude-agent-acp 0.89, `stampParentToolUseId`), its Task call's id
+/// claude-agent-acp 0.89 to 0.95, `stampParentToolUseId`), its Task call's id
 /// `toolu_task`.
 const SUB_AGENT_META: &[(&str, &str)] = &[("claude-code", r#"{"claudeCode":{"parentToolUseId":"toolu_task"}}"#)];
 

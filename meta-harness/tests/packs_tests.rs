@@ -14,7 +14,7 @@ fn places(dir: &Path) -> Places {
 
 /// A harness that answers ACP `initialize` as version `version`.
 fn fake_server(path: &Path, version: &str) {
-    std::fs::write(path, format!("#!/bin/sh\nread line\necho '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1,\"agentInfo\":{{\"name\":\"fake\",\"version\":\"agy_acp_server_{version}\"}}}}}}'\n")).unwrap();
+    std::fs::write(path, format!("#!/bin/sh\nread line\necho '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1,\"agentInfo\":{{\"name\":\"fake\",\"version\":\"{version}\"}}}}}}'\n")).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -28,7 +28,7 @@ fn installed(catalog: &Catalog, platform: &str) -> std::path::PathBuf {
     let dest = catalog.root.join("antigravity-acp").join(&version);
     std::fs::create_dir_all(&dest).unwrap();
     let mut lock = Lock::default();
-    lock.packs.insert("antigravity-acp".into(), Installed { pack_version: version, tool_version: Some("1.1.1".into()), platform: platform.into(), dest: dest.clone(), sha256: vec![], installed_at: 0 });
+    lock.packs.insert("antigravity-acp".into(), Installed { pack_version: version, tool_version: Some("1.4.3".into()), platform: platform.into(), dest: dest.clone(), sha256: vec![], installed_at: 0 });
     lock.write(&catalog.lock_path).unwrap();
     dest
 }
@@ -62,7 +62,7 @@ fn the_shipped_harness_pack_gives_its_driver_a_launch_once_it_passes_its_check()
     // Installed, and its check (ACP initialize) answers a supported version:
     // the driver gets the launch.
     let dest = installed(&catalog, "linux-x86_64");
-    fake_server(&dest.join("agy_acp_server.par"), "1.1.1");
+    fake_server(&dest.join("agy_acp_server.par"), "1.4.3");
     // The harness a session starts (the check doesn't reach it) is needed too.
     let (reason, _) = unavailable(launch_of(&harness_launches(&catalog), "antigravity"));
     assert!(reason.contains("localharness_external is missing"), "{reason}");
@@ -73,7 +73,7 @@ fn the_shipped_harness_pack_gives_its_driver_a_launch_once_it_passes_its_check()
     };
     assert_eq!(launch.program, dest.join("agy_acp_server.par").display().to_string());
     assert!(launch.env.is_empty(), "the server finds its harness next to itself");
-    assert!(run(&Command::Check(Some("antigravity-acp".into())), &catalog).unwrap().contains("ready (1.1.1)"));
+    assert!(run(&Command::Check(Some("antigravity-acp".into())), &catalog).unwrap().contains("ready (1.4.3)"));
     let which = run(&Command::Which("antigravity-acp".into()), &catalog).unwrap();
     assert!(which.contains(&launch.program) && which.contains("the pack, installed for linux-x86_64"), "{which}");
     let entry = harness_launches(&catalog).into_iter().find(|e| e.profile.instance.as_str() == "antigravity").unwrap();
@@ -83,9 +83,9 @@ fn the_shipped_harness_pack_gives_its_driver_a_launch_once_it_passes_its_check()
     assert_eq!(config["launch"]["launch"]["program"], launch.program);
 
     // A version outside the pack's range: no launch; update fixes it.
-    fake_server(&dest.join("agy_acp_server.par"), "1.3.0");
+    fake_server(&dest.join("agy_acp_server.par"), "1.5.0");
     let (reason, fix) = unavailable(launch_of(&harness_launches(&catalog), "antigravity"));
-    assert!(reason.contains("1.3.0 isn't in") && fix.as_deref().is_some_and(|f| f.starts_with("meta-harness pack update antigravity-acp")), "{reason} {fix:?}");
+    assert!(reason.contains("1.5.0 isn't in") && fix.as_deref().is_some_and(|f| f.starts_with("meta-harness pack update antigravity-acp")), "{reason} {fix:?}");
     // The server gone: the check fails, with why.
     std::fs::remove_file(dest.join("agy_acp_server.par")).unwrap();
     let (reason, _) = unavailable(launch_of(&harness_launches(&catalog), "antigravity"));
