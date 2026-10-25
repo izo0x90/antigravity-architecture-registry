@@ -782,11 +782,13 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound, mode: &mut InputMode) -> Optio
             let measure = |ui: &egui::Ui, text: egui::WidgetText| text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button).size().x;
             let spacing = ui.spacing();
             let gap = spacing.item_spacing.x;
-            let picker = (measure(ui, RichText::new(&shown).into()) + spacing.icon_width + spacing.icon_spacing + spacing.button_padding.x * 2.0).max(PICKER_MIN_WIDTH);
-            if ui.available_width() < measure(ui, caption.clone()) + gap + picker {
+            let around = spacing.icon_width + spacing.icon_spacing + spacing.button_padding.x * 2.0;
+            let picker = (measure(ui, RichText::new(&shown).into()) + around).max(PICKER_MIN_WIDTH);
+            // (What's left on this line of the row, not the row's width.)
+            if ui.available_size_before_wrap().x < measure(ui, caption.clone()) + gap + picker {
                 ui.end_row();
             }
-            ui.label(caption).on_hover_text(&tip);
+            ui.add(egui::Label::new(caption).wrap_mode(egui::TextWrapMode::Extend)).on_hover_text(&tip);
             let mut picked = None;
             // The one list choices are picked from (as the action list's):
             // sized to what it holds (the popup's own scrolling never needed),
@@ -797,7 +799,7 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound, mode: &mut InputMode) -> Optio
             let details = choices.iter().any(|c| c.detail.is_some());
             let height = crate::pick_list::PickList::fitting(ui, choices.len(), details, SETTING_LIST_ROWS);
             let open = egui::ComboBox::from_id_salt(combo_salt)
-                .width(PICKER_MIN_WIDTH.min(ui.available_width()))
+                .width(PICKER_MIN_WIDTH.min(ui.available_size_before_wrap().x - around).max(0.0))
                 .height(height + 2.0 * ui.spacing().item_spacing.y)
                 .truncate()
                 .selected_text(shown)

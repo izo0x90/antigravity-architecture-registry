@@ -396,3 +396,37 @@ fn a_sub_agents_work_is_folded_under_its_call() {
     app.desk.chat_mut().move_to("42");
     assert!(at(&drawn(&ctx, &mut app), "src/helper_read.rs").is_some(), "a jump to its call opens it");
 }
+
+/// The chat's settings row wraps in its panel at every width, whatever
+/// its pickers say (a harness starting says so in its name): no panel
+/// reaches past the next, or the screen.
+#[test]
+fn the_settings_row_keeps_to_its_panel() {
+    let mut broke = Vec::new();
+    for status in [harness_contracts::ProviderStatus::Ready, harness_contracts::ProviderStatus::Starting] {
+        for width in (520..=1400).step_by(20) {
+            // (No session yet: the harness is picked on the row.)
+            let (ctx, mut app) = app_with_graph();
+            app.desk.shared.agents.get_mut().apply(ClientEvent::SlotUpdated { slot: crate::chat::tests::lead(None) });
+            focus(&ctx, &mut app, BufferKind::Chat);
+            let mut snapshot = crate::agents::tests::snapshot(status.clone());
+            snapshot.instance_id = harness_contracts::InstanceId::new("i");
+            let mut other = crate::agents::tests::snapshot(harness_contracts::ProviderStatus::Ready);
+            (other.instance_id, other.display_name) = (harness_contracts::InstanceId::new("claude-code"), "Claude Code".into());
+            app.desk.shared.agents.get_mut().apply(ClientEvent::InstanceUpdated { snapshot });
+            app.desk.shared.agents.get_mut().apply(ClientEvent::InstanceUpdated { snapshot: other });
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width as f32, 900.0));
+            let mut shown = String::new();
+            for _ in 0..4 {
+                shown = texts(&ctx.run(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ctx| app.frame(ctx)));
+            }
+            assert!(shown.contains("Harness:"), "{shown}");
+            let panels = &app.panel_rects;
+            let past = panels.windows(2).any(|p| p[0].right() > p[1].left() + 0.5) || panels.last().is_some_and(|p| p.right() > width as f32 + 0.5);
+            if past {
+                broke.push(format!("{status:?} at {width}: {panels:?}"));
+            }
+        }
+    }
+    assert!(broke.is_empty(), "{broke:#?}");
+}

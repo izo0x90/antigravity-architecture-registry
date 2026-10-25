@@ -509,7 +509,7 @@ pub fn block_summary(block: &ContentBlock) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use harness_contracts::ProviderSnapshot;
 
