@@ -159,6 +159,20 @@ impl Profile {
         caps
     }
 
+    /// The `initialize` we send: our capabilities, and that we show its
+    /// sub-agents when its pack says it tells of them so (a capability the
+    /// ACP schema we build on doesn't have yet: added to what it writes).
+    pub fn initialize(&self, files: bool) -> Result<agent_client_protocol::UntypedMessage, agent_client_protocol::Error> {
+        let request = acp::InitializeRequest::new(agent_client_protocol::schema::ProtocolVersion::V1).client_capabilities(self.client_capabilities(files));
+        let mut params = serde_json::to_value(request).map_err(|e| agent_client_protocol::Error::internal_error().data(e.to_string()))?;
+        if self.settings.subagents.declare
+            && let Some(caps) = params.get_mut("clientCapabilities").and_then(serde_json::Value::as_object_mut)
+        {
+            caps.insert("subagents".into(), serde_json::json!({}));
+        }
+        agent_client_protocol::UntypedMessage::new("initialize", params)
+    }
+
     /// Where an update's `_meta` names the call whose sub-agent sent it.
     pub fn parent_call(&self) -> Option<String> {
         self.settings.parent_call.clone()
@@ -174,7 +188,7 @@ impl Profile {
         }
     }
 
-    /// What a chunk of a message it replays is.
+    /// What a chunk of a message of yours it replays is.
     pub fn chunks(&self) -> crate::state::Chunks {
         match self.settings.replay.as_ref().is_some_and(|r| r.whole_chunks) {
             true => crate::state::Chunks::Whole,

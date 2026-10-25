@@ -115,6 +115,15 @@ env = { BROWSER = "true" }
 piece = "Embedded resource ({uri}):\n{content}"
 whole_chunks = true
 
+# Its sub-agents are told of only by the call that starts them
+# (`invoke_subagent`, 1.4.3): its input lists them, each its role, type and
+# prompt. Their steps can't be told from the agent's own.
+[provides.settings.subagents.started_by]
+list = "/Subagents"
+title = "/Role"
+kind = "/TypeName"
+prompt = "/Prompt"
+
 [provides.settings.modes]
 approval_required = "default"
 auto_accept_edits = "auto_edit"

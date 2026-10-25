@@ -142,26 +142,54 @@ pub struct Usage {
     pub context_window_tokens: Option<u64>,
 }
 
+/// A sub-agent an agent started: who it is, what it was asked, how it's
+/// doing, and what can be done about it. Its steps and messages are items
+/// under its own (`item_id`) when the harness says which are its.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Subagent {
     pub id: SubagentId,
     pub thread_id: ThreadId,
-    /// The tool-call item that spawned it, if any.
-    pub parent_item_id: Option<ItemId>,
+    /// Its item in the stream: where it started (its steps under it).
+    pub item_id: ItemId,
+    /// Its name (or its role), as the agent gave it.
     pub title: String,
+    /// What kind of sub-agent it is, when the harness says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Its task, in short.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// What it was told to do, whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// What it's doing now (its latest step).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doing: Option<String>,
     pub status: SubagentStatus,
+    /// It can be stopped on its own (its harness says so), the turn going on.
+    #[serde(default)]
+    pub can_cancel: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentStatus {
     Running,
+    /// Waiting on you (a request of its own).
+    Waiting,
+    /// Its work ended, its harness not saying how.
     Idle,
     Completed,
     Failed,
     Cancelled,
+}
+
+impl SubagentStatus {
+    /// It's still at work (or waiting on you).
+    pub fn working(self) -> bool {
+        matches!(self, Self::Running | Self::Waiting)
+    }
 }
 
 /// A session the harness saved itself; reopen it via `SessionConfig::resume`.

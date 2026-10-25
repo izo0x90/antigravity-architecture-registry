@@ -145,6 +145,13 @@ pub trait SessionRuntime: Send + Sync {
 
     async fn interrupt(&self) -> Result<()>;
 
+    /// Stops sub-agent `id`'s work alone, the turn going on
+    /// (`Subagent::can_cancel`).
+    async fn cancel_subagent(&self, id: &harness_contracts::SubagentId) -> Result<()> {
+        let _ = id;
+        Err(HarnessError::Unsupported { operation: "stopping one sub-agent" })
+    }
+
     async fn respond(&self, request: &RequestId, response: RequestResponse) -> Result<()>;
 
     async fn close(&self) -> Result<()>;

@@ -40,6 +40,8 @@ pub struct AcpSettings {
     /// How its replay writes a message's pieces back into the message's
     /// text. None: a replayed message is shown as it comes.
     pub replay: Option<ReplaySettings>,
+    /// How it tells of the sub-agents it starts.
+    pub subagents: SubagentSettings,
     /// How it reports who it's signed in as.
     pub sign_in: Option<SignInSettings>,
     /// Its logins: by a login command of its own, or run by itself.
@@ -91,8 +93,8 @@ impl AcpSettings {
 /// How a harness writes a message's pieces into its replay: after the
 /// message's words, each piece as `piece` (words around `{uri}`, its label,
 /// and `{content}`, its text), all of them first listed as `listed` when
-/// they are (`{uri}` and words). Every chunk of a message it replays is
-/// the whole message (`whole_chunks`: two in a row are two messages).
+/// they are (`{uri}` and words). Every chunk of a message of yours it
+/// replays is the whole message (`whole_chunks`: two in a row are two).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplaySettings {
@@ -101,6 +103,30 @@ pub struct ReplaySettings {
     pub listed: Option<String>,
     #[serde(default)]
     pub whole_chunks: bool,
+}
+
+/// How a harness tells of its sub-agents: told we show them (`declare`:
+/// it then announces each, its state, and sends its steps under its own
+/// session); or only by the call that starts them (`started_by`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SubagentSettings {
+    pub declare: bool,
+    pub started_by: Option<StartedBy>,
+}
+
+/// A tool call that starts sub-agents: where its input lists them (a JSON
+/// pointer to a list), and where each one's name, kind and prompt are (in
+/// each one of the list).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartedBy {
+    pub list: String,
+    pub title: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]

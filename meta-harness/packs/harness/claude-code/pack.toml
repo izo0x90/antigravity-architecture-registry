@@ -50,6 +50,12 @@ plan = "plan"
 listed = "{uri}"
 piece = "\n<context ref=\"{uri}\">\n{content}\n</context>"
 
+# Told we show sub-agents (the ACP draft's subagents form, 0.90 on), it
+# announces each with its own session, its state and whether it can be
+# stopped alone, and sends its steps under that session.
+[provides.settings.subagents]
+declare = true
+
 # We run its login commands, and show its questions as forms.
 [provides.settings.advertise]
 auth_terminal = true

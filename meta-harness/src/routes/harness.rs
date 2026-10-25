@@ -30,6 +30,7 @@ pub(crate) fn routes() -> Router<HarnessState> {
         .route("/api/instances/{id}/auth/logout", post(logout))
         .route("/api/threads/{thread}/steer", post(steer))
         .route("/api/threads/{thread}/interrupt", post(interrupt))
+        .route("/api/threads/{thread}/subagents/{subagent}/cancel", post(cancel_subagent))
         .route("/api/threads/{thread}/requests/{request}", post(respond_request))
 }
 
@@ -131,6 +132,12 @@ async fn logout(_: Needs<can::SessionsControl>, State(state): State<HarnessState
 
 async fn steer(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(thread): Path<String>, Json(input): Json<SteerInput>) -> ApiResult<StatusCode> {
     state.sessions.get(&ThreadId::new(thread))?.steer(input).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Stops one sub-agent's work, the turn going on (when its harness lets it).
+async fn cancel_subagent(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path((thread, subagent)): Path<(String, String)>) -> ApiResult<StatusCode> {
+    state.sessions.get(&ThreadId::new(thread))?.cancel_subagent(&harness_contracts::SubagentId::new(subagent)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

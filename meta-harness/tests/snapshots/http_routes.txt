@@ -16,6 +16,7 @@
 /api/instances/fake/auth/logout POST
 /api/threads/t1/steer POST
 /api/threads/t1/interrupt POST
+/api/threads/t1/subagents/a1/cancel POST
 /api/threads/t1/requests/r1 POST
 /api/slots GET,HEAD,POST
 /api/slots/s1 DELETE

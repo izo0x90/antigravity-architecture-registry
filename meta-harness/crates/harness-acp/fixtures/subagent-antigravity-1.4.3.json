@@ -1,0 +1,296 @@
+{
+ "recorded": "2026-10-25, agy_acp_server 1.4.3: a turn starting one sub-agent (allowed when asked); every session/update, as sent.",
+ "session": "daf8d58a-0cee-4220-a640-5cb324771133",
+ "updates": [
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "used": 0,
+    "size": 1048576,
+    "sessionUpdate": "usage_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "availableCommands": [
+     {
+      "name": "plan",
+      "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+     },
+     {
+      "name": "logout",
+      "description": "Log out and clear stored credentials."
+     },
+     {
+      "name": "usage",
+      "description": "Show model token usage and quota limits."
+     }
+    ],
+    "sessionUpdate": "available_commands_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "24ccb81ecc2c4dc9bcb3a77d16fb868b",
+    "title": "Run invoke_subagent?",
+    "kind": "other",
+    "status": "pending",
+    "rawInput": {
+     "Subagents": [
+      {
+       "Model": "inherit",
+       "Prompt": "Count the .py files in the current folder (/tmp/acp-probe-agy) (not recursively) and report the number back.",
+       "Role": "File Counter",
+       "TypeName": "research",
+       "Workspace": "inherit"
+      }
+     ]
+    },
+    "sessionUpdate": "tool_call"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "24ccb81ecc2c4dc9bcb3a77d16fb868b",
+    "kind": "other",
+    "status": "in_progress",
+    "title": "Running invoke_subagent",
+    "rawInput": {},
+    "sessionUpdate": "tool_call_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "used": 14140,
+    "size": 1048576,
+    "sessionUpdate": "usage_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "24ccb81ecc2c4dc9bcb3a77d16fb868b",
+    "status": "completed",
+    "rawOutput": "Counting python files",
+    "sessionUpdate": "tool_call_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "content": {
+     "text": "I have launched a subagent to count the `.py` files",
+     "type": "text"
+    },
+    "sessionUpdate": "agent_message_chunk"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "content": {
+     "text": " in the current folder. I will wait for its report.",
+     "type": "text"
+    },
+    "sessionUpdate": "agent_message_chunk"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "used": 14544,
+    "size": 1048576,
+    "sessionUpdate": "usage_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "626f19e644ac429e8548dd90b1683a8b",
+    "title": "find . -maxdepth 1 -name \"*.py\" -type f | wc -l",
+    "kind": "execute",
+    "status": "pending",
+    "rawInput": {
+     "CommandLine": "find . -maxdepth 1 -name \"*.py\" -type f | wc -l",
+     "Cwd": "/tmp/acp-probe-agy",
+     "NotificationTimeoutSeconds": 10,
+     "RunPersistent": false,
+     "WaitMsBeforeAsync": 5000
+    },
+    "sessionUpdate": "tool_call"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "626f19e644ac429e8548dd90b1683a8b",
+    "kind": "execute",
+    "status": "in_progress",
+    "title": "find . -maxdepth 1 -name \"*.py\" -type f | wc -l",
+    "rawInput": {
+     "command_line": "find . -maxdepth 1 -name \"*.py\" -type f | wc -l",
+     "working_dir": "/tmp/acp-probe-agy"
+    },
+    "sessionUpdate": "tool_call_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "626f19e644ac429e8548dd90b1683a8b",
+    "status": "completed",
+    "rawOutput": {
+     "commandLine": "find . -maxdepth 1 -name \"*.py\" -type f | wc -l",
+     "workingDir": "/tmp/acp-probe-agy",
+     "exitCode": 0,
+     "exit_code": 0,
+     "combinedOutput": "3\r\n",
+     "formatted_output": "3\r\n"
+    },
+    "sessionUpdate": "tool_call_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "used": 14897,
+    "size": 1048576,
+    "sessionUpdate": "usage_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "375ba00ff25f46e3ae13c0d0214fbf1d",
+    "title": "ls -la *.py",
+    "kind": "execute",
+    "status": "pending",
+    "rawInput": {
+     "CommandLine": "ls -la *.py",
+     "Cwd": "/tmp/acp-probe-agy",
+     "NotificationTimeoutSeconds": 10,
+     "RunPersistent": false,
+     "WaitMsBeforeAsync": 5000
+    },
+    "sessionUpdate": "tool_call"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "375ba00ff25f46e3ae13c0d0214fbf1d",
+    "kind": "execute",
+    "status": "in_progress",
+    "title": "ls -la *.py",
+    "rawInput": {
+     "command_line": "ls -la *.py",
+     "working_dir": "/tmp/acp-probe-agy"
+    },
+    "sessionUpdate": "tool_call_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "375ba00ff25f46e3ae13c0d0214fbf1d",
+    "status": "completed",
+    "rawOutput": {
+     "commandLine": "ls -la *.py",
+     "workingDir": "/tmp/acp-probe-agy",
+     "exitCode": 0,
+     "exit_code": 0,
+     "combinedOutput": "-rw-r--r-- 1 root root 9 Oct 25 16:59 f1.py\r\n-rw-r--r-- 1 root root 9 Oct 25 16:59 f2.py\r\n-rw-r--r-- 1 root root 9 Oct 25 16:59 f3.py\r\n",
+     "formatted_output": "-rw-r--r-- 1 root root 9 Oct 25 16:59 f1.py\r\n-rw-r--r-- 1 root root 9 Oct 25 16:59 f2.py\r\n-rw-r--r-- 1 root root 9 Oct 25 16:59 f3.py\r\n"
+    },
+    "sessionUpdate": "tool_call_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "content": {
+     "text": "Waiting for the subagent to report the count.",
+     "type": "text"
+    },
+    "sessionUpdate": "agent_message_chunk"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "used": 15142,
+    "size": 1048576,
+    "sessionUpdate": "usage_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "fdf2044392824537a693051a462e29f2",
+    "title": "ls -d .*.py 2>/dev/null || true",
+    "kind": "execute",
+    "status": "pending",
+    "rawInput": {
+     "CommandLine": "ls -d .*.py 2>/dev/null || true",
+     "Cwd": "/tmp/acp-probe-agy",
+     "NotificationTimeoutSeconds": 10,
+     "RunPersistent": false,
+     "WaitMsBeforeAsync": 5000
+    },
+    "sessionUpdate": "tool_call"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "fdf2044392824537a693051a462e29f2",
+    "kind": "execute",
+    "status": "in_progress",
+    "title": "ls -d .*.py 2>/dev/null || true",
+    "rawInput": {
+     "command_line": "ls -d .*.py 2>/dev/null || true",
+     "working_dir": "/tmp/acp-probe-agy"
+    },
+    "sessionUpdate": "tool_call_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "fdf2044392824537a693051a462e29f2",
+    "status": "completed",
+    "rawOutput": {
+     "commandLine": "ls -d .*.py 2>/dev/null || true",
+     "workingDir": "/tmp/acp-probe-agy",
+     "exitCode": 0,
+     "exit_code": 0,
+     "combinedOutput": "",
+     "formatted_output": ""
+    },
+    "sessionUpdate": "tool_call_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "content": {
+     "text": "PELICAN-42, 3",
+     "type": "text"
+    },
+    "sessionUpdate": "agent_message_chunk"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "used": 15422,
+    "size": 1048576,
+    "sessionUpdate": "usage_update"
+   }
+  }
+ ]
+}

@@ -5,9 +5,8 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1 as acp;
-use agent_client_protocol::{Agent, ByteStreams, ConnectionTo, UntypedMessage};
+use agent_client_protocol::{Agent, ByteStreams, ConnectionTo, Handled, UntypedMessage};
 use async_trait::async_trait;
 use harness_contracts::{
     ApprovalDecision, ApprovalOption, Capabilities, InstanceId, McpServer, McpTransport, NativeId, RequestKind,
@@ -73,16 +72,21 @@ impl AcpAdapter {
         });
 
         let files = self.profile.workspace(&cwd);
-        let client = self.profile.client_capabilities(files.is_some());
+        let initialize = self.profile.initialize(files.is_some()).map_err(acp_error)?;
         let (handle_tx, handle_rx) = tokio::sync::oneshot::channel();
         let streams = ByteStreams::new(transport.writer, transport.reader);
         let connection = tokio::spawn(run_connection(streams, shared.clone(), files, handle_tx));
         let cx = handle_rx.await.map_err(|_| HarnessError::Provider { reason: "agent connection failed to start".into() })?;
 
-        let init = cx.send_request(acp::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client)).block_task().await.map_err(acp_error)?;
+        let init = cx.send_request(initialize).block_task().await.map_err(acp_error)?;
+        let init: acp::InitializeResponse = serde_json::from_value(init).map_err(|e| HarnessError::Provider { reason: format!("its answer to initialize: {e}") })?;
         let declared = AcpDeclaredCapabilities::of(&init, &self.profile);
         // Before a replay: how its messages' pieces are read back.
-        lock(&shared.state).replays_by(self.profile.replayed_pieces(&declared.declared), self.profile.chunks());
+        {
+            let mut state = lock(&shared.state);
+            state.replays_by(self.profile.replayed_pieces(&declared.declared), self.profile.chunks());
+            state.subagents_started_by(self.profile.settings.subagents.started_by.clone());
+        }
         let agent = &init.agent_capabilities;
         let mcp: Vec<acp::McpServer> = config.mcp_servers.iter().map(|s| mcp_server(s, agent.mcp_capabilities.sse)).collect();
         let meta = self.profile.session_meta();
@@ -222,9 +226,27 @@ type Streams = ByteStreams<Box<dyn futures::AsyncWrite + Send + Unpin>, Box<dyn 
 async fn run_connection(transport: Streams, shared: Arc<Shared>, files: Option<WorkspaceFs>, handle_tx: tokio::sync::oneshot::Sender<ConnectionTo<Agent>>) {
     let (on_update, on_permission, on_question, on_other) = (shared.clone(), shared.clone(), shared.clone(), shared.clone());
     let (on_read, on_write) = (files.clone(), files);
+    let on_child = shared.clone();
     let result = agent_client_protocol::Client
         .builder()
         .name("meta-harness")
+        // A sub-agent's first: its announcements and the messages between it
+        // and the agent (kinds the ACP schema we build on doesn't have yet),
+        // and what comes under its own session, under it. The rest goes on.
+        .on_receive_notification(
+            async move |n: UntypedMessage, cx: ConnectionTo<Agent>| {
+                if n.method != "session/update" {
+                    return Ok(Handled::No { message: (n, cx), retry: false });
+                }
+                let session = n.params.get("sessionId").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
+                let update = n.params.get("update").cloned().unwrap_or_default();
+                if !lock(&on_child.state).take_raw(&session, &update) {
+                    return Ok(Handled::No { message: (n, cx), retry: false });
+                }
+                Ok(Handled::Yes)
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
         .on_receive_notification(
             async move |n: acp::SessionNotification, _cx| {
                 let mut state = lock(&on_update.state);

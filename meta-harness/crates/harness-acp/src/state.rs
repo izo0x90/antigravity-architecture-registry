@@ -15,6 +15,8 @@ use tokio::sync::broadcast;
 
 use crate::convert;
 
+mod subagents;
+
 /// What a chunk of a message an agent replays is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Chunks {
@@ -58,8 +60,16 @@ pub struct SessionState {
     /// How a replayed message's pieces are read back (none: it's shown as
     /// it comes).
     pieces: Option<crate::pieces::Replay>,
-    /// What a chunk of a message the agent replays is.
+    /// What a chunk of a message of yours the agent replays is.
     chunks: Chunks,
+    /// The sub-agents started, in order.
+    subagents: Vec<harness_contracts::Subagent>,
+    /// Each told-of sub-agent's own session: which it is (`subagents`).
+    children: HashMap<String, usize>,
+    /// How the agent tells of its sub-agents by the calls that start them.
+    started_by: Option<crate::settings::StartedBy>,
+    /// What a call asked for starts (its list), until it goes ahead.
+    starting: HashMap<String, Vec<serde_json::Value>>,
     /// A prompt's turn split by a message added to it: the turn it goes on
     /// in (its end ends that one).
     continues: HashMap<TurnId, TurnId>,
@@ -96,6 +106,10 @@ impl SessionState {
             open_user: None,
             pieces: None,
             chunks: Chunks::OfItsId,
+            subagents: Vec::new(),
+            children: HashMap::new(),
+            started_by: None,
+            starting: HashMap::new(),
             continues: HashMap::new(),
             parent_call,
             parent: None,
@@ -109,6 +123,7 @@ impl SessionState {
         out.extend(self.turns.iter().map(|t| AdapterEvent::TurnUpdated { turn: t.clone() }));
         out.extend(self.items.iter().map(|i| AdapterEvent::ItemUpdated { item: i.clone() }));
         out.extend(self.requests.iter().map(|r| AdapterEvent::RequestUpdated { request: r.clone() }));
+        out.extend(self.subagents_now());
         if let Some(plan) = &self.plan {
             out.push(AdapterEvent::PlanUpdated { plan: plan.clone() });
         }
@@ -301,6 +316,9 @@ impl SessionState {
             && let Some(next) = self.running.front().cloned()
         {
             self.set_turn(&next, |turn| turn.status = TurnStatus::Running);
+        }
+        if self.running.is_empty() {
+            self.subagents_end_with_the_turn();
         }
         let next = match (self.running.is_empty(), status) {
             (false, _) => ThreadStatus::Running,
@@ -596,8 +614,9 @@ impl SessionState {
             });
         } else {
             let id = self.push_item(body, convert::tool_status(&call.status), Some(call.title.clone()), Some(native.clone()));
-            self.tool_items.insert(native, id);
+            self.tool_items.insert(native.clone(), id);
         }
+        self.subagents_started(&native, call.raw_input.as_ref(), convert::tool_status(&call.status));
     }
 
     pub fn tool_call_update(&mut self, update: &acp::ToolCallUpdate) {
@@ -615,7 +634,7 @@ impl SessionState {
                     locations: Vec::new(),
                 };
                 let id = self.push_item(body, ItemStatus::Pending, fields.title.clone(), Some(native.clone()));
-                self.tool_items.insert(native, id.clone());
+                self.tool_items.insert(native.clone(), id.clone());
                 id
             }
         };
@@ -644,6 +663,8 @@ impl SessionState {
                 }
             }
         });
+        let status = self.item_index.get(&id).map_or(ItemStatus::Pending, |&at| self.items[at].status);
+        self.subagents_started(&native, fields.raw_input.as_ref(), status);
     }
 
     fn plan(&mut self, plan: &acp::Plan) {
