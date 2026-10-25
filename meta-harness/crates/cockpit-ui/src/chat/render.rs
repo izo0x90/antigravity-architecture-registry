@@ -239,7 +239,7 @@ impl ChatStreamState {
             }
             self.ui.folds_for = Some(view.thread.id.clone());
         }
-        let epoch = view.shape_of().0;
+        let epoch = view.epoch();
         if self.ui.epoch != Some(epoch) {
             self.ui.heights.clear();
             self.ui.epoch = Some(epoch);
@@ -250,9 +250,16 @@ impl ChatStreamState {
         {
             self.ui.cursor = Some(now);
         }
-        // (Put there before its item came: on what's there now.)
-        if self.ui.cursor_on.is_none() {
+        // (Put there before its item came, a place restored: on what's
+        // there once the thread's all here, shown.)
+        if self.ui.cursor_on.is_none() && agents.store().is_live() {
             self.ui.cursor_on = self.ui.cursor.and_then(|at| Some(view.in_stream(at)?.id.clone()));
+            if std::mem::take(&mut self.ui.placing) {
+                drop(agents);
+                if let Some(row) = self.ui.cursor.and_then(|at| self.shape().row_of(at)) {
+                    self.ui.scrolling.show(row, crate::viewport::Show::Middle);
+                }
+            }
         }
     }
 

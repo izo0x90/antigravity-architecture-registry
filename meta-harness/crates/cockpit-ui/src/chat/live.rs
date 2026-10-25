@@ -29,8 +29,11 @@ impl ChatStreamState {
     /// trace's span.
     pub(super) fn activity(&self, view: &ThreadView, now: f64) -> Activity {
         let (receiving, quiet) = (self.settings.receiving_s, self.settings.quiet_after_s);
-        let since_last = view.arrivals().back().map(|(t, _)| (now - t).max(0.0));
-        let asking = view.requests().iter().any(|r| self.agents().waits(r));
+        // (Since it was last heard of: the agent's last update, else since
+        // it became known here or your answer was taken.)
+        let since_last = view.last_heard().map(|t| (now - t).max(0.0));
+        // (Asking till your answer's taken: answered here, it's on its way.)
+        let asking = view.requests().iter().any(|r| r.status == harness_contracts::RequestStatus::Pending);
         let liveness = match since_last {
             _ if !self.connected => Liveness::Disconnected,
             _ if asking => Liveness::Asking,
@@ -40,7 +43,7 @@ impl ChatStreamState {
             Some(s) if s < quiet => Liveness::Waiting,
             Some(_) => Liveness::Quiet,
         };
-        let updates = view.arrivals().iter().filter(|(t, _)| now - *t <= crate::indicator::TRACE_S).copied().collect();
+        let updates = view.arrivals().iter().filter(|(t, _)| now - *t <= crate::indicator::RECENT_S).copied().collect();
         Activity { liveness, updates, since_last, doing: self.doing(view) }
     }
 

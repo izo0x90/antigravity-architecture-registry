@@ -29,8 +29,9 @@ pub enum Liveness {
 #[derive(Clone, Debug)]
 pub struct Activity {
     pub liveness: Liveness,
-    /// When its updates over the trace's span came (the clock's seconds),
-    /// oldest first: each tenth of a second that had any, and how many.
+    /// When its updates over the last while (`RECENT_S`) came (the clock's
+    /// seconds), oldest first: each tenth of a second that had any, and how
+    /// many.
     pub updates: Vec<(f64, u32)>,
     /// Seconds since the last of them (none: none came since it was known).
     pub since_last: Option<f64>,
@@ -46,6 +47,9 @@ pub struct Stage {
     pub panel: Rect,
     pub items: Vec<Rect>,
 }
+
+/// How far back the updates handed to an indicator go (seconds).
+pub const RECENT_S: f64 = 10.0;
 
 /// When it next wants to be drawn again.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -138,8 +142,8 @@ impl Default for Shown {
 /// amber.
 pub struct Heartbeat;
 
-/// The seconds the trace spans.
-pub const TRACE_S: f64 = 10.0;
+/// The seconds the trace spans: all it's handed.
+pub const TRACE_S: f64 = RECENT_S;
 
 /// Updates in one blip that make it its full height (fewer, lower).
 const FULL_BLIP: u32 = 8;

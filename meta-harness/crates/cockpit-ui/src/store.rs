@@ -8,9 +8,9 @@ use harness_contracts::{
     Turn, TurnId, TurnItem, TurnStatus, Usage, Slot, SlotId, Notification, NotificationId, NotificationState,
 };
 
-/// The agent's updates kept per thread (each tenth of a second once, the
-/// newest): as many as the indicator's trace shows of steady updates.
-const ARRIVALS_KEPT: usize = (crate::indicator::TRACE_S * 10.0) as usize;
+/// The agent's updates kept per thread: the last minute's (each tenth of a
+/// second once).
+const ARRIVALS_KEPT_S: f64 = 60.0;
 
 /// Each thread view made, numbered (so what's worked out from one isn't
 /// taken for another's, a resync's new view of the same thread).
@@ -20,6 +20,9 @@ static EPOCHS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(
 pub struct ThreadView {
     pub thread: Thread,
     turns: Vec<Turn>,
+    /// Each turn's place in the order shown (by its number; a turn the
+    /// agent made for a message it took comes before one queued after).
+    rank: Vec<usize>,
     /// Its items as they came (`stream` has them in the order shown), and
     /// as of which event each last changed.
     items: Vec<TurnItem>,
@@ -30,11 +33,13 @@ pub struct ThreadView {
     pub usage: Option<Usage>,
     /// Events applied to this thread (each changes what's shown).
     pub activity: u64,
-    /// Which view of the thread this is (a new one after a resync), and
-    /// as of which change its stream's shape is (an item put in, moved,
-    /// or changed in kind, status, parent, turn or whether it has more).
+    /// Which view of the thread this is (a new one after a resync).
     epoch: u64,
-    shape: u64,
+    /// When it was last heard of, besides the agent's updates: when what
+    /// it was became known (the replay done, or it began after), when a
+    /// request of its was last settled.
+    known_at: Option<f64>,
+    settled_at: Option<f64>,
     /// How many updates came from the agent (its news): the AGENT light.
     pub news: u64,
     /// The items in the order shown (by their turn's place, then as they
@@ -58,7 +63,7 @@ pub struct ThreadView {
 impl ThreadView {
     fn new(thread: Thread) -> Self {
         let epoch = EPOCHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Self { thread, turns: Vec::new(), items: Vec::new(), requests: Vec::new(), request_at: HashMap::new(), plan: None, usage: None, activity: 0, epoch, shape: 0, news: 0, changed: Vec::new(), stream: Vec::new(), item_at: HashMap::new(), turn_at: HashMap::new(), shown_at: Vec::new(), request_items: HashMap::new(), arrivals: VecDeque::new() }
+        Self { thread, turns: Vec::new(), rank: Vec::new(), items: Vec::new(), requests: Vec::new(), request_at: HashMap::new(), plan: None, usage: None, activity: 0, epoch, known_at: None, settled_at: None, news: 0, changed: Vec::new(), stream: Vec::new(), item_at: HashMap::new(), turn_at: HashMap::new(), shown_at: Vec::new(), request_items: HashMap::new(), arrivals: VecDeque::new() }
     }
 
     pub fn request(&self, id: &RequestId) -> Option<&RuntimeRequest> {
@@ -70,11 +75,17 @@ impl ThreadView {
         &self.requests
     }
 
-    /// Which view of the thread this is, and as of which change its
-    /// stream's shape is: what's worked out from the stream's shape is
-    /// kept by them.
-    pub fn shape_of(&self) -> (u64, u64) {
-        (self.epoch, self.shape)
+    /// Which view of the thread this is (a resync makes a new one): what's
+    /// worked out from one isn't taken for another's.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// When it was last heard of: its agent's last update, else when it
+    /// became known or a request of its was settled, whichever's later
+    /// (none: not known yet).
+    pub fn last_heard(&self) -> Option<f64> {
+        [self.arrivals.back().map(|(t, _)| *t), self.known_at, self.settled_at].into_iter().flatten().reduce(f64::max)
     }
 
     pub fn turns(&self) -> &[Turn] {
@@ -117,7 +128,7 @@ impl ThreadView {
 
     /// The items of `turn`, in order.
     pub fn items_of(&self, turn: &TurnId) -> impl DoubleEndedIterator<Item = &TurnItem> {
-        let span = self.turn_at.get(turn).map_or(0..0, |p| self.stream.partition_point(|(t, _)| t < p)..self.stream.partition_point(|(t, _)| t <= p));
+        let span = self.turn_at.get(turn).map(|t| self.rank[*t]).map_or(0..0, |r| self.stream.partition_point(|(t, _)| self.rank[*t] < r)..self.stream.partition_point(|(t, _)| self.rank[*t] <= r));
         self.stream[span].iter().map(|(_, i)| &self.items[*i])
     }
 
@@ -144,7 +155,7 @@ impl ThreadView {
             Some((at, n)) if (*at * 10.0).floor() == (now * 10.0).floor() => *n += 1,
             _ => self.arrivals.push_back((now, 1)),
         }
-        if self.arrivals.len() > ARRIVALS_KEPT {
+        while self.arrivals.front().is_some_and(|(t, _)| now - t > ARRIVALS_KEPT_S) {
             self.arrivals.pop_front();
         }
     }
@@ -157,9 +168,6 @@ impl ThreadView {
             let changed = self.items[at] != item;
             if changed {
                 self.changed[at] = self.activity;
-                if shape_facts(&self.items[at]) != shape_facts(&item) {
-                    self.shape += 1;
-                }
             }
             let moved = self.items[at].turn_id != item.turn_id;
             self.items[at] = item;
@@ -183,7 +191,6 @@ impl ThreadView {
         self.shown_at.push(None);
         let turn = self.turn_at.get(&item.turn_id).copied();
         self.items.push(item);
-        self.shape += 1;
         if let Some(turn) = turn {
             self.place(turn, at);
         }
@@ -203,22 +210,46 @@ impl ThreadView {
     }
 
     /// `turn` put in (replacing the one with its id): whether it changed.
-    /// A new one takes the items that came before it.
+    /// A new one takes the items that came before it; one numbered anew
+    /// moves, its items with it.
     fn put_turn(&mut self, turn: Turn) -> bool {
-        if let Some(at) = self.turn_at.get(&turn.id) {
-            let changed = self.turns[*at] != turn;
-            self.turns[*at] = turn;
+        if let Some(&at) = self.turn_at.get(&turn.id) {
+            let changed = self.turns[at] != turn;
+            let renumbered = self.turns[at].ordinal != turn.ordinal;
+            self.turns[at] = turn;
+            if renumbered {
+                self.rank_turns();
+            }
             return changed;
         }
         let at = self.turns.len();
         self.turn_at.insert(turn.id.clone(), at);
         let waiting: Vec<usize> = self.items.iter().enumerate().filter(|(_, i)| i.turn_id == turn.id).map(|(n, _)| n).collect();
         self.turns.push(turn);
-        self.shape += 1;
+        self.rank.push(at);
+        self.rank_turns();
         for item in waiting {
             self.place(at, item);
         }
         true
+    }
+
+    /// Each turn's place in the order shown, by its number (as they came,
+    /// among equals); the stream in that order, each turn's items as they
+    /// were.
+    fn rank_turns(&mut self) {
+        let mut order: Vec<usize> = (0..self.turns.len()).collect();
+        order.sort_by_key(|t| self.turns[*t].ordinal);
+        let mut rank = vec![0; self.turns.len()];
+        for (r, t) in order.into_iter().enumerate() {
+            rank[t] = r;
+        }
+        if rank != self.rank {
+            self.rank = rank;
+            let rank = &self.rank;
+            self.stream.sort_by_key(|(t, _)| rank[*t]);
+            self.number_shown();
+        }
     }
 
     /// Item `item` (of the turn at `turn`) into the order shown: a
@@ -231,7 +262,10 @@ impl ThreadView {
                 let id = &self.items[self.stream[parent].1].id;
                 parent + 1 + self.stream[parent + 1..].iter().take_while(|(_, i)| self.descends(*i, id)).count()
             }
-            None => self.stream.partition_point(|(t, _)| *t <= turn),
+            None => {
+                let rank = self.rank[turn];
+                self.stream.partition_point(|(t, _)| self.rank[*t] <= rank)
+            }
         };
         self.stream.insert(at, (turn, item));
         self.number_shown();
@@ -258,12 +292,6 @@ impl ThreadView {
     }
 }
 
-/// What of an item its stream's shape depends on: its kind, status,
-/// parent and turn, whether it has more than its line.
-fn shape_facts(item: &TurnItem) -> (std::mem::Discriminant<harness_contracts::ItemBody>, harness_contracts::ItemStatus, Option<&ItemId>, &TurnId, bool) {
-    (std::mem::discriminant(&item.body), item.status, item.parent_id.as_ref(), &item.turn_id, item.body.has_detail())
-}
-
 #[derive(Debug, Default)]
 pub struct Store {
     pub instances: BTreeMap<InstanceId, ProviderSnapshot>,
@@ -281,6 +309,12 @@ pub struct Store {
 }
 
 impl Store {
+    /// Whether the server's state as it was is all here (what comes now is
+    /// news).
+    pub fn is_live(&self) -> bool {
+        self.live
+    }
+
     /// Takes a server event that came at `now` (the clock's seconds).
     pub fn apply(&mut self, event: ClientEvent, now: f64) {
         match event {
@@ -302,6 +336,9 @@ impl Store {
             ClientEvent::Replayed => {
                 self.live = true;
                 self.arrived_before.clear();
+                for view in self.threads.values_mut() {
+                    view.known_at = Some(now);
+                }
             }
             ClientEvent::SlotUpdated { slot } => {
                 self.closed.remove(&slot.id);
@@ -346,6 +383,7 @@ impl Store {
                 None => {
                     let mut view = ThreadView::new(thread);
                     view.arrivals = self.arrived_before.remove(&view.thread.id).unwrap_or_default();
+                    view.known_at = live.then_some(now);
                     self.threads.insert(view.thread.id.clone(), view);
                 }
             },
@@ -368,13 +406,18 @@ impl Store {
                 }
             }
             AdapterEvent::RequestUpdated { request } => {
-                // Asked (an answer's echo isn't the agent's news).
-                let asked = live && request.status == RequestStatus::Pending;
+                // Asked (an answer's echo isn't the agent's news: it's
+                // settled, heard of then).
+                let asked = request.status == RequestStatus::Pending;
                 if let Some(view) = self.view(&request.thread_id.clone())
                     && view.put_request(request)
-                    && asked
+                    && live
                 {
-                    view.arrived(now);
+                    if asked {
+                        view.arrived(now);
+                    } else {
+                        view.settled_at = Some(now);
+                    }
                 }
             }
             AdapterEvent::PlanUpdated { plan } => {
@@ -459,6 +502,23 @@ mod tests {
         assert!(store.threads.is_empty());
     }
 
+    fn request(id: &str, status: RequestStatus) -> ClientEvent {
+        let request = RuntimeRequest {
+            id: RequestId::new(id),
+            thread_id: ThreadId::new("t"),
+            turn_id: None,
+            item_id: None,
+            kind: harness_contracts::RequestKind::Approval { action: harness_contracts::ToolAction::Command },
+            status,
+            title: "run it".into(),
+            detail: None,
+            options: Vec::new(),
+            questions: Vec::new(),
+            response: None,
+        };
+        ClientEvent::Session { event: AdapterEvent::RequestUpdated { request } }
+    }
+
     fn turn(id: &str, ordinal: u32, status: TurnStatus) -> ClientEvent {
         ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new(id), thread_id: ThreadId::new("t"), ordinal, status, failure: None, usage: None } } }
     }
@@ -541,21 +601,48 @@ mod tests {
     }
 
     /// A message the agent takes into a turn of its own moves there in the
-    /// order shown.
+    /// order shown; that turn, numbered before one queued after it (the
+    /// queued one numbered anew), is shown before it.
     #[test]
     fn an_item_moved_to_another_turn_is_shown_there() {
         let mut store = Store::default();
         store.apply(thread(ThreadStatus::Running), 0.0);
         store.apply(turn("one", 1, TurnStatus::Running), 0.0);
         store.apply(in_turn("a", "one"), 0.0);
+        store.apply(turn("queued", 2, TurnStatus::Queued), 0.0);
+        store.apply(in_turn("q", "queued"), 0.0);
         store.apply(in_turn("steered", "one"), 0.0);
         store.apply(in_turn("b", "one"), 0.0);
         store.apply(turn("two", 2, TurnStatus::Running), 0.0);
+        store.apply(turn("queued", 3, TurnStatus::Queued), 0.0);
         store.apply(in_turn("steered", "two"), 0.0);
         store.apply(in_turn("c", "two"), 0.0);
         let view = &store.threads[&ThreadId::new("t")];
-        assert_eq!(view.stream().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["a", "b", "steered", "c"]);
+        assert_eq!(view.stream().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["a", "b", "steered", "c", "q"]);
         assert_eq!(view.items_of(&TurnId::new("two")).map(|i| i.id.as_str()).collect::<Vec<_>>(), ["steered", "c"]);
+        assert_eq!(view.shown_at(&ItemId::new("q")), Some(4), "where each is, as shown");
+    }
+
+    /// A thread is heard of when the replay's done (nothing came from its
+    /// agent since: it's been quiet since then) and when your answer to its
+    /// request is taken; its agent's updates after.
+    #[test]
+    fn a_thread_is_heard_of_from_when_it_is_known() {
+        let mut store = Store::default();
+        store.apply(thread(ThreadStatus::Running), 1.0);
+        store.apply(turn("one", 1, TurnStatus::Running), 1.0);
+        let heard = |store: &Store| store.threads[&ThreadId::new("t")].last_heard();
+        assert_eq!(heard(&store), None, "replaying: not known yet");
+        store.apply(ClientEvent::Replayed, 2.0);
+        assert_eq!(heard(&store), Some(2.0));
+        let mut asked = request("r", RequestStatus::Pending);
+        store.apply(asked.clone(), 5.0);
+        assert_eq!(heard(&store), Some(5.0), "asked: news");
+        if let ClientEvent::Session { event: AdapterEvent::RequestUpdated { request } } = &mut asked {
+            request.status = RequestStatus::Resolved;
+        }
+        store.apply(asked, 200.0);
+        assert_eq!(heard(&store), Some(200.0), "your answer taken");
     }
 
     #[test]

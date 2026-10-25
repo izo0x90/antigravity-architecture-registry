@@ -87,7 +87,26 @@ pub(crate) fn is_call(item: &TurnItem) -> bool {
 /// Whether an item folds on its own: a call with output, a change with
 /// its diff, reasoning, your message with what went with it.
 pub(crate) fn folds(item: &TurnItem) -> bool {
-    item.body.has_detail()
+    match &item.body {
+        ItemBody::ToolCall { output, .. } => !output.is_empty(),
+        ItemBody::CommandExecution { output, .. } => output.is_some(),
+        ItemBody::FileChange { diff, .. } => diff.is_some(),
+        ItemBody::Reasoning { .. } => true,
+        ItemBody::UserMessage { typed, .. } => typed.as_ref().is_some_and(|t| t.handed_on.is_some()),
+        _ => false,
+    }
+}
+
+/// What of the stream its shape is worked out from (each item's id,
+/// kind, status, parent, turn, whether it folds), in one number: the same
+/// number, the same shape (for the same folds).
+pub(crate) fn shape_facts<'a>(items: impl Iterator<Item = &'a TurnItem>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for item in items {
+        (&item.id, std::mem::discriminant(&item.body), std::mem::discriminant(&item.status), &item.parent_id, &item.turn_id, folds(item)).hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 impl Folds {
@@ -169,11 +188,12 @@ impl Folds {
     /// one). Calls and reasoning between them; a call whose sub-agent did
     /// anything stands on its own, and a run is of one sub-agent's, or the
     /// agent's own. Quiet: everything between two of the agent's messages
-    /// but a request (what needs you), a sub-agent's work too.
+    /// but what needs you (a request, an error, a plan proposed), a
+    /// sub-agent's work too.
     pub(crate) fn runs(&self, items: &[&TurnItem], nesting: &Nesting) -> Vec<(usize, usize)> {
         let quiet = self.verbosity == Verbosity::Quiet;
         let joins = |k: usize| match &items[k].body {
-            ItemBody::Request { .. } => false,
+            ItemBody::Request { .. } | ItemBody::Error { .. } | ItemBody::ProposedPlan { .. } => false,
             body if quiet => nesting.depth[k] > 0 || !harness_contracts::is_message(body),
             ItemBody::Reasoning { .. } => nesting.end[k] == k,
             _ => is_call(items[k]) && nesting.end[k] == k,
@@ -342,11 +362,18 @@ pub(crate) fn shape(items: &[&TurnItem], folds: &Folds) -> Shape {
             let open = folds.run_open(&items[a..=b]);
             note(open, &mut shape);
             if open {
-                for (j, item) in items.iter().enumerate().take(b + 1).skip(a) {
-                    if self::folds(item) {
-                        note(folds.item_open(item), &mut shape);
+                // (Each its row; a call's sub-agent's work, as outside a
+                // run, under its call, folded unless opened.)
+                let mut j = a;
+                while j <= b {
+                    let nested = nest.end[j].min(b) - j;
+                    let own = folds.item_open(items[j]);
+                    if self::folds(items[j]) || nested > 0 {
+                        note(own, &mut shape);
                     }
-                    shape.rows.push(Row { first: j, last: j, run: Some((a, b)), folded: false, depth: nest.depth[j], nested: 0 });
+                    let last = if nested > 0 && !own { j + nested } else { j };
+                    shape.rows.push(Row { first: j, last, run: Some((a, b)), folded: false, depth: nest.depth[j], nested });
+                    j = last + 1;
                 }
             } else {
                 shape.rows.push(Row { first: a, last: b, run: Some((a, b)), folded: true, depth, nested: 0 });
@@ -375,10 +402,14 @@ pub(crate) fn summary(calls: &[&TurnItem]) -> String {
         Some((_, _, n)) => *n += 1,
         None => counts.push((verb, thing, 1)),
     };
-    for said in calls.iter().filter_map(|c| super::words::of(&c.body)) {
-        count(said.did, said.thing);
+    let mut unsaid = 0;
+    for item in calls {
+        match super::words::of(&item.body) {
+            Some(said) => count(said.did, said.thing),
+            None => unsaid += 1,
+        }
     }
-    let words: Vec<String> = counts
+    let mut words: Vec<String> = counts
         .into_iter()
         .map(|(verb, thing, n)| match (thing, n) {
             (None, 1) => format!("{verb} once"),
@@ -388,6 +419,9 @@ pub(crate) fn summary(calls: &[&TurnItem]) -> String {
             (Some(thing), n) => format!("{verb} {n} {thing}s"),
         })
         .collect();
+    if unsaid > 0 {
+        words.push(format!("{unsaid} more"));
+    }
     let mut said = crate::nav::capitalized(&words.join(", "));
     let failed = calls.iter().filter(|c| c.status == ItemStatus::Failed).count();
     if failed > 0 {
@@ -576,5 +610,18 @@ mod tests {
         assert_eq!(rows_of(&items, &quiet), [(0, 0), (1, 4), (5, 5), (6, 8), (9, 9)], "the request between stands; the rest folded");
         let normal = Folds::default();
         assert!(rows_of(&items, &normal).contains(&(6, 8)), "the reasoning between calls in their run");
+        assert_eq!(summary(&items[1..=4]), "Read 1 file, updated 1 to-do list, used 1 tool, wrote 1 message", "said, all of it");
+        // Opened, the run's call keeps its sub-agent's work folded under it.
+        quiet.set_run(&ItemId::new("i1"), Set::Open);
+        let shape = shape(&items, &quiet);
+        let task = shape.rows.iter().find(|r| r.first == 3).expect("the call's row");
+        assert_eq!((task.last, task.nested), (4, 1), "its sub-agent's step under it, folded");
+        // An error, what needs you, stands.
+        let error = item(10, "a", ItemBody::Error { message: "it broke".into() }, ItemStatus::Completed);
+        let stream = [said(0, "a"), call(1, "a", ToolKind::Read), error, call(11, "a", ToolKind::Read), said(12, "a")];
+        let items: Vec<&TurnItem> = stream.iter().collect();
+        let mut quiet = Folds::default();
+        quiet.set_verbosity(Verbosity::Quiet);
+        assert_eq!(rows_of(&items, &quiet), [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)]);
     }
 }

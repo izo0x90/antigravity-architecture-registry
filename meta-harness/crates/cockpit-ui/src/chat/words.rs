@@ -21,7 +21,9 @@ const fn said(icon: &'static str, did: &'static str, thing: Option<&'static str>
     Said { icon, did, thing, doing, on_file }
 }
 
-/// A call's or reasoning's words (none for the rest).
+/// What an item did, in words: a call's, reasoning's, and what a quiet
+/// run folds besides (a sub-agent's message, a to-do list, a notice);
+/// none for the rest.
 pub(super) fn of(body: &ItemBody) -> Option<Said> {
     Some(match body {
         ItemBody::ToolCall { kind, .. } => match kind {
@@ -38,6 +40,9 @@ pub(super) fn of(body: &ItemBody) -> Option<Said> {
         ItemBody::CommandExecution { .. } => said(icon::TERMINAL, "ran", Some("command"), "Running a command", false),
         ItemBody::FileChange { .. } => said(icon::PENCIL_SIMPLE, "changed", Some("file"), "Changing", true),
         ItemBody::Reasoning { .. } => said(icon::BRAIN, "thought", None, "Thinking", false),
+        ItemBody::AssistantMessage { .. } => said(icon::CHAT_TEXT, "wrote", Some("message"), "Writing", false),
+        ItemBody::TodoList { .. } => said(icon::LIST_CHECKS, "updated", Some("to-do list"), "Planning", false),
+        ItemBody::Notice { .. } | ItemBody::Subagent { .. } | ItemBody::Unknown { .. } => said(icon::INFO, "noted", None, "Working", false),
         _ => return None,
     })
 }

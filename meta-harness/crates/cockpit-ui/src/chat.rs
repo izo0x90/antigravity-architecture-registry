@@ -102,8 +102,10 @@ pub struct ChatView {
     /// before it: `tend`); which view of the thread the rows' heights and
     /// changes were worked out for.
     pub(crate) cursor_on: Option<harness_contracts::ItemId>,
+    /// A place restored, its cursor to be shown once the thread's all here.
+    pub(crate) placing: bool,
     pub(crate) epoch: Option<u64>,
-    shape: std::cell::RefCell<Option<(ShapeOf, std::rc::Rc<rows::Shape>)>>,
+    shape: std::cell::RefCell<Option<ShapeOf>>,
     /// What shows the agent at work (the setting's pick); where the running
     /// turn's line was drawn this frame.
     pub(crate) indicator: crate::indicator::Shown,
@@ -166,6 +168,7 @@ impl Default for ChatView {
             folds: rows::Folds::default(),
             folds_for: None,
             cursor_on: None,
+            placing: false,
             epoch: None,
             shape: Default::default(),
             indicator: Default::default(),
@@ -270,9 +273,14 @@ impl ChatView {
     }
 }
 
-/// What a stream's shape was worked out from: its thread, which view of it
-/// and as of which change of its shape, and which change of the folds.
-type ShapeOf = (ThreadId, (u64, u64), u64);
+/// A stream's shape, and what it was worked out from: its thread, which
+/// view of it and as of which event, which change of the folds; what of
+/// the stream it reads (`rows::shape_facts`).
+pub(crate) struct ShapeOf {
+    of: (ThreadId, u64, u64, u64),
+    facts: u64,
+    shape: std::rc::Rc<rows::Shape>,
+}
 
 /// How often a chat on screen says its slot's updates were seen (seconds).
 const SEEN_EVERY: f64 = 2.0;
@@ -323,15 +331,25 @@ impl ChatStreamState {
     /// change of the thread or the folds.
     pub(crate) fn shape(&self) -> std::rc::Rc<rows::Shape> {
         let Some(view) = self.thread() else { return Default::default() };
-        let of = (view.thread.id.clone(), view.shape_of(), self.ui.folds.changes());
-        if let Some((was, shape)) = &*self.ui.shape.borrow()
-            && *was == of
-        {
-            return shape.clone();
-        }
+        let of = (view.thread.id.clone(), view.epoch(), view.activity, self.ui.folds.changes());
+        let mut kept = self.ui.shape.borrow_mut();
+        // (The same thread as of the same event, else as of the same facts.)
+        let facts = match &*kept {
+            Some(was) if was.of == of => return was.shape.clone(),
+            Some(was) if (&was.of.0, was.of.1, was.of.3) == (&of.0, of.1, of.3) => {
+                let facts = rows::shape_facts(view.stream());
+                if facts == was.facts {
+                    let shape = was.shape.clone();
+                    *kept = Some(ShapeOf { of, facts, shape: shape.clone() });
+                    return shape;
+                }
+                facts
+            }
+            _ => rows::shape_facts(view.stream()),
+        };
         let items: Vec<&TurnItem> = view.stream().collect();
         let shape = std::rc::Rc::new(rows::shape(&items, &self.ui.folds));
-        *self.ui.shape.borrow_mut() = Some((of, shape.clone()));
+        *kept = Some(ShapeOf { of, facts, shape: shape.clone() });
         shape
     }
 

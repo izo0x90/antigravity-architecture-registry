@@ -293,11 +293,12 @@ impl Navigable for ChatStreamState {
             if let Some(slot) = slot {
                 self.ui.slot = slot;
             }
-            self.cursor_to(message);
+            // (Placed once the thread's all here: `tend`.)
+            self.ui.cursor = message;
+            self.ui.cursor_on = None;
+            self.ui.placing = message.is_some();
             self.ui.pick = None;
-            if let Some(row) = message.and_then(|at| self.shape().row_of(at)) {
-                self.ui.scrolling.show(row, crate::viewport::Show::Middle);
-            }
+            self.tend();
         }
     }
 

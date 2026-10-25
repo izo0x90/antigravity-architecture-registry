@@ -14,9 +14,9 @@ use crate::nav::{Thing, Things};
 /// isn't a message).
 pub(super) type Place = (NativeId, u32, Option<u32>);
 
-/// The stream's places, for the thread (its id) at a change of it (its
-/// activity count).
-pub(crate) type Places = (harness_contracts::ThreadId, u64, std::rc::Rc<Vec<Option<Place>>>);
+/// The stream's places, for the thread (its id) at a change of it (which
+/// view of it, its activity count).
+pub(crate) type Places = (harness_contracts::ThreadId, (u64, u64), std::rc::Rc<Vec<Option<Place>>>);
 
 impl ChatStreamState {
     /// Where each item of the stream is (in the stream's order), as a tag
@@ -24,7 +24,7 @@ impl ChatStreamState {
     /// session's id. Worked out once per change of the thread.
     fn tag_places(&self) -> std::rc::Rc<Vec<Option<Place>>> {
         let Some(view) = self.thread() else { return std::rc::Rc::default() };
-        let key = (view.thread.id.clone(), view.activity);
+        let key = (view.thread.id.clone(), (view.epoch(), view.activity));
         if let Some((id, activity, places)) = self.tag_places.borrow().as_ref()
             && (id, *activity) == (&key.0, key.1)
         {
@@ -88,8 +88,19 @@ impl ChatStreamState {
 
     /// Where a subject is drawn: all of its items that show.
     pub(super) fn tag_drawn_at(&self, subject: &Subject) -> Option<egui::Rect> {
-        // (In order: each spot, its item's number looked up, not written out.)
+        // (In order: each row's spot, looked up by its items; a folded run's
+        // covers all of its.)
         let indexes = self.tagged_indexes(subject);
-        self.ui.spots.iter().filter(|s| s.key.parse::<usize>().is_ok_and(|i| indexes.binary_search(&i).is_ok())).map(|s| s.rect).reduce(|a, b| a.union(b))
+        let shape = self.shape();
+        let holds = |key: &str| {
+            let (first, part) = key.split_once(':').map_or((key, None), |(i, p)| (i, Some(p)));
+            let Ok(first) = first.parse::<usize>() else { return false };
+            match part {
+                None => indexes.binary_search(&first).is_ok(),
+                Some(super::render::RUN) => shape.row_of(first).is_some_and(|r| indexes.iter().any(|i| shape.rows[r].holds(*i))),
+                Some(_) => false,
+            }
+        };
+        self.ui.spots.iter().filter(|s| holds(&s.key)).map(|s| s.rect).reduce(|a, b| a.union(b))
     }
 }

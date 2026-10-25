@@ -485,3 +485,39 @@ fn a_chat_starts_as_the_config_says() {
     chat.read();
     assert_eq!((chat.ui.folds.verbosity(), chat.ui.indicator.kind()), (crate::config::Verbosity::Quiet, crate::indicator::Kind::None));
 }
+
+/// A place restored before its thread's all here (the layout comes before
+/// the replay): the cursor goes on what's at that place once it is, not
+/// on what was there midway.
+#[test]
+fn a_place_restored_before_the_thread_is_all_here_lands_once_it_is() {
+    let mut chat = Fed::default();
+    crate::nav::Navigable::restore(&mut chat.chat, &crate::nav::Place::of(&ChatPlace { message: Some(2), slot: None }));
+    let mut events = conversation_events();
+    let replayed = events.pop();
+    // (Its sub-agent's step, last to come, shown after its call: second.)
+    let mut sub = item(9, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "the helper's".into() }], streaming: false });
+    if let ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } } = &mut sub {
+        item.parent_id = Some(ItemId::new("i1"));
+    }
+    events.push(sub);
+    events.extend(replayed);
+    for event in events {
+        chat.apply(event);
+    }
+    let on = chat.thread().and_then(|v| v.in_stream(chat.ui.cursor?).map(|i| i.id.to_string()));
+    assert_eq!(on.as_deref(), Some("i9"), "on what's at its place, all here");
+}
+
+/// Opened on an agent that's said nothing since: quiet too long, counted
+/// from when it became known, not waiting for ever.
+#[test]
+fn an_agent_silent_since_it_became_known_reads_quiet() {
+    let mut chat = conversation();
+    chat.shared.socket.set(crate::net::WsState::Open);
+    chat.read();
+    let view = chat.thread().unwrap().clone();
+    let activity = chat.activity(&view, 130.0);
+    assert_eq!(activity.liveness, crate::indicator::Liveness::Quiet);
+    assert!(chat.live_words(&activity).0.starts_with("No word for 2 min"), "{:?}", chat.live_words(&activity).0);
+}
