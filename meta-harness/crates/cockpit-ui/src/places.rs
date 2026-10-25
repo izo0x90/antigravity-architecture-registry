@@ -23,9 +23,10 @@ fn breaks(c: char) -> bool {
     c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ';' | '|')
 }
 
-/// Which names count as files: any with an extension (`Cargo.toml`, a
-/// terminal's output), or only with a folder or a line (`src/a.rs`,
-/// `a.rs:12`: in prose, where `e.g` isn't one).
+/// Which names count as files: any with a folder or an extension
+/// (`Cargo.toml`, `src/`, a terminal's output), or only one with an
+/// extension and a folder or a line (`src/a.rs`, `a.rs:12`: in prose,
+/// where `e.g` and `read/write` aren't).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Names {
     Bare,
@@ -33,8 +34,9 @@ pub enum Names {
 }
 
 /// The links on `text` (a line as shown: a column a character), its paths
-/// read from `folder` (an absolute path in it becomes the project's), its
-/// files as `names` says.
+/// read from `folder` (an absolute path in it becomes the project's; with
+/// no folder known, an absolute path isn't one), its files as `names`
+/// says. A word's emphasis (`**src/a.rs**`) isn't part of it.
 pub fn links(text: &str, folder: &str, names: Names) -> Vec<Link> {
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
@@ -48,14 +50,18 @@ pub fn links(text: &str, folder: &str, names: Names) -> Vec<Link> {
         while end < chars.len() && !breaks(chars[end]) {
             end += 1;
         }
-        // What a sentence puts after a word isn't part of it.
-        let mut stop = end;
-        while stop > start && matches!(chars[stop - 1], '.' | ':' | '!' | '?') {
+        // What a sentence puts after a word isn't part of it, nor what
+        // marks it out.
+        let (mut from, mut stop) = (start, end);
+        while from < stop && matches!(chars[from], '*' | '_') {
+            from += 1;
+        }
+        while stop > from && matches!(chars[stop - 1], '.' | ':' | '!' | '?' | '*' | '_') {
             stop -= 1;
         }
-        let word: String = chars[start..stop].iter().collect();
+        let word: String = chars[from..stop].iter().collect();
         if let Some(to) = link(&word, folder, names) {
-            out.push(Link { col: start as u16, len: (stop - start) as u16, to });
+            out.push(Link { col: from as u16, len: (stop - from) as u16, to });
         }
         start = end;
     }
@@ -71,11 +77,14 @@ fn link(word: &str, folder: &str, names: Names) -> Option<To> {
     let plausible = !path.starts_with('-')
         && path.chars().all(|c| c.is_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '~' | '+' | '@'))
         && path.chars().any(char::is_alphabetic)
-        && (path.contains('/') || has_extension(path) && (names == Names::Bare || line.is_some()));
-    if !plausible {
+        && match names {
+            Names::Bare => path.contains('/') || has_extension(path),
+            Names::Placed => has_extension(path) && (path.contains('/') || line.is_some()),
+        };
+    if !plausible || (folder.is_empty() && path.starts_with('/')) {
         return None;
     }
-    let path = match path.strip_prefix(folder.trim_end_matches('/')).and_then(|p| p.strip_prefix('/')) {
+    let path = match path.strip_prefix(folder.trim_end_matches('/')).and_then(|p| p.strip_prefix('/')).filter(|_| !folder.is_empty()) {
         Some(inside) => inside.to_owned(),
         None => path.trim_start_matches("./").to_owned(),
     };
@@ -132,6 +141,8 @@ mod tests {
         assert!(links("version 1.2.3 took 0.5s, done.", "/p", Names::Bare).is_empty(), "numbers and sentences aren't files");
         assert!(links("--release -v", "/p", Names::Bare).is_empty(), "flags aren't");
         assert!(links("a.rs:x", "/p", Names::Bare).is_empty(), "a line is a number");
+        let prose = |text: &str| links(text, "", Names::Placed).into_iter().map(|l| l.to).collect::<Vec<_>>();
+        assert_eq!(prose("Use read/write locks, and/or edit **src/lock.rs** (see a.rs:3, /etc/hosts)."), [file("src/lock.rs", None), file("a.rs", Some(3))], "in prose: files with an extension, emphasis aside; no absolute path with no folder known");
         assert_eq!(path_and_lines("src/a.rs:10-20"), Some(("src/a.rs", Some((10, 20)))));
         assert_eq!(path_and_lines("src/a.rs:7:3"), Some(("src/a.rs", Some((7, 7)))));
         assert_eq!((path_and_lines("src/a.rs"), path_and_lines("src/a.rs:9-x")), (Some(("src/a.rs", None)), None));

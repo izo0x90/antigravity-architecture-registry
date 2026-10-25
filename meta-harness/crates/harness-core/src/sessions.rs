@@ -90,10 +90,10 @@ impl SessionManager {
                 if let AdapterEvent::CatalogUpdated { update } = &event {
                     instance.apply_catalog(update);
                 }
-                // (What was typed, read off the runtime's threads.)
-                let event = match typed_wanted(&event).zip(typed.get().cloned()) {
+                // (What was typed: a hash and a map's lookup, in memory.)
+                let event = match typed_wanted(&event).zip(typed.get()) {
                     Some((sent, read)) => {
-                        let found = tokio::task::spawn_blocking(move || read(&sent)).await.ok().flatten();
+                        let found = read(&sent);
                         with_typed(event, found)
                     }
                     None => event,

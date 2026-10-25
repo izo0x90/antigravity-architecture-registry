@@ -37,13 +37,13 @@ pub trait SlotStore: Send + Sync {
     fn take_reports(&self, to: &SlotId) -> std::result::Result<Vec<HeldReport>, String>;
     /// Notes what happened, for looking back (never fails an operation).
     fn note(&self, actor: &str, action: &str, subject: &str, detail: Option<&str>);
-    /// Keeps what the user typed (`typed`: its text and links) for the
-    /// text an agent was handed for it (`sent`, what it links after it),
-    /// so it's shown as typed whenever it's seen again (its session's
-    /// history replayed too).
-    fn keep_typed(&self, sent: &str, typed: &AsTyped) -> std::result::Result<(), String>;
-    /// What the user typed for `sent`, when it was kept.
-    fn typed(&self, sent: &str) -> Option<AsTyped>;
+    /// Keeps what the user typed (`typed`: its text and links) by the
+    /// key of the text an agent was handed for it (`sent_key`), so it's
+    /// shown as typed whenever it's seen again (its session's history
+    /// replayed too); the newest `TYPED_KEPT`.
+    fn keep_typed(&self, key: &str, typed: &AsTyped) -> std::result::Result<(), String>;
+    /// Every one kept, by its key.
+    fn typed_kept(&self) -> std::result::Result<Vec<(String, AsTyped)>, String>;
 }
 
 /// What a slot is told (a sub-slot's report to the lead, a discussion's
@@ -197,6 +197,18 @@ pub struct SlotManager {
     /// What a message's links hand an agent besides its text, set at
     /// start-up; every message with links goes through it.
     expand: std::sync::OnceLock<Expand>,
+    /// What the user typed for each message kept (by `sent_key`), read
+    /// once: a message's lookup is a hash and a map's.
+    typed: std::sync::RwLock<HashMap<String, AsTyped>>,
+}
+
+/// Messages whose typed form is kept, at the most (the newest).
+pub const TYPED_KEPT: usize = 10_000;
+
+/// A message as sent, as its typed form is kept by (its SHA-256, hex).
+pub fn sent_key(sent: &str) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(sent.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// A message as an agent is handed it: its text with what it links, as
@@ -255,7 +267,13 @@ impl SlotManager {
             store.save(&slot).map_err(store_error)?;
             place.insert(slot);
         }
+        // (Not read: a replay shows what isn't as sent.)
+        let typed = store.typed_kept().unwrap_or_else(|e| {
+            tracing::warn!("what was typed isn't read (replays show messages as sent): {e}");
+            Vec::new()
+        });
         let manager = Arc::new(Self {
+            typed: std::sync::RwLock::new(typed.into_iter().collect()),
             sessions,
             registry,
             hub,
@@ -561,7 +579,20 @@ impl SlotManager {
     /// What the user typed for `sent` (a message as an agent was handed
     /// it), when it was kept.
     pub fn typed(&self, sent: &str) -> Option<AsTyped> {
-        self.store.typed(sent)
+        self.typed.read().unwrap_or_else(std::sync::PoisonError::into_inner).get(&sent_key(sent)).cloned()
+    }
+
+    /// Keeps what the user typed for `sent` (here and in the store; past
+    /// what's kept, as the store keeps it).
+    fn keep_typed(&self, sent: &str, typed: &AsTyped) -> std::result::Result<(), String> {
+        let key = sent_key(sent);
+        self.store.keep_typed(&key, typed)?;
+        let mut kept = self.typed.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        kept.insert(key, typed.clone());
+        if kept.len() > TYPED_KEPT + TYPED_KEPT / 10 {
+            *kept = self.store.typed_kept()?.into_iter().collect();
+        }
+        Ok(())
     }
 
     /// What every prompt is handed through from now on (`Expand`).
@@ -596,7 +627,7 @@ impl SlotManager {
         let Expanded { text, handed_on, .. } = self.expanded(message, Some(to.clone())).await;
         let typed = typed.map(|message| AsTyped { message, handed_on });
         if let Some(typed) = &typed
-            && let Err(e) = self.store.keep_typed(&text, typed)
+            && let Err(e) = self.keep_typed(&text, typed)
         {
             tracing::warn!("what was typed isn't kept (a replay shows it as sent): {e}");
         }

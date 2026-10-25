@@ -104,15 +104,6 @@ impl StateDb {
     }
 }
 
-/// Messages whose typed form is kept, at the most (the newest).
-const TYPED_KEPT: i64 = 10_000;
-
-/// A message as sent, as its typed form is kept by (its hash).
-fn sent_key(sent: &str) -> String {
-    use sha2::Digest;
-    sha2::Sha256::digest(sent.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
-}
-
 impl SlotStore for StateDb {
     fn load(&self) -> Result<Vec<Slot>, String> {
         self.load_slots().map_err(|e| e.to_string())
@@ -148,21 +139,27 @@ impl SlotStore for StateDb {
         .map_err(|e| e.to_string())
     }
 
-    fn keep_typed(&self, sent: &str, typed: &harness_contracts::AsTyped) -> Result<(), String> {
+    fn keep_typed(&self, key: &str, typed: &harness_contracts::AsTyped) -> Result<(), String> {
         let json = serde_json::to_string(typed).map_err(|e| e.to_string())?;
         let at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
         self.transaction(|tx| {
-            tx.execute("INSERT OR REPLACE INTO typed_messages (sent, json, at_ms) VALUES (?1, ?2, ?3)", params![sent_key(sent), json, at_ms]).map_err(failed)?;
-            // The newest kept: older ones show as sent once replayed.
-            tx.execute("DELETE FROM typed_messages WHERE sent NOT IN (SELECT sent FROM typed_messages ORDER BY at_ms DESC LIMIT ?1)", params![TYPED_KEPT]).map_err(failed)?;
+            tx.execute("INSERT OR REPLACE INTO typed_messages (sent, json, at_ms) VALUES (?1, ?2, ?3)", params![key, json, at_ms]).map_err(failed)?;
+            // The newest kept (by when each was put in, its row's number):
+            // older ones show as sent once replayed.
+            tx.execute("DELETE FROM typed_messages WHERE rowid <= (SELECT MAX(rowid) FROM typed_messages) - ?1", params![harness_core::slots::TYPED_KEPT as i64]).map_err(failed)?;
             Ok(())
         })
         .map_err(|e| e.to_string())
     }
 
-    fn typed(&self, sent: &str) -> Option<harness_contracts::AsTyped> {
-        let json: Option<String> = self.transaction(|tx| tx.query_row("SELECT json FROM typed_messages WHERE sent = ?1", params![sent_key(sent)], |r| r.get(0)).optional().map_err(failed)).ok().flatten();
-        json.and_then(|j| serde_json::from_str(&j).ok())
+    fn typed_kept(&self) -> Result<Vec<(String, harness_contracts::AsTyped)>, String> {
+        self.transaction(|tx| {
+            let mut stmt = tx.prepare("SELECT sent, json FROM typed_messages").map_err(failed)?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(failed)?.collect::<Result<Vec<_>, _>>().map_err(failed)?;
+            // (One that doesn't read, an older form's: shown as sent.)
+            Ok(rows.into_iter().filter_map(|(key, json)| Some((key, serde_json::from_str(&json).ok()?))).collect())
+        })
+        .map_err(|e| e.to_string())
     }
 
     fn note(&self, actor: &str, action: &str, subject: &str, detail: Option<&str>) {

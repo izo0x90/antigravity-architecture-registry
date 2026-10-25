@@ -150,20 +150,19 @@ mod slots {
         assert_eq!(db.activity(1).unwrap()[0].action, "sent");
     }
 
-    /// What was typed for a message is kept by the text sent, across a
-    /// reopening; another text has none.
+    /// What was typed for a message is kept by its key, across a
+    /// reopening.
     #[test]
-    fn what_was_typed_is_kept_by_what_was_sent() {
+    fn what_was_typed_is_kept_by_its_key() {
         let dir = tempfile::tempdir().unwrap();
         let message = harness_contracts::Message { text: "see #x".into(), links: vec![harness_contracts::Link { start: 4, end: 6, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("x") }, include: harness_contracts::Include::Auto }] };
         let typed = harness_contracts::AsTyped { message, handed_on: Some("#x: a tag".into()) };
         {
             let db = StateDb::open(dir.path(), &settings()).unwrap();
-            db.keep_typed("see #x\n\n---\nWhat's linked", &typed).unwrap();
+            db.keep_typed("k1", &typed).unwrap();
         }
         let db = StateDb::open(dir.path(), &settings()).unwrap();
-        assert_eq!(db.typed("see #x\n\n---\nWhat's linked"), Some(typed));
-        assert_eq!(db.typed("see #x"), None);
+        assert_eq!(db.typed_kept().unwrap(), [("k1".to_owned(), typed)]);
     }
 }
 

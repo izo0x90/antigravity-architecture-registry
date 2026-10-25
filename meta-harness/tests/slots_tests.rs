@@ -169,12 +169,12 @@ impl SlotStore for Store {
         Ok(taken)
     }
     fn note(&self, _: &str, _: &str, _: &str, _: Option<&str>) {}
-    fn keep_typed(&self, sent: &str, typed: &harness_contracts::AsTyped) -> Result<(), String> {
-        self.typed.lock().unwrap().insert(sent.to_owned(), typed.clone());
+    fn keep_typed(&self, key: &str, typed: &harness_contracts::AsTyped) -> Result<(), String> {
+        self.typed.lock().unwrap().insert(key.to_owned(), typed.clone());
         Ok(())
     }
-    fn typed(&self, sent: &str) -> Option<harness_contracts::AsTyped> {
-        self.typed.lock().unwrap().get(sent).cloned()
+    fn typed_kept(&self) -> Result<Vec<(String, harness_contracts::AsTyped)>, String> {
+        Ok(self.typed.lock().unwrap().iter().map(|(k, t)| (k.clone(), t.clone())).collect())
     }
 }
 
