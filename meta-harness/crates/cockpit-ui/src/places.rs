@@ -66,17 +66,12 @@ fn link(word: &str, folder: &str, names: Names) -> Option<To> {
     if word.starts_with("http://") || word.starts_with("https://") {
         return (word.len() > "https://".len()).then(|| To::Url(word.to_owned()));
     }
-    // file, file:line, file:line:col
-    let mut parts = word.split(':');
-    let path = parts.next()?;
-    let line = parts.next().map(|l| l.parse::<u32>().ok());
-    if matches!(line, Some(None)) || parts.next().is_some_and(|c| c.parse::<u32>().is_err()) {
-        return None;
-    }
+    let (path, lines) = path_and_lines(word)?;
+    let line = lines.map(|(first, _)| first);
     let plausible = !path.starts_with('-')
         && path.chars().all(|c| c.is_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '~' | '+' | '@'))
         && path.chars().any(char::is_alphabetic)
-        && (path.contains('/') || has_extension(path) && (names == Names::Bare || matches!(line, Some(Some(_)))));
+        && (path.contains('/') || has_extension(path) && (names == Names::Bare || line.is_some()));
     if !plausible {
         return None;
     }
@@ -84,7 +79,29 @@ fn link(word: &str, folder: &str, names: Names) -> Option<To> {
         Some(inside) => inside.to_owned(),
         None => path.trim_start_matches("./").to_owned(),
     };
-    Some(To::File { path, line: line.flatten() })
+    Some(To::File { path, line })
+}
+
+/// The notation of a file's place, read one way wherever it's written: a
+/// path, `path:12`, `path:12:5` (at a column), `path:10-20` (lines): the
+/// path, and its first and last line (none: a part that isn't a number).
+pub fn path_and_lines(word: &str) -> Option<(&str, Option<(u32, u32)>)> {
+    let mut parts = word.split(':');
+    let path = parts.next()?;
+    let lines = match parts.next() {
+        None => None,
+        Some(lines) => Some(match lines.split_once('-') {
+            Some((first, last)) => (first.parse().ok()?, last.parse().ok()?),
+            None => {
+                let line = lines.parse().ok()?;
+                (line, line)
+            }
+        }),
+    };
+    if parts.next().is_some_and(|col| col.parse::<u32>().is_err()) {
+        return None;
+    }
+    Some((path, lines))
 }
 
 /// `name.ext`: an extension of letters (and digits, a letter first) after a
@@ -115,6 +132,9 @@ mod tests {
         assert!(links("version 1.2.3 took 0.5s, done.", "/p", Names::Bare).is_empty(), "numbers and sentences aren't files");
         assert!(links("--release -v", "/p", Names::Bare).is_empty(), "flags aren't");
         assert!(links("a.rs:x", "/p", Names::Bare).is_empty(), "a line is a number");
+        assert_eq!(path_and_lines("src/a.rs:10-20"), Some(("src/a.rs", Some((10, 20)))));
+        assert_eq!(path_and_lines("src/a.rs:7:3"), Some(("src/a.rs", Some((7, 7)))));
+        assert_eq!((path_and_lines("src/a.rs"), path_and_lines("src/a.rs:9-x")), (Some(("src/a.rs", None)), None));
     }
 
     use proptest::prelude::*;

@@ -125,16 +125,10 @@ impl Checks {
     }
 }
 
-/// `path:10-20` (or `path:10`): lines of a file.
+/// `path:10-20` (or `path:10`): lines of a file (the one reading of the
+/// notation, `places::path_and_lines`).
 fn lines_of(query: &str) -> Option<(String, u32, u32)> {
-    let (path, range) = query.trim().rsplit_once(':')?;
-    let (first, last) = match range.split_once('-') {
-        Some((a, b)) => (a.parse().ok()?, b.parse().ok()?),
-        None => {
-            let n = range.parse().ok()?;
-            (n, n)
-        }
-    };
+    let (path, (first, last)) = crate::places::path_and_lines(query.trim()).and_then(|(path, lines)| Some((path, lines?)))?;
     (!path.is_empty() && first >= 1 && last >= first).then(|| (path.to_owned(), first, last))
 }
 
