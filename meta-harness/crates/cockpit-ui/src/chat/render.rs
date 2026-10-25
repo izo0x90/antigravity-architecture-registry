@@ -511,7 +511,7 @@ impl ChatStreamState {
         let index = row.first;
         match &item.body {
             // Your messages and the agent's: as every conversation draws them.
-            ItemBody::UserMessage { text } => {
+            ItemBody::UserMessage { text, .. } => {
                 self.ui.messages.draw(ui, &crate::conversation::Message::new("user", text));
             }
             // Its code blocks are places of their own (a hint picks one; Copy

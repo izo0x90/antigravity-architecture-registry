@@ -81,7 +81,7 @@ pub(crate) fn conversation_events() -> Vec<ClientEvent> {
     chat.push(session(AdapterEvent::ThreadUpdated { thread }));
     chat.push(ClientEvent::SlotUpdated { slot: lead(Some("t")) });
     chat.push(session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn"), thread_id: ThreadId::new("t"), ordinal: 1, status: TurnStatus::Completed, failure: None, usage: None } }));
-    chat.push(item(0, ItemBody::UserMessage { text: "fix the parser".into() }));
+    chat.push(item(0, ItemBody::UserMessage { text: "fix the parser".into(), typed: None }));
     chat.push(item(1, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Looking at it.".into() }], streaming: false }));
     let locations = vec![FileLocation { path: "src/parse.rs".into(), line: Some(12) }, FileLocation { path: "src/lex.rs".into(), line: None }];
     chat.push(item(2, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations }));

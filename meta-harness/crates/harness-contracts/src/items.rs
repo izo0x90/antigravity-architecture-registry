@@ -34,7 +34,14 @@ pub enum ItemStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum ItemBody {
-    UserMessage { text: String },
+    /// What you sent, as the agent was handed it (`text`), and as you
+    /// typed it, when that's another: its own text and links (what was
+    /// handed on with it follows it in `text`).
+    UserMessage {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        typed: Option<crate::Message>,
+    },
     AssistantMessage { content: Vec<ContentBlock>, streaming: bool },
     Reasoning { text: String, streaming: bool },
     ToolCall {
@@ -66,7 +73,7 @@ impl ItemBody {
     /// answer's text parts a line apart. None: it isn't a message.
     pub fn said(&self) -> Option<String> {
         match self {
-            Self::UserMessage { text } => Some(text.clone()),
+            Self::UserMessage { text, .. } => Some(text.clone()),
             Self::AssistantMessage { content, .. } => Some(content.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n")),
             _ => None,
         }

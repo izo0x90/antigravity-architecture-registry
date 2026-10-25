@@ -159,7 +159,7 @@ impl SessionState {
         }
         let turn_id = self.start_turn_record(if starts { TurnStatus::Running } else { TurnStatus::Queued });
         self.running.push_back(turn_id.clone());
-        self.push_item_in(turn_id.clone(), ItemBody::UserMessage { text: prompt.to_owned() }, ItemStatus::Completed, None, None);
+        self.push_item_in(turn_id.clone(), ItemBody::UserMessage { text: prompt.to_owned(), typed: None }, ItemStatus::Completed, None, None);
         if starts {
             self.set_thread(|t| t.status = ThreadStatus::Running);
         }
@@ -171,7 +171,7 @@ impl SessionState {
     pub fn inject(&mut self, text: &str) -> Option<(TurnId, ItemId)> {
         let turn_id = self.running.front()?.clone();
         self.close_streams();
-        let item = self.push_item_in(turn_id.clone(), ItemBody::UserMessage { text: text.to_owned() }, ItemStatus::Completed, None, None);
+        let item = self.push_item_in(turn_id.clone(), ItemBody::UserMessage { text: text.to_owned(), typed: None }, ItemStatus::Completed, None, None);
         Some((turn_id, item))
     }
 
@@ -451,7 +451,7 @@ impl SessionState {
             && matches!(self.items.last().map(|i| &i.body), Some(ItemBody::UserMessage { .. }))
         {
             self.update_item(&last, |item| {
-                if let ItemBody::UserMessage { text: existing } = &mut item.body {
+                if let ItemBody::UserMessage { text: existing, .. } = &mut item.body {
                     existing.push_str(&text);
                 }
             });
@@ -459,7 +459,7 @@ impl SessionState {
         }
         self.close_streams();
         self.replay_turn = None;
-        self.push_item(ItemBody::UserMessage { text }, ItemStatus::Completed, None, None);
+        self.push_item(ItemBody::UserMessage { text, typed: None }, ItemStatus::Completed, None, None);
     }
 
     fn message_chunk(&mut self, content: &acp::ContentBlock) {
@@ -697,8 +697,8 @@ mod tests {
         assert_eq!(s.turns.len(), 2);
         assert!(s.turns.iter().all(|t| t.status == TurnStatus::Completed));
         let by_turn = |n: usize| s.items.iter().filter(|i| i.turn_id == s.turns[n].id).map(|i| &i.body).collect::<Vec<_>>();
-        assert!(matches!(by_turn(0).as_slice(), [ItemBody::UserMessage { text }, ItemBody::AssistantMessage { .. }] if text == "q1"));
-        assert!(matches!(by_turn(1).as_slice(), [ItemBody::UserMessage { text }, ItemBody::AssistantMessage { .. }] if text == "q2 cont"));
+        assert!(matches!(by_turn(0).as_slice(), [ItemBody::UserMessage { text, .. }, ItemBody::AssistantMessage { .. }] if text == "q1"));
+        assert!(matches!(by_turn(1).as_slice(), [ItemBody::UserMessage { text, .. }, ItemBody::AssistantMessage { .. }] if text == "q2 cont"));
         assert!(!s.turn_running());
     }
 
@@ -770,7 +770,7 @@ mod tests {
         assert_eq!((s.turns[1].status, s.thread.status), (TurnStatus::Running, ThreadStatus::Running));
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("for two")));
         let of = |turn: &TurnId| s.items.iter().filter(|i| &i.turn_id == turn).map(|i| &i.body).collect::<Vec<_>>();
-        assert!(matches!(of(&second).as_slice(), [ItemBody::UserMessage { text }, ItemBody::AssistantMessage { .. }] if text == "two"));
+        assert!(matches!(of(&second).as_slice(), [ItemBody::UserMessage { text, .. }, ItemBody::AssistantMessage { .. }] if text == "two"));
         s.end_turn(&second, TurnStatus::Completed, None);
         assert_eq!(s.thread.status, ThreadStatus::Idle);
     }
@@ -783,7 +783,7 @@ mod tests {
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("working")));
         assert_eq!(s.inject("also this").map(|(t, _)| t), Some(turn));
         assert!(matches!(&s.items[1].body, ItemBody::AssistantMessage { streaming: false, .. }), "what streamed before it is done");
-        assert!(matches!(&s.items[2].body, ItemBody::UserMessage { text } if text == "also this"));
+        assert!(matches!(&s.items[2].body, ItemBody::UserMessage { text, .. } if text == "also this"));
     }
 
     /// The bodies of each turn, in the turns' order, as their numbers have them.
@@ -791,7 +791,7 @@ mod tests {
         let mut turns = s.turns.clone();
         turns.sort_by_key(|t| t.ordinal);
         let text = |b: &ItemBody| match b {
-            ItemBody::UserMessage { text } => format!("you: {text}"),
+            ItemBody::UserMessage { text, .. } => format!("you: {text}"),
             ItemBody::AssistantMessage { content, .. } => content.iter().map(|c| if let ContentBlock::Text { text } = c { text.clone() } else { String::new() }).collect(),
             _ => String::new(),
         };

@@ -149,6 +149,21 @@ mod slots {
         db.note("lead", "sent", "sub 1", None);
         assert_eq!(db.activity(1).unwrap()[0].action, "sent");
     }
+
+    /// What was typed for a message is kept by the text sent, across a
+    /// reopening; another text has none.
+    #[test]
+    fn what_was_typed_is_kept_by_what_was_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let typed = harness_contracts::Message { text: "see #x".into(), links: vec![harness_contracts::Link { start: 4, end: 6, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("x") }, include: harness_contracts::Include::Auto }] };
+        {
+            let db = StateDb::open(dir.path(), &settings()).unwrap();
+            db.keep_typed("see #x\n\n---\nWhat's linked", &typed).unwrap();
+        }
+        let db = StateDb::open(dir.path(), &settings()).unwrap();
+        assert_eq!(db.typed("see #x\n\n---\nWhat's linked"), Some(typed));
+        assert_eq!(db.typed("see #x"), None);
+    }
 }
 
 mod notifications {

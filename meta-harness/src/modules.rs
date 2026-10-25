@@ -328,6 +328,9 @@ impl AppState {
                 (Some(_), None) => things.attach(text, &attached, &|_| false),
             }
         }));
+        // A message of the user's shown as typed: what was typed for it, kept by the slots.
+        let typed_by = Arc::downgrade(&p.slots);
+        p.sessions.read_typed_with(Arc::new(move |sent: &str| typed_by.upgrade()?.typed(sent)));
         Ok(Self {
             server: ServerState { gate: gate.clone(), shutdown: stopping.clone() },
             home: HomeState { gate: gate.clone(), stopping: stopping.clone(), home },

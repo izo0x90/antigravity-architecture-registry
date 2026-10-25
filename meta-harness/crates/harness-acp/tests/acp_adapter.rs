@@ -100,7 +100,7 @@ fn said(seen: &[AdapterEvent], turn: &TurnId) -> Vec<String> {
         .into_iter()
         .filter(|i| &i.turn_id == turn)
         .filter_map(|i| match i.body {
-            ItemBody::UserMessage { text } => Some(format!("> {text}")),
+            ItemBody::UserMessage { text, .. } => Some(format!("> {text}")),
             ItemBody::AssistantMessage { content, .. } => Some(content.iter().map(|c| if let ContentBlock::Text { text } = c { text.clone() } else { String::new() }).collect()),
             _ => None,
         })
@@ -125,7 +125,7 @@ async fn full_turn_maps_every_update_and_waits_for_approval() {
 
     let items = latest_items(&seen);
     let bodies: Vec<&ItemBody> = items.iter().map(|i| &i.body).collect();
-    assert!(matches!(bodies[0], ItemBody::UserMessage { text } if text == "[tour] write main"));
+    assert!(matches!(bodies[0], ItemBody::UserMessage { text, .. } if text == "[tour] write main"));
     assert!(bodies.iter().any(|b| matches!(b, ItemBody::Reasoning { text, streaming: false } if text == "thinking…")));
     assert!(items.iter().any(|i| i.status == ItemStatus::Completed
         && matches!(&i.body, ItemBody::ToolCall { kind: ToolKind::Edit, output, .. } if matches!(output.as_slice(), [ContentBlock::Diff(d)] if d.new_text == "fn main() {}"))));

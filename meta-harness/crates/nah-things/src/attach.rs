@@ -58,7 +58,7 @@ impl Things {
             return Expanded { text: text.to_owned(), notes: Vec::new() };
         }
         let mut notes = Vec::new();
-        let mut out = format!("{text}\n\n---\nWhat's linked above, as it is now:");
+        let mut out = format!("{text}{}", harness_contracts::HANDED_ON);
         let start = out.len();
         let mut left_out = 0;
         for a in attached {

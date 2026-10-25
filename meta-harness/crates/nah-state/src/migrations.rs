@@ -60,6 +60,9 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (13, "CREATE TABLE drafts (slot TEXT PRIMARY KEY, text TEXT NOT NULL);"),
     // A draft keeps what it links (a link is a span of its text).
     (14, "ALTER TABLE drafts ADD COLUMN links TEXT NOT NULL DEFAULT '[]';"),
+    // What the user typed for a message sent with what it links, by the
+    // text the agent was handed (its hash).
+    (15, "CREATE TABLE typed_messages (sent TEXT PRIMARY KEY, json TEXT NOT NULL, at_ms INTEGER NOT NULL);"),
 ];
 
 /// The newest layout this NAH knows.

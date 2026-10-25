@@ -480,6 +480,13 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let (status, body) = http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "look at #checked.", "links": [link] }).to_string())).await;
     assert_eq!(status, 200, "{body}");
     let echoed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if format!("{:?}", item.body).contains("What's linked above"))).await;
+    // What was typed is kept by what the agent was handed (shown so).
+    let sent = match &echoed {
+        harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } => item.body.said().and_then(|s| s.strip_prefix("echo: ").map(str::to_owned)),
+        _ => None,
+    };
+    let typed = sent.and_then(|sent| state.harness.slots.typed(&sent));
+    assert_eq!(typed.map(|t| (t.text, t.links.len())), Some(("look at #checked.".to_owned(), 1)), "kept as typed: its own words and link");
     let echoed = format!("{echoed:?}");
     assert!(echoed.contains("#checked (the echo works; noted by lead)") && echoed.contains("tagged-line"), "an agent's note says whose: {echoed}");
     let (status, _) = http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "plain #checked, not linked" }).to_string())).await;

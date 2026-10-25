@@ -51,6 +51,10 @@ impl Include {
     }
 }
 
+/// What follows a message's text when what it links is handed on with it
+/// (the things themselves, after this).
+pub const HANDED_ON: &str = "\n\n---\nWhat's linked above, as it is now:";
+
 /// A message as it's sent: its text, and what it links.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

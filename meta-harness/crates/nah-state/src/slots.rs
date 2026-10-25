@@ -104,6 +104,12 @@ impl StateDb {
     }
 }
 
+/// A message as sent, as its typed form is kept by (its hash).
+fn sent_key(sent: &str) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(sent.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
 impl SlotStore for StateDb {
     fn load(&self) -> Result<Vec<Slot>, String> {
         self.load_slots().map_err(|e| e.to_string())
@@ -137,6 +143,21 @@ impl SlotStore for StateDb {
             Ok(reports)
         })
         .map_err(|e| e.to_string())
+    }
+
+    fn keep_typed(&self, sent: &str, typed: &harness_contracts::Message) -> Result<(), String> {
+        let json = serde_json::to_string(typed).map_err(|e| e.to_string())?;
+        let at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+        self.transaction(|tx| {
+            tx.execute("INSERT OR REPLACE INTO typed_messages (sent, json, at_ms) VALUES (?1, ?2, ?3)", params![sent_key(sent), json, at_ms]).map_err(failed)?;
+            Ok(())
+        })
+        .map_err(|e| e.to_string())
+    }
+
+    fn typed(&self, sent: &str) -> Option<harness_contracts::Message> {
+        let json: Option<String> = self.transaction(|tx| tx.query_row("SELECT json FROM typed_messages WHERE sent = ?1", params![sent_key(sent)], |r| r.get(0)).optional().map_err(failed)).ok().flatten();
+        json.and_then(|j| serde_json::from_str(&j).ok())
     }
 
     fn note(&self, actor: &str, action: &str, subject: &str, detail: Option<&str>) {

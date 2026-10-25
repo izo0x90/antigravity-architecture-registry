@@ -37,6 +37,13 @@ pub trait SlotStore: Send + Sync {
     fn take_reports(&self, to: &SlotId) -> std::result::Result<Vec<HeldReport>, String>;
     /// Notes what happened, for looking back (never fails an operation).
     fn note(&self, actor: &str, action: &str, subject: &str, detail: Option<&str>);
+    /// Keeps what the user typed (`typed`: its text and links) for the
+    /// text an agent was handed for it (`sent`, what it links after it),
+    /// so it's shown as typed whenever it's seen again (its session's
+    /// history replayed too).
+    fn keep_typed(&self, sent: &str, typed: &Message) -> std::result::Result<(), String>;
+    /// What the user typed for `sent`, when it was kept.
+    fn typed(&self, sent: &str) -> Option<Message>;
 }
 
 /// What a slot is told (a sub-slot's report to the lead, a discussion's
@@ -551,6 +558,12 @@ impl SlotManager {
         Ok(self.open_session(id, open).await?.thread)
     }
 
+    /// What the user typed for `sent` (a message as an agent was handed
+    /// it), when it was kept.
+    pub fn typed(&self, sent: &str) -> Option<Message> {
+        self.store.typed(sent)
+    }
+
     /// What every prompt is handed through from now on (`Expand`).
     pub fn expand_prompts_with(&self, expand: Expand) {
         let _ = self.expand.set(expand);
@@ -576,7 +589,15 @@ impl SlotManager {
             Origin::User => message,
             Origin::Lead => Message::text(message.text),
         };
+        let typed = message.clone().valid();
         let text = self.expanded(message, Some(to.clone())).await.text;
+        // What it links handed on with it: what was typed kept, by what's sent.
+        if from == Origin::User
+            && text != typed.text
+            && let Err(e) = self.store.keep_typed(&text, &typed)
+        {
+            tracing::warn!("what was typed isn't kept (it shows as sent): {e}");
+        }
         let text = match &from {
             Origin::User => text,
             Origin::Lead => format!("From the lead ({}):\n\n{text}", self.slot(&self.lead()).map(|s| s.name).unwrap_or_else(|_| LEAD.into())),
@@ -840,7 +861,7 @@ mod tests {
     fn a_turns_reply_is_its_assistant_messages_in_order() {
         let items = vec![
             item("a", 2, says("second")),
-            item("a", 0, ItemBody::UserMessage { text: "asked".into() }),
+            item("a", 0, ItemBody::UserMessage { text: "asked".into(), typed: None }),
             item("b", 1, says("another turn")),
             item("a", 1, says("first")),
         ];

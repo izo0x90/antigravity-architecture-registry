@@ -16,7 +16,7 @@ pub(super) fn links_of(item: &TurnItem) -> Vec<(String, Option<usize>)> {
 /// What search looks through in an item.
 pub(super) fn item_text(item: &TurnItem) -> String {
     match &item.body {
-        ItemBody::UserMessage { text } => text.clone(),
+        ItemBody::UserMessage { text, .. } => text.clone(),
         ItemBody::AssistantMessage { content, .. } => content.iter().map(block_summary).collect::<Vec<_>>().join(" "),
         ItemBody::Reasoning { text, .. } => text.clone(),
         ItemBody::ToolCall { name, locations, .. } => {

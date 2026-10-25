@@ -88,7 +88,7 @@ fn long_unbreakable_lines_stay_inside_a_narrow_panel() {
         }
     };
     let cases: Vec<(&str, Vec<ClientEvent>)> = vec![
-        ("your message", vec![item(100, ItemBody::UserMessage { text: format!("read {long} please") })]),
+        ("your message", vec![item(100, ItemBody::UserMessage { text: format!("read {long} please"), typed: None })]),
         ("a message's words", vec![item(100, said(format!("It's in {long}, and `{long}` too. {words}")))]),
         ("a message's code block", vec![item(100, said(format!("```\n{long} {long}\n```")))]),
         ("a message's table", vec![item(100, said(format!("| file | lines |\n|---|---|\n| {long} | 3 |\n\n{words}")))]),
