@@ -51,10 +51,6 @@ impl Include {
     }
 }
 
-/// What follows a message's text when what it links is handed on with it
-/// (the things themselves, after this).
-pub const HANDED_ON: &str = "\n\n---\nWhat's linked above, as it is now:";
-
 /// A message as it's sent: its text, and what it links.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +83,17 @@ impl Message {
     }
 }
 
+/// A message of the user's as typed, beside the text the agent was handed
+/// for it: its own text and links, and what its links handed on after it
+/// (the handed text's rest, after its heading).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AsTyped {
+    pub message: Message,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handed_on: Option<String>,
+}
+
 impl From<&str> for Message {
     fn from(text: &str) -> Self {
         Self::text(text)
@@ -106,10 +113,11 @@ impl From<&String> for Message {
 }
 
 /// A message as an agent is handed it: the text with what's linked after
-/// it, and what the sender should be told (linked whole but past the
-/// budget: sent as a pointer).
+/// it (`handed_on`, apart: what follows its heading), and what the sender
+/// should be told (linked whole but past the budget: sent as a pointer).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Expanded {
     pub text: String,
+    pub handed_on: Option<String>,
     pub notes: Vec<String>,
 }

@@ -246,7 +246,7 @@ pub struct TurnInput {
     /// What the user typed for it, when it's another (what it links handed
     /// on after it): its own item shows it so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub typed: Option<crate::Message>,
+    pub typed: Option<crate::AsTyped>,
 }
 
 impl TurnInput {

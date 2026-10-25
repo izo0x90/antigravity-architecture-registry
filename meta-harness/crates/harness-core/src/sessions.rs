@@ -8,8 +8,8 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use futures::StreamExt;
 use harness_contracts::{
-    AdapterEvent, ClientEvent, InstanceId, ItemBody, McpServer, Message, ModelSelection, NativeId, RuntimePolicy, SessionConfig,
-    ThreadId, HANDED_ON,
+    AdapterEvent, AsTyped, ClientEvent, InstanceId, ItemBody, McpServer, ModelSelection, NativeId, RuntimePolicy, SessionConfig,
+    ThreadId,
 };
 
 use crate::{EventHub, HarnessError, InstanceRegistry, Result, SessionRuntime};
@@ -26,7 +26,7 @@ pub struct OpenThread {
 
 /// What the user typed for a message as an agent was handed it, when it
 /// was kept.
-pub type Typed = Arc<dyn Fn(&str) -> Option<Message> + Send + Sync>;
+pub type Typed = Arc<dyn Fn(&str) -> Option<AsTyped> + Send + Sync>;
 
 pub struct SessionManager {
     registry: Arc<InstanceRegistry>,
@@ -36,13 +36,13 @@ pub struct SessionManager {
     typed: Arc<OnceLock<Typed>>,
 }
 
-/// The text sent of `event`'s message of the user's, when it was sent with
-/// what it links and what was typed for it isn't with it (a replayed
-/// history's): what was typed is to be looked up by it.
+/// The text sent of `event`'s message of the user's, when what was typed
+/// for it isn't with it (a replayed history's, or one typed as sent): what
+/// was typed, if it was kept, is looked up by it.
 fn typed_wanted(event: &AdapterEvent) -> Option<String> {
     match event {
         AdapterEvent::ItemUpdated { item } => match &item.body {
-            ItemBody::UserMessage { text, typed: None } if text.contains(HANDED_ON) => Some(text.clone()),
+            ItemBody::UserMessage { text, typed: None } => Some(text.clone()),
             _ => None,
         },
         _ => None,
@@ -50,7 +50,7 @@ fn typed_wanted(event: &AdapterEvent) -> Option<String> {
 }
 
 /// `event`'s message of the user's with what was typed for it.
-fn with_typed(mut event: AdapterEvent, found: Option<Message>) -> AdapterEvent {
+fn with_typed(mut event: AdapterEvent, found: Option<AsTyped>) -> AdapterEvent {
     if let AdapterEvent::ItemUpdated { item } = &mut event
         && let ItemBody::UserMessage { typed, .. } = &mut item.body
     {
@@ -140,7 +140,7 @@ mod tests {
         AdapterEvent::ItemUpdated { item: TurnItem { id: ItemId::new("i"), thread_id: ThreadId::new("t"), turn_id: TurnId::new("u"), native_id: None, parent_id: None, ordinal: 0, status: ItemStatus::Completed, title: None, body: ItemBody::UserMessage { text: text.into(), typed: None } } }
     }
 
-    fn typed_of(event: &AdapterEvent) -> Option<&Message> {
+    fn typed_of(event: &AdapterEvent) -> Option<&AsTyped> {
         match event {
             AdapterEvent::ItemUpdated { item } => match &item.body {
                 ItemBody::UserMessage { typed, .. } => typed.as_ref(),
@@ -150,19 +150,18 @@ mod tests {
         }
     }
 
-    /// A replayed message sent with what it links is looked up by its text
-    /// (one with what was typed, or a plain one, isn't); it gets what's
-    /// found.
+    /// A replayed message is looked up by its text (one with what was
+    /// typed already isn't); it gets what's found.
     #[test]
-    fn a_replayed_message_sent_with_its_links_gets_what_was_typed() {
-        let sent = format!("look{HANDED_ON}\n\n#x\n- a thing");
-        assert_eq!(typed_wanted(&said(&sent)), Some(sent.clone()));
-        assert_eq!(typed_wanted(&said("plain")), None);
-        let mut known = said(&sent);
+    fn a_replayed_message_gets_what_was_typed() {
+        let sent = "look\n\n- a thing";
+        let typed = AsTyped { message: harness_contracts::Message::text("look"), handed_on: Some("- a thing".into()) };
+        assert_eq!(typed_wanted(&said(sent)), Some(sent.to_owned()));
+        let mut known = said(sent);
         if let AdapterEvent::ItemUpdated { item } = &mut known {
-            item.body = ItemBody::UserMessage { text: sent.clone(), typed: Some(Message::text("look")) };
+            item.body = ItemBody::UserMessage { text: sent.into(), typed: Some(typed.clone()) };
         }
         assert_eq!(typed_wanted(&known), None, "live: what was typed came with it");
-        assert_eq!(typed_of(&with_typed(said(&sent), Some(Message::text("look")))), Some(&Message::text("look")));
+        assert_eq!(typed_of(&with_typed(said(sent), Some(typed.clone()))), Some(&typed));
     }
 }

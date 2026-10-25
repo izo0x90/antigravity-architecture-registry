@@ -48,6 +48,10 @@ fn cut(glimpsed: &str, most: usize) -> bool {
     glimpsed.chars().count() > most
 }
 
+/// What follows a message's text when what it links is handed on with it
+/// (the things themselves, after this).
+const HANDED_ON: &str = "\n\n---\nWhat's linked above, as it is now:";
+
 impl Things {
     /// `text` with what `attached` links after it, as a reader who
     /// `reaches` what it may read is handed it; and what the sender is
@@ -55,10 +59,10 @@ impl Things {
     /// things left out past the budget).
     pub fn attach(&self, text: &str, attached: &[Attached], reaches: &dyn Fn(&Subject) -> bool) -> Expanded {
         if attached.is_empty() {
-            return Expanded { text: text.to_owned(), notes: Vec::new() };
+            return Expanded { text: text.to_owned(), ..Expanded::default() };
         }
         let mut notes = Vec::new();
-        let mut out = format!("{text}{}", harness_contracts::HANDED_ON);
+        let mut out = format!("{text}{HANDED_ON}");
         let start = out.len();
         let mut left_out = 0;
         for a in attached {
@@ -125,7 +129,8 @@ impl Things {
             out.push_str(&format!("\n\n(and {left_out} more linked, left out: the message's {} KB are spent; `tag_read` or `thing_read` reads them)", ATTACHED_MOST / 1000));
             notes.push(format!("{left_out} linked thing(s) left out: the message's {} KB were spent.", ATTACHED_MOST / 1000));
         }
-        Expanded { text: out, notes }
+        let handed_on = Some(out[start..].trim_start_matches('\n').to_owned());
+        Expanded { text: out, handed_on, notes }
     }
 }
 

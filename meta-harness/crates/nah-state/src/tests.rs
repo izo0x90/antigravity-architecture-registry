@@ -155,7 +155,8 @@ mod slots {
     #[test]
     fn what_was_typed_is_kept_by_what_was_sent() {
         let dir = tempfile::tempdir().unwrap();
-        let typed = harness_contracts::Message { text: "see #x".into(), links: vec![harness_contracts::Link { start: 4, end: 6, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("x") }, include: harness_contracts::Include::Auto }] };
+        let message = harness_contracts::Message { text: "see #x".into(), links: vec![harness_contracts::Link { start: 4, end: 6, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("x") }, include: harness_contracts::Include::Auto }] };
+        let typed = harness_contracts::AsTyped { message, handed_on: Some("#x: a tag".into()) };
         {
             let db = StateDb::open(dir.path(), &settings()).unwrap();
             db.keep_typed("see #x\n\n---\nWhat's linked", &typed).unwrap();

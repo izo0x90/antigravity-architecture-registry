@@ -19,7 +19,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use harness_contracts::{
     AdapterEvent, ClientEvent, InstanceId, ItemBody, McpServer, ModelSelection, NativeId, ProviderStatus, RuntimePolicy, SessionKey, Slot, SlotId,
-    SlotSession, SlotStatus, Starter, ThreadId, ThreadStatus, TurnId, TurnInput, TurnItem, LEAD, Expanded, Message,
+    SlotSession, SlotStatus, Starter, ThreadId, ThreadStatus, TurnId, TurnInput, TurnItem, LEAD, AsTyped, Expanded, Message,
 };
 
 use crate::{EventHub, HarnessError, InstanceRegistry, OpenThread, Result, SessionManager};
@@ -41,9 +41,9 @@ pub trait SlotStore: Send + Sync {
     /// text an agent was handed for it (`sent`, what it links after it),
     /// so it's shown as typed whenever it's seen again (its session's
     /// history replayed too).
-    fn keep_typed(&self, sent: &str, typed: &Message) -> std::result::Result<(), String>;
+    fn keep_typed(&self, sent: &str, typed: &AsTyped) -> std::result::Result<(), String>;
     /// What the user typed for `sent`, when it was kept.
-    fn typed(&self, sent: &str) -> Option<Message>;
+    fn typed(&self, sent: &str) -> Option<AsTyped>;
 }
 
 /// What a slot is told (a sub-slot's report to the lead, a discussion's
@@ -560,7 +560,7 @@ impl SlotManager {
 
     /// What the user typed for `sent` (a message as an agent was handed
     /// it), when it was kept.
-    pub fn typed(&self, sent: &str) -> Option<Message> {
+    pub fn typed(&self, sent: &str) -> Option<AsTyped> {
         self.store.typed(sent)
     }
 
@@ -573,9 +573,9 @@ impl SlotManager {
     /// links is read where it's kept). Without links, its text as it is.
     pub async fn expanded(&self, message: Message, reader: Option<SlotId>) -> Expanded {
         let Message { text, links } = message.valid();
-        let Some(expand) = self.expand.get().cloned().filter(|_| !links.is_empty()) else { return Expanded { text, notes: Vec::new() } };
+        let Some(expand) = self.expand.get().cloned().filter(|_| !links.is_empty()) else { return Expanded { text, ..Expanded::default() } };
         let written = text.clone();
-        tokio::task::spawn_blocking(move || expand(&text, &links, reader.as_ref())).await.unwrap_or(Expanded { text: written, notes: Vec::new() })
+        tokio::task::spawn_blocking(move || expand(&text, &links, reader.as_ref())).await.unwrap_or(Expanded { text: written, ..Expanded::default() })
     }
 
     /// Sends a message to a slot (as its user, or as the lead). With `wait`,
@@ -593,7 +593,8 @@ impl SlotManager {
         // with it, and is kept by what's sent (its replayed history shows
         // it so).
         let typed = (from == Origin::User && !message.links.is_empty()).then(|| message.clone().valid());
-        let text = self.expanded(message, Some(to.clone())).await.text;
+        let Expanded { text, handed_on, .. } = self.expanded(message, Some(to.clone())).await;
+        let typed = typed.map(|message| AsTyped { message, handed_on });
         if let Some(typed) = &typed
             && let Err(e) = self.store.keep_typed(&text, typed)
         {

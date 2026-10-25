@@ -35,12 +35,12 @@ pub enum ItemStatus {
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum ItemBody {
     /// What you sent, as the agent was handed it (`text`), and as you
-    /// typed it, when that's another: its own text and links (what was
-    /// handed on with it follows it in `text`).
+    /// typed it, when that's another: its own text and links, and what was
+    /// handed on with it.
     UserMessage {
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        typed: Option<crate::Message>,
+        typed: Option<crate::AsTyped>,
     },
     AssistantMessage { content: Vec<ContentBlock>, streaming: bool },
     Reasoning { text: String, streaming: bool },
@@ -80,7 +80,7 @@ impl ItemBody {
             Self::CommandExecution { output, .. } => output.is_some(),
             Self::FileChange { diff, .. } => diff.is_some(),
             Self::Reasoning { .. } => true,
-            Self::UserMessage { text, .. } => text.contains(crate::HANDED_ON),
+            Self::UserMessage { typed, .. } => typed.as_ref().is_some_and(|t| t.handed_on.is_some()),
             _ => false,
         }
     }

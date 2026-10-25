@@ -137,7 +137,7 @@ async fn a_report_reaches_a_running_lead_or_waits_for_one() {
 struct Store {
     slots: Mutex<Vec<Slot>>,
     reports: Mutex<Vec<HeldReport>>,
-    typed: Mutex<std::collections::HashMap<String, harness_contracts::Message>>,
+    typed: Mutex<std::collections::HashMap<String, harness_contracts::AsTyped>>,
     failing: std::sync::atomic::AtomicBool,
 }
 
@@ -169,11 +169,11 @@ impl SlotStore for Store {
         Ok(taken)
     }
     fn note(&self, _: &str, _: &str, _: &str, _: Option<&str>) {}
-    fn keep_typed(&self, sent: &str, typed: &harness_contracts::Message) -> Result<(), String> {
+    fn keep_typed(&self, sent: &str, typed: &harness_contracts::AsTyped) -> Result<(), String> {
         self.typed.lock().unwrap().insert(sent.to_owned(), typed.clone());
         Ok(())
     }
-    fn typed(&self, sent: &str) -> Option<harness_contracts::Message> {
+    fn typed(&self, sent: &str) -> Option<harness_contracts::AsTyped> {
         self.typed.lock().unwrap().get(sent).cloned()
     }
 }

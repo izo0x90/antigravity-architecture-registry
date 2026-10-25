@@ -398,12 +398,11 @@ pub fn places(text: &str) -> Vec<(String, Option<usize>)> {
 
 /// What you sent, as you typed it: the text, what it links, and what was
 /// handed on with it (folded under it). From what was kept of it (`typed`),
-/// else from the text the agent was handed (its links unknown).
-pub fn as_typed<'a>(sent: &'a str, typed: Option<&'a harness_contracts::Message>) -> (&'a str, &'a [harness_contracts::Link], Option<&'a str>) {
-    let (before, handed_on) = sent.split_once(harness_contracts::HANDED_ON).map_or((sent, None), |(before, after)| (before, Some(after.trim_start_matches(['\n', '\r']))));
+/// else the text the agent was handed, whole.
+pub fn as_typed<'a>(sent: &'a str, typed: Option<&'a harness_contracts::AsTyped>) -> (&'a str, &'a [harness_contracts::Link], Option<&'a str>) {
     match typed {
-        Some(typed) => (&typed.text, &typed.links, handed_on),
-        None => (before, &[], handed_on),
+        Some(typed) => (&typed.message.text, &typed.message.links, typed.handed_on.as_deref()),
+        None => (sent, &[], None),
     }
 }
 

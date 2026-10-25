@@ -148,7 +148,7 @@ impl SlotStore for StateDb {
         .map_err(|e| e.to_string())
     }
 
-    fn keep_typed(&self, sent: &str, typed: &harness_contracts::Message) -> Result<(), String> {
+    fn keep_typed(&self, sent: &str, typed: &harness_contracts::AsTyped) -> Result<(), String> {
         let json = serde_json::to_string(typed).map_err(|e| e.to_string())?;
         let at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
         self.transaction(|tx| {
@@ -160,7 +160,7 @@ impl SlotStore for StateDb {
         .map_err(|e| e.to_string())
     }
 
-    fn typed(&self, sent: &str) -> Option<harness_contracts::Message> {
+    fn typed(&self, sent: &str) -> Option<harness_contracts::AsTyped> {
         let json: Option<String> = self.transaction(|tx| tx.query_row("SELECT json FROM typed_messages WHERE sent = ?1", params![sent_key(sent)], |r| r.get(0)).optional().map_err(failed)).ok().flatten();
         json.and_then(|j| serde_json::from_str(&j).ok())
     }

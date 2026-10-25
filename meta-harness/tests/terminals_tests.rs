@@ -484,8 +484,10 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let yours = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if matches!(item.body, harness_contracts::ItemBody::UserMessage { .. }) && format!("{:?}", item.body).contains("look at #checked."))).await;
     let harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item: yours } } = yours else { unreachable!() };
     let harness_contracts::ItemBody::UserMessage { text: sent, typed } = yours.body else { unreachable!() };
-    assert_eq!(typed.map(|t| (t.text, t.links.len())), Some(("look at #checked.".to_owned(), 1)), "as typed, with it");
-    assert_eq!(state.harness.slots.typed(&sent).map(|t| t.text), Some("look at #checked.".to_owned()), "kept by what was sent");
+    let handed_on = typed.as_ref().and_then(|t| t.handed_on.clone()).unwrap_or_default();
+    assert_eq!(typed.map(|t| (t.message.text, t.message.links.len())), Some(("look at #checked.".to_owned(), 1)), "as typed, with it");
+    assert!(sent.ends_with(&handed_on) && handed_on.contains("#checked"), "what was handed on, apart: {handed_on:?}");
+    assert_eq!(state.harness.slots.typed(&sent).map(|t| t.message.text), Some("look at #checked.".to_owned()), "kept by what was sent");
     let echoed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if matches!(item.body, harness_contracts::ItemBody::AssistantMessage { .. }) && format!("{:?}", item.body).contains("What's linked above"))).await;
     let echoed = format!("{echoed:?}");
     assert!(echoed.contains("#checked (the echo works; noted by lead)") && echoed.contains("tagged-line"), "an agent's note says whose: {echoed}");
