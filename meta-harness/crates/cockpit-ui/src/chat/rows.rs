@@ -165,14 +165,20 @@ impl Folds {
     }
 
     /// The runs in `items` (the stream, in order), first to last: items
-    /// in a row in one turn that fold together (calls; quiet, reasoning
-    /// too), two or more (quiet, even one).
-    /// (A call whose sub-agent did anything stands on its own; a run is
-    /// of one sub-agent's calls, or the agent's own.)
+    /// in a row in one turn that fold together, two or more (quiet, even
+    /// one). Calls and reasoning between them; a call whose sub-agent did
+    /// anything stands on its own, and a run is of one sub-agent's, or the
+    /// agent's own. Quiet: everything between two of the agent's messages
+    /// but a request (what needs you), a sub-agent's work too.
     pub(crate) fn runs(&self, items: &[&TurnItem], nesting: &Nesting) -> Vec<(usize, usize)> {
         let quiet = self.verbosity == Verbosity::Quiet;
-        let joins = |k: usize| (is_call(items[k]) || quiet && matches!(items[k].body, ItemBody::Reasoning { .. })) && nesting.end[k] == k;
-        let together = |a: usize, b: usize| items[a].turn_id == items[b].turn_id && items[a].parent_id == items[b].parent_id;
+        let joins = |k: usize| match &items[k].body {
+            ItemBody::Request { .. } => false,
+            body if quiet => nesting.depth[k] > 0 || !harness_contracts::is_message(body),
+            ItemBody::Reasoning { .. } => nesting.end[k] == k,
+            _ => is_call(items[k]) && nesting.end[k] == k,
+        };
+        let together = |a: usize, b: usize| items[a].turn_id == items[b].turn_id && (quiet || items[a].parent_id == items[b].parent_id);
         let fewest = if quiet { 0 } else { 1 };
         let mut out = Vec::new();
         let mut i = 0;
@@ -340,7 +346,7 @@ pub(crate) fn shape(items: &[&TurnItem], folds: &Folds) -> Shape {
                     if self::folds(item) {
                         note(folds.item_open(item), &mut shape);
                     }
-                    shape.rows.push(Row { first: j, last: j, run: Some((a, b)), folded: false, depth, nested: 0 });
+                    shape.rows.push(Row { first: j, last: j, run: Some((a, b)), folded: false, depth: nest.depth[j], nested: 0 });
                 }
             } else {
                 shape.rows.push(Row { first: a, last: b, run: Some((a, b)), folded: true, depth, nested: 0 });
@@ -543,11 +549,32 @@ mod tests {
         assert_eq!(shape(&items, &everything).rows.len(), 7, "every one a row");
         assert!(items.iter().filter(|i| folds(i)).all(|i| everything.item_open(i)), "every output open");
         let mut normal = Folds::default();
-        assert_eq!(shape(&items, &normal).rows.len(), 7, "normal: the run with a failed call open, each its row");
-        normal.set_run(&ItemId::new("i2"), Set::Folded);
+        assert_eq!(shape(&items, &normal).rows.len(), 7, "normal: the run (the reasoning in it) with a failed call open, each its row");
+        normal.set_run(&ItemId::new("i1"), Set::Folded);
         normal.set_verbosity(Verbosity::Normal);
-        assert_eq!(shape(&items, &normal).rows.len(), 6, "the same verbosity: what's set stays");
+        assert_eq!(shape(&items, &normal).rows.len(), 5, "the same verbosity: what's set stays");
         normal.set_verbosity(Verbosity::Everything);
         assert_eq!(shape(&items, &normal).rows.len(), 7, "another: afresh");
+    }
+
+    /// Quiet folds everything between two of the agent's messages into one
+    /// line (a to-do list, a sub-agent's work and its messages too) but a
+    /// request; normal folds reasoning between calls in with them.
+    #[test]
+    fn quiet_folds_all_between_messages_but_a_request() {
+        let todo = item(2, "a", ItemBody::TodoList { plan_id: harness_contracts::PlanId::new("p"), steps: vec![] }, ItemStatus::Completed);
+        let mut task = call(3, "a", ToolKind::Other);
+        task.id = ItemId::new("task");
+        let mut sub = said(4, "a");
+        sub.parent_id = Some(ItemId::new("task"));
+        let ask = item(5, "a", ItemBody::Request { request_id: harness_contracts::RequestId::new("r") }, ItemStatus::Completed);
+        let thought = item(7, "a", ItemBody::Reasoning { text: "hmm".into(), streaming: false }, ItemStatus::Completed);
+        let stream = [said(0, "a"), call(1, "a", ToolKind::Read), todo, task, sub, ask, call(6, "a", ToolKind::Read), thought, call(8, "a", ToolKind::Read), said(9, "a")];
+        let items: Vec<&TurnItem> = stream.iter().collect();
+        let mut quiet = Folds::default();
+        quiet.set_verbosity(Verbosity::Quiet);
+        assert_eq!(rows_of(&items, &quiet), [(0, 0), (1, 4), (5, 5), (6, 8), (9, 9)], "the request between stands; the rest folded");
+        let normal = Folds::default();
+        assert!(rows_of(&items, &normal).contains(&(6, 8)), "the reasoning between calls in their run");
     }
 }

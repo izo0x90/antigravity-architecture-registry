@@ -347,7 +347,9 @@ sub-slots, then queue workers, each by name (the slot picker, `Space w w`,
 lists them so).
 
 A chat's stream is rows. A run of calls (tool calls, commands, file
-changes in a row) is one folded line ("Read 3 files, searched twice"); a
+changes in a row, the reasoning between them) is one folded line ("Read 3
+files, searched twice"); quiet folds everything between two of the
+agent's messages into one, but a request; a
 call's output, reasoning, and what a call's sub-agent did (where its
 harness says, as Claude Code does) fold too, with the fold keys every
 view has (`z o`, `z c`, `z a`, `z R`, `z M`; Enter unfolds a run). "Shows:"
