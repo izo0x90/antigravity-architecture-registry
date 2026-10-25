@@ -16,7 +16,7 @@ pub(super) fn links_of(item: &TurnItem) -> Vec<(String, Option<usize>)> {
 /// What search looks through in an item.
 pub(super) fn item_text(item: &TurnItem) -> String {
     match &item.body {
-        ItemBody::UserMessage { text, .. } => text.clone(),
+        ItemBody::UserMessage { text, typed } => crate::conversation::as_typed(text, typed.as_ref()).0.to_owned(),
         ItemBody::AssistantMessage { content, .. } => content.iter().map(block_summary).collect::<Vec<_>>().join(" "),
         ItemBody::Reasoning { text, .. } => text.clone(),
         ItemBody::ToolCall { name, locations, .. } => {
@@ -41,9 +41,10 @@ impl ChatStreamState {
         let mut out = crate::nav::list_moves();
         // Enter: a folded run opens; else the file it points to does.
         let here = self.here().unwrap_or_default();
-        out.push(match (here.unfolds(), self.target()) {
-            (Some(folded), _) => Move::Enter.offer(format!("Unfold {}", folded.words())),
-            (None, Some(Target::Message { link: Some((path, _)), .. })) => Move::Enter.offer(format!("Open {path}")),
+        out.push(match (here.unfolds(), self.chip_here(), self.target()) {
+            (Some(folded), ..) => Move::Enter.offer(format!("Unfold {}", folded.words())),
+            (None, Some((words, _)), _) => Move::Enter.offer(format!("Go to {words}")),
+            (None, None, Some(Target::Message { link: Some((path, _)), .. })) => Move::Enter.offer(format!("Open {path}")),
             _ => Move::Enter.offer_if(false, "Open the file it points to"),
         });
         out.push(Move::Leave.offer_if(self.ui.cursor.is_some(), "Follow the latest again"));
@@ -59,6 +60,17 @@ impl ChatStreamState {
 }
 
 impl ChatStreamState {
+    /// The chip picked (a hint), else your message's first: its words and
+    /// where it goes.
+    fn chip_here(&self) -> Option<(String, Target)> {
+        let chips = self.chips_here();
+        let n = match self.ui.pick {
+            Some(Pick::Chip(n)) => n,
+            _ => 0,
+        };
+        chips.into_iter().nth(n)
+    }
+
     /// Its slot's unsent text as the server saved it, taken when the box
     /// is empty (once per slot shown, once the drafts are read).
     pub(super) fn take_unsent(&mut self) {
@@ -256,11 +268,16 @@ impl Navigable for ChatStreamState {
         }
     }
 
-    /// A folded run, or a sub-agent's folded work, opens; a message's file
-    /// opens in the code view.
+    /// A folded run, or a sub-agent's folded work, opens; a chip of your
+    /// message goes to what it links; a message's file opens in the code
+    /// view.
     fn enter(&mut self) -> Step {
         if let Some(folded) = self.here().as_ref().and_then(rows::Here::unfolds) {
             self.ui.folds.set(folded, rows::Set::Open);
+            return Step::Done;
+        }
+        if let Some((_, target)) = self.chip_here() {
+            self.asks.push(Ask::Show { target, in_: None });
             return Step::Done;
         }
         match self.target() {

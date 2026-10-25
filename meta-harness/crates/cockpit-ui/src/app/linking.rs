@@ -224,13 +224,8 @@ impl CockpitApp {
         let after = self.config.net.save_after_ms as f64 / 1000.0;
         self.desk.checks.begin(now);
         // Coloured, and what each holds read (boxes with links only).
-        // (The tags' colours read only when a tag is linked somewhere.)
         let tags = self.desk.shared.tags.reader();
-        let colours: std::cell::OnceCell<std::collections::BTreeMap<harness_contracts::TagId, egui::Color32>> = std::cell::OnceCell::new();
-        let colour = |to: &Linked| match to {
-            Linked::Tag { tag } => colours.get_or_init(|| tags.get().list().iter().map(|t| (t.id.clone(), crate::theme::colors().tag(t.colour))).collect()).get(tag).copied().unwrap_or(crate::theme::colors().accent),
-            Linked::Thing { .. } => crate::theme::colors().accent,
-        };
+        let colour = |to: &Linked| tags.get().link_colour(to);
         let mut written: Vec<(String, harness_contracts::Message)> = Vec::new();
         self.desk.each_buffer_by_id(|id, buffer| {
             if let Some(writing) = buffer.typing_box().filter(|b| !b.links().is_empty()) {

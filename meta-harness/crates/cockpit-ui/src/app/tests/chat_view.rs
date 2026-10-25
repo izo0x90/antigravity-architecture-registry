@@ -523,3 +523,38 @@ fn a_change_is_folded_as_what_it_adds_and_removes_and_opens_as_its_hunks() {
     let open = format!("{} +2 −0", crate::nav::fold_mark(true));
     assert!(text.contains(&open) && text.lines().any(|l| l == "src/b.rs"), "a change item's, opened: {text}");
 }
+
+/// Your message shows as you typed it: what it links as chips (places of
+/// their own; Enter goes to what one links), what went with it folded
+/// under it. One whose typing wasn't kept shows the words before what went
+/// with it.
+#[test]
+fn your_message_shows_as_typed_with_its_links_as_chips() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Chat);
+    told(&app, ClientEvent::TagUpdated { tag: harness_contracts::Tag { id: harness_contracts::TagId::new("x1"), name: "flaky".into(), colour: 2, note: String::new(), noted_by: String::new(), on: Vec::new() } });
+    let sent = format!("look at #flaky.{}\n\n#flaky\n- terminal t1 line 3: the attached words", harness_contracts::HANDED_ON);
+    let typed = harness_contracts::Message { text: "look at #flaky.".into(), links: vec![harness_contracts::Link { start: 8, end: 14, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("x1") }, include: harness_contracts::Include::Auto }] };
+    {
+        let mut agents = app.desk.shared.agents.get_mut();
+        agents.apply(item(40, ItemBody::UserMessage { text: sent.clone(), typed: Some(typed) }));
+        agents.apply(item(41, ItemBody::UserMessage { text: format!("older one{}\n\nmore attached words", harness_contracts::HANDED_ON), typed: None }));
+    }
+    frame(&ctx, &mut app, vec![]);
+    let text = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(text.contains("look at #flaky.") && text.contains("what went with it") && !text.contains("attached words"), "as typed, what went with it folded: {text}");
+    assert!(text.lines().any(|l| l == "older one"), "not kept: the words before what went with it: {text}");
+    let keys: Vec<String> = app.desk.chat().spots().into_iter().map(|s| s.key).collect();
+    assert!(keys.contains(&"40:l0".to_owned()), "the chip, a place: {keys:?}");
+    app.desk.chat_mut().move_to("40:l0");
+    assert!(app.bound_actions().iter().any(|b| b.action.label == "Go to #flaky"), "Enter says where");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.focused_kind(), BufferKind::Tags, "the tag, shown");
+    // What went with it, opened.
+    focus(&ctx, &mut app, BufferKind::Chat);
+    app.desk.chat_mut().move_to("40");
+    app.desk.chat_mut().fold(crate::nav::Fold::Open);
+    frame(&ctx, &mut app, vec![]);
+    assert!(texts(&frame(&ctx, &mut app, vec![])).contains("the attached words"));
+}

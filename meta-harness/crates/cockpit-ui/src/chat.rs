@@ -194,17 +194,23 @@ fn banner(ui: &mut egui::Ui, fill: Color32, stroke: Color32, add: impl FnOnce(&m
 /// What in an item a hint picked (its place among them).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Pick {
+    /// A file it points to.
     Link(usize),
     Code(usize),
+    /// A chip in your message (what it links).
+    Chip(usize),
 }
 
 impl Pick {
-    /// From a place's key after its item's (`1`, `c0`).
+    /// From a place's key after its item's (`1`, `c0`, `l0`).
     fn of(part: &str) -> Option<Self> {
-        match part.strip_prefix('c') {
-            Some(code) => code.parse().ok().map(Self::Code),
-            None => part.parse().ok().map(Self::Link),
+        if let Some(code) = part.strip_prefix('c') {
+            return code.parse().ok().map(Self::Code);
         }
+        if let Some(chip) = part.strip_prefix('l') {
+            return chip.parse().ok().map(Self::Chip);
+        }
+        part.parse().ok().map(Self::Link)
     }
 }
 
@@ -326,6 +332,25 @@ impl ChatStreamState {
             crate::conversation::Part::Code { code, .. } => Some(code.to_owned()),
             _ => None,
         }).collect()
+    }
+
+    /// What your message you're on links, in order: each chip's words, and
+    /// where it goes.
+    pub(crate) fn chips_here(&self) -> Vec<(String, Target)> {
+        let Some(view) = self.thread() else { return Vec::new() };
+        let Some(ItemBody::UserMessage { text, typed }) = self.ui.cursor.and_then(|at| view.in_stream(at)).map(|i| &i.body) else { return Vec::new() };
+        let (shown, links, _) = crate::conversation::as_typed(text, typed.as_ref());
+        links
+            .iter()
+            .filter_map(|link| {
+                let words: String = shown.chars().skip(link.start).take(link.end - link.start).collect();
+                let to = match &link.to {
+                    harness_contracts::Linked::Tag { tag } => Some(Target::Tag(tag.clone())),
+                    harness_contracts::Linked::Thing { subject } => Target::of_subject(subject),
+                };
+                to.map(|to| (words, to))
+            })
+            .collect()
     }
 
     /// Whether request `id` (of `view`) waits on you.

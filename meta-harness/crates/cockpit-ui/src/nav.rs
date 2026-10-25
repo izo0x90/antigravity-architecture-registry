@@ -51,6 +51,8 @@ pub enum Target {
     Plan { plan: arch_graph::PlanId, part: PlanPart },
     /// A discussion (its buffer shows it).
     Discussion(harness_contracts::DiscussionId),
+    /// A tag (the tags' list shows it, its things under it).
+    Tag(harness_contracts::TagId),
 }
 
 /// Which of a plan's parts (`Target::Plan`).
@@ -144,6 +146,7 @@ impl Target {
             // A plan's part: its one name (`Subject::name`).
             Self::Plan { .. } => self.subject().map(|s| s.name(&harness_contracts::Known::default())).unwrap_or_default(),
             Self::Discussion(id) => format!("discussion {id}"),
+            Self::Tag(id) => format!("tag {id}"),
         }
     }
 
@@ -193,7 +196,7 @@ impl Target {
         match self {
             Self::Component(id) | Self::Job { component: id } => Some(id),
             Self::Line { within, .. } => within.as_ref(),
-            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) | Self::Terminal(_) | Self::TerminalLines { .. } | Self::TerminalCommand { .. } | Self::Chat { .. } | Self::Plan { .. } | Self::Discussion(_) => None,
+            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) | Self::Terminal(_) | Self::TerminalLines { .. } | Self::TerminalCommand { .. } | Self::Chat { .. } | Self::Plan { .. } | Self::Discussion(_) | Self::Tag(_) => None,
         }
     }
 

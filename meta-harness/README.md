@@ -363,7 +363,10 @@ line) are links under it, as a call's places are: Enter opens the one
 you're on in the code view, at its line.
 A file a call changed is "+12 −3 src/a.rs" under it, folded; opened, its
 hunks as the Changes view draws them; `g x` shows the turn's changes in
-the Changes view, on that file.
+the Changes view, on that file. Your messages show as you typed them,
+what they link as chips (Enter goes to what one links) and what was handed
+on with them folded under them: the server keeps what was typed by the
+text the agent was handed, so a session's replayed history shows it too.
 
 Tool servers: every session gets ours (`/api/mcp/sse`) and the project's,
 kept in `.nah/mcp.toml` (`GET`/`PUT /api/mcp/servers`; `Space p a` adds

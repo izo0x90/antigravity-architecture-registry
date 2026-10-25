@@ -108,6 +108,14 @@ impl Tags {
         self.tags.get(id)
     }
 
+    /// A link's colour: its tag's, else the accent (a thing).
+    pub fn link_colour(&self, to: &harness_contracts::Linked) -> egui::Color32 {
+        match to {
+            harness_contracts::Linked::Tag { tag } => self.get(tag).map_or(crate::theme::colors().accent, |t| crate::theme::colors().tag(t.colour)),
+            harness_contracts::Linked::Thing { .. } => crate::theme::colors().accent,
+        }
+    }
+
     /// The tag named `name` (in capitals or not, as the server finds it).
     pub fn named(&self, name: &str) -> Option<&Tag> {
         self.tags.values().find(|t| t.name.eq_ignore_ascii_case(name))

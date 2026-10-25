@@ -120,12 +120,13 @@ pub(crate) fn is_call(item: &TurnItem) -> bool {
 }
 
 /// Whether an item folds on its own: a call with output, a change with
-/// its diff, reasoning.
+/// its diff, reasoning, your message with what went with it.
 pub(crate) fn folds(item: &TurnItem) -> bool {
     match &item.body {
         ItemBody::ToolCall { output, .. } => !output.is_empty(),
         ItemBody::CommandExecution { output, .. } => output.is_some(),
         ItemBody::FileChange { diff, .. } => diff.is_some(),
+        ItemBody::UserMessage { text, .. } => text.contains(harness_contracts::HANDED_ON),
         ItemBody::Reasoning { .. } => true,
         _ => false,
     }
@@ -239,6 +240,7 @@ impl Folds {
         let what = match &first.body {
             _ if row.nested > 0 => Own::Work,
             ItemBody::Reasoning { .. } => Own::Reasoning,
+            ItemBody::UserMessage { .. } => Own::HandedOn,
             _ => Own::Output,
         };
         let own = (!row.folded && (folds(first) || row.nested > 0)).then(|| (Folding::Item { id: first.id.clone(), what }, self.item_open(first)));
@@ -254,13 +256,15 @@ pub(crate) enum Folding {
     Item { id: ItemId, what: Own },
 }
 
-/// What an item's own fold holds: a call's output, the reasoning, or what
-/// the call's sub-agent did (its output too).
+/// What an item's own fold holds: a call's output, the reasoning, what
+/// the call's sub-agent did (its output too), or what went with your
+/// message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Own {
     Output,
     Reasoning,
     Work,
+    HandedOn,
 }
 
 impl Folding {
@@ -276,6 +280,7 @@ impl Folding {
             Self::Item { what: Own::Reasoning, .. } => "the reasoning".to_owned(),
             Self::Item { what: Own::Output, .. } => "its output".to_owned(),
             Self::Item { what: Own::Work, .. } => "its sub-agent's work".to_owned(),
+            Self::Item { what: Own::HandedOn, .. } => "what went with it".to_owned(),
         }
     }
 }

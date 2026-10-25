@@ -312,6 +312,25 @@ impl Navigable for TagList {
         Target::of_subject(&self.thing_here()?.1)
     }
 
+    /// A tag there is.
+    fn can_show(&self, target: &Target) -> bool {
+        matches!(target, Target::Tag(id) if self.tags.get().get(id).is_some())
+    }
+
+    /// The tag, unfolded (its things under it), the cursor on it.
+    fn show_target(&mut self, target: &Target) -> Result<(), String> {
+        let Target::Tag(id) = target else { return Err("Not a tag.".into()) };
+        if self.tags.get().get(id).is_none() {
+            return Err("That tag is gone.".into());
+        }
+        self.set_open(id, true);
+        if let Some(at) = self.rows.iter().position(|r| *r == Row::Tag(id.clone())) {
+            self.cursor = at;
+            self.scrolling.show(at, crate::viewport::Show::Middle);
+        }
+        Ok(())
+    }
+
     /// A thing's row: the thing (another tag can be put on it here too).
     fn things(&self, key: &str) -> Things {
         let tags = self.tags.get();

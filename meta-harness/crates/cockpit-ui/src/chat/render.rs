@@ -511,8 +511,22 @@ impl ChatStreamState {
         let index = row.first;
         match &item.body {
             // Your messages and the agent's: as every conversation draws them.
-            ItemBody::UserMessage { text, .. } => {
-                self.ui.messages.draw(ui, &crate::conversation::Message::new("user", text));
+            // Yours as you typed it: its links as chips (places of their
+            // own, Enter goes to what each is), what was handed on with it
+            // folded under it.
+            ItemBody::UserMessage { text, typed } => {
+                let (shown, links, handed_on) = crate::conversation::as_typed(text, typed.as_ref());
+                let drawn = self.ui.messages.draw(ui, &crate::conversation::Message { links, ..crate::conversation::Message::new("user", shown) });
+                for (n, rect) in drawn.chips.iter().enumerate() {
+                    self.ui.drawing.push(Spot { key: format!("{index}:l{n}"), rect: *rect });
+                }
+                if let Some(handed_on) = handed_on {
+                    let open = self.ui.folds.item_open(item);
+                    ui.label(RichText::new(format!("{} what went with it", crate::nav::fold_mark(open))).size(crate::theme::look().text_small).color(colors().muted));
+                    if open {
+                        ui.label(RichText::new(handed_on).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                    }
+                }
             }
             // Its code blocks are places of their own (a hint picks one; Copy
             // copies it).
@@ -521,7 +535,7 @@ impl ChatStreamState {
                 let by = self.slot().map(|s| s.name.clone()).unwrap_or_else(|| "the agent".into());
                 let under = content.iter().filter(|b| !matches!(b, ContentBlock::Text { .. })).map(block_summary).collect();
                 let drawn = self.ui.messages.draw(ui, &crate::conversation::Message { markdown: true, under, ..crate::conversation::Message::new(&by, &text) });
-                self.code_spots(index, &drawn);
+                self.code_spots(index, &drawn.codes);
                 // The files its words name, as a call's places are.
                 let places = nav::links_of(item);
                 if !places.is_empty() {

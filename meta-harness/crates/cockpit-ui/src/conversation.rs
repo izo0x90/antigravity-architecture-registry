@@ -38,11 +38,13 @@ pub struct Message<'a> {
     pub tone: Option<Color32>,
     /// Lines under it (what an answer changed).
     pub under: Vec<String>,
+    /// What it links (spans of its text), drawn as chips.
+    pub links: &'a [harness_contracts::Link],
 }
 
 impl<'a> Message<'a> {
     pub fn new(by: &'a str, text: &'a str) -> Self {
-        Self { by, at_ms: None, what: None, text, markdown: false, tone: None, under: Vec::new() }
+        Self { by, at_ms: None, what: None, text, markdown: false, tone: None, under: Vec::new(), links: &[] }
     }
 }
 
@@ -54,15 +56,25 @@ pub struct Messages {
     code: crate::shared::Reader<crate::highlighter::Highlighter>,
 }
 
+/// Where a message's parts were drawn: its code blocks, its links' chips,
+/// each in order.
+#[derive(Debug, Default)]
+pub struct Drawn {
+    pub codes: Vec<Rect>,
+    pub chips: Vec<Rect>,
+}
+
 impl Messages {
     /// The desk's code colours, read from now on.
     pub fn follow(&mut self, shared: &crate::shared::Shared) {
         self.code.follow(&shared.highlighter);
     }
 
-    /// Draws `m` (see `message`): where its code blocks were drawn.
-    pub fn draw(&mut self, ui: &mut egui::Ui, m: &Message<'_>) -> Vec<Rect> {
-        message(ui, &mut self.markdown, &self.code.get(), m)
+    /// Draws `m` (see `message`); its links as chips in the links' colour
+    /// (a tag's own colour is the shell's to say, as tags are).
+    pub fn draw(&mut self, ui: &mut egui::Ui, m: &Message<'_>) -> Drawn {
+        let chips: Vec<Chip> = m.links.iter().map(|link| Chip { link: link.clone(), colour: colors().accent }).collect();
+        message(ui, &mut self.markdown, &self.code.get(), &chips, m)
     }
 
     /// Draws markdown `text`, its parts as a message's are: where its code
@@ -72,12 +84,12 @@ impl Messages {
     }
 }
 
-/// Draws `m`: who said it (and what, and when) above, the text, what's
-/// under it. Its code blocks coloured as `code` has them; where they were
-/// drawn, in order.
-fn message(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highlighter::Highlighter, m: &Message<'_>) -> Vec<Rect> {
+/// Draws `m`: who said it (and what, and when) above, the text (its links
+/// as `chips`), what's under it. Its code blocks coloured as `code` has
+/// them.
+fn message(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highlighter::Highlighter, chips: &[Chip], m: &Message<'_>) -> Drawn {
     let look = crate::theme::look();
-    let mut drawn = Vec::new();
+    let mut drawn = Drawn::default();
     let mut head = who(m.by).to_owned();
     if let Some(what) = m.what {
         head = format!("{head} {what}");
@@ -88,10 +100,15 @@ fn message(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highlig
     ui.label(RichText::new(head).size(look.text_small).color(m.tone.unwrap_or(colors().muted)));
     if !m.text.is_empty() {
         if m.markdown {
-            drawn = markdown(ui, cache, code, m.text);
-        } else {
+            drawn.codes = markdown(ui, cache, code, m.text);
+        } else if chips.is_empty() {
             let text = RichText::new(m.text).size(look.text_body).color(colors().text_strong);
             ui.label(if m.by == harness_contracts::USER { text.strong() } else { text });
+        } else {
+            let font = egui::FontId::proportional(look.text_body);
+            let galley = chipped(ui, m.text, chips, colors().text_strong, font, ui.available_width());
+            let at = ui.label(galley.clone()).rect.min.to_vec2();
+            drawn.chips = chips.iter().filter_map(|chip| span_rect(&galley, m.text, &chip.link).map(|r| r.translate(at))).collect();
         }
     }
     for line in &m.under {
@@ -294,7 +311,7 @@ pub fn said<'a>(d: &'a harness_contracts::Discussion, s: &'a harness_contracts::
         SaidKind::Reopened => Some(colors().warn),
     };
     let what = (s.kind != SaidKind::Message).then(|| s.kind.words());
-    Message { by: d.name_of(&s.by), at_ms: Some(s.at_ms), what, text: &s.text, markdown: s.by != harness_contracts::USER, tone, under: s.changed.iter().map(|c| format!("changed {}", c.what)).collect() }
+    Message { by: d.name_of(&s.by), at_ms: Some(s.at_ms), what, text: &s.text, markdown: s.by != harness_contracts::USER, tone, under: s.changed.iter().map(|c| format!("changed {}", c.what)).collect(), links: &[] }
 }
 
 /// Whose move it is in a discussion, in a few words ("waiting on you",
@@ -344,6 +361,59 @@ pub struct TypingBox {
     pub warning: Option<String>,
     /// Text was put in (not typed): the caret goes after it.
     caret_to_end: bool,
+}
+
+/// `text` laid out (`wrap` wide) with `chips` (spans of it, in
+/// characters) as chips, `base` the rest: each in its link's colour, as it
+/// fits; whole on a fill of it; a pointer underlined. The box draws its
+/// links so, and a message sent with them.
+pub fn chipped(ui: &egui::Ui, text: &str, chips: &[Chip], base: Color32, font: egui::FontId, wrap: f32) -> std::sync::Arc<egui::Galley> {
+    let plain = egui::TextFormat::simple(font.clone(), base);
+    let mut job = egui::text::LayoutJob { wrap: egui::text::TextWrapping { max_width: wrap, ..Default::default() }, ..Default::default() };
+    // Every character's byte offset, once (the chips' spans are in characters).
+    let bytes: Vec<usize> = text.char_indices().map(|(b, _)| b).chain(std::iter::once(text.len())).collect();
+    let mut at = 0;
+    let mut chips: Vec<&Chip> = chips.iter().filter(|c| c.link.start < c.link.end && c.link.end < bytes.len()).collect();
+    chips.sort_by_key(|c| c.link.start);
+    for chip in chips {
+        let (start, end) = (bytes[chip.link.start], bytes[chip.link.end]);
+        if start < at {
+            continue;
+        }
+        job.append(&text[at..start], 0.0, plain.clone());
+        let mut format = egui::TextFormat::simple(font.clone(), chip.colour);
+        match chip.link.include {
+            harness_contracts::Include::Auto => {}
+            harness_contracts::Include::Whole => format.background = chip.colour.gamma_multiply(0.25),
+            harness_contracts::Include::Pointer => format.underline = egui::Stroke::new(crate::theme::look().line_thin, chip.colour),
+        }
+        job.append(&text[start..end], 0.0, format);
+        at = end;
+    }
+    job.append(&text[at..], 0.0, plain);
+    ui.fonts_mut(|f| f.layout_job(job))
+}
+
+/// Where `link` (a span of `text`, in characters) is in `galley` (its
+/// first row's part, when it wraps).
+fn span_rect(galley: &egui::Galley, text: &str, link: &harness_contracts::Link) -> Option<Rect> {
+    if link.end > text.chars().count() || link.start >= link.end {
+        return None;
+    }
+    let (start, end) = (galley.pos_from_cursor(egui::text::CCursor::new(link.start)), galley.pos_from_cursor(egui::text::CCursor::new(link.end)));
+    let right = if (start.min.y - end.min.y).abs() < 1.0 { end.max.x } else { galley.rect.right() };
+    Some(Rect::from_min_max(start.min, egui::pos2(right, start.max.y)))
+}
+
+/// What you sent, as you typed it: the text, what it links, and what was
+/// handed on with it (folded under it). From what was kept of it (`typed`),
+/// else from the text the agent was handed (its links unknown).
+pub fn as_typed<'a>(sent: &'a str, typed: Option<&'a harness_contracts::Message>) -> (&'a str, &'a [harness_contracts::Link], Option<&'a str>) {
+    let (before, handed_on) = sent.split_once(harness_contracts::HANDED_ON).map_or((sent, None), |(before, after)| (before, Some(after.trim_start_matches(['\n', '\r']))));
+    match typed {
+        Some(typed) => (&typed.text, &typed.links, handed_on),
+        None => (before, &[], handed_on),
+    }
 }
 
 /// A link in the box, and the colour it's drawn in.
@@ -488,34 +558,9 @@ impl TypingBox {
         });
     }
 
-    /// The text laid out with its links as chips: as it fits in the
-    /// link's colour, whole on a fill of it, a pointer underlined.
+    /// The text laid out with its links as chips (see `chipped`).
     fn laid_out(&self, ui: &egui::Ui, text: &str, wrap: f32) -> std::sync::Arc<egui::Galley> {
-        let font = egui::TextStyle::Body.resolve(ui.style());
-        let plain = egui::TextFormat::simple(font.clone(), ui.visuals().text_color());
-        let mut job = egui::text::LayoutJob { wrap: egui::text::TextWrapping { max_width: wrap, ..Default::default() }, ..Default::default() };
-        // Every character's byte offset, once (the chips' spans are in characters).
-        let bytes: Vec<usize> = text.char_indices().map(|(b, _)| b).chain(std::iter::once(text.len())).collect();
-        let mut at = 0;
-        let mut chips: Vec<&Chip> = self.links.iter().filter(|c| c.link.start < c.link.end && c.link.end < bytes.len()).collect();
-        chips.sort_by_key(|c| c.link.start);
-        for chip in chips {
-            let (start, end) = (bytes[chip.link.start], bytes[chip.link.end]);
-            if start < at {
-                continue;
-            }
-            job.append(&text[at..start], 0.0, plain.clone());
-            let mut format = egui::TextFormat::simple(font.clone(), chip.colour);
-            match chip.link.include {
-                harness_contracts::Include::Auto => {}
-                harness_contracts::Include::Whole => format.background = chip.colour.gamma_multiply(0.25),
-                harness_contracts::Include::Pointer => format.underline = egui::Stroke::new(crate::theme::look().line_thin, chip.colour),
-            }
-            job.append(&text[start..end], 0.0, format);
-            at = end;
-        }
-        job.append(&text[at..], 0.0, plain);
-        ui.fonts_mut(|f| f.layout_job(job))
+        chipped(ui, text, &self.links, ui.visuals().text_color(), egui::TextStyle::Body.resolve(ui.style()), wrap)
     }
 
     /// Draws it (`rows` high, `hint` while empty); it has the keyboard while
