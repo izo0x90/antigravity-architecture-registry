@@ -41,7 +41,7 @@ impl Answer {
         if !here {
             return action;
         }
-        let mut action = action.on_item(self.style, self.caption.clone(), None);
+        let mut action = action.on_waiting(self.style, self.caption.clone(), None);
         if let Some(control) = action.control.as_mut() {
             control.tone = Some(self.tone);
         }
@@ -58,7 +58,7 @@ pub fn page(request: &RuntimeRequest) -> Option<String> {
 /// `action` (opening `request`'s page) as it shows: under the request
 /// while the cursor is on it (`here`).
 pub fn place_page(action: Action, here: bool) -> Action {
-    if here { action.on_item(Style::Button, "Open the page", Some(egui_phosphor::regular::ARROW_SQUARE_OUT)) } else { action }
+    if here { action.on_waiting(Style::Button, "Open the page", Some(egui_phosphor::regular::ARROW_SQUARE_OUT)) } else { action }
 }
 
 /// The ways to answer `request` (pending), in its order. The chat and the

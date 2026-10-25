@@ -208,7 +208,7 @@ impl CockpitApp {
                 levels[i].2.control = Some(control);
             }
         }
-        let tagged: Vec<Layer> = levels.iter().map(|(level, _, action)| if action.control.as_ref().is_some_and(|c| matches!(c.at, crate::actions::At::Item | crate::actions::At::Typing)) { Layer::On } else { *level }).collect();
+        let tagged: Vec<Layer> = levels.iter().map(|(level, _, action)| if action.control.as_ref().is_some_and(|c| matches!(c.at, crate::actions::At::Item | crate::actions::At::Typing | crate::actions::At::Waiting)) { Layer::On } else { *level }).collect();
         let actions: Vec<(Origin, Action)> = levels.into_iter().map(|(_, o, a)| (o, a)).collect();
         // The keys given out where it is, again only when its actions changed
         // (compared as they are, nothing built to compare).

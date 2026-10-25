@@ -141,6 +141,9 @@ pub enum At {
     Item,
     /// Under the box being typed in, while it's typed in (Send…).
     Typing,
+    /// Under what waits on you where you are (a request's answers), typing
+    /// or not: what waits always shows its answers.
+    Waiting,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -457,6 +460,12 @@ impl Action {
     /// Shown under the cursor's item, while the cursor is on it.
     pub fn on_item(mut self, style: Style, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
         self.control = Some(Control::new(At::Item, style, caption, icon));
+        self
+    }
+
+    /// Shown under what waits on you where you are, typing or not.
+    pub fn on_waiting(mut self, style: Style, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
+        self.control = Some(Control::new(At::Waiting, style, caption, icon));
         self
     }
 

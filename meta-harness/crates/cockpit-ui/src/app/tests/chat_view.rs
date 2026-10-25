@@ -738,3 +738,31 @@ fn a_long_chat_draws_only_what_is_near_sight() {
     }
     assert!(drawn.contains(&239) && drawn.len() < 40, "the latest, and only what's near it: {drawn:?}");
 }
+
+/// What waits on you shows its answers whether you're typing or not: a
+/// request's Allow and Deny stay under it while you type, and one tap
+/// answers it.
+#[test]
+fn a_request_waiting_on_you_shows_its_answers_while_you_type() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Chat);
+    request("r1", "cargo test", None, Some(100)).into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
+    for _ in 0..4 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    // A button: its caption, then its key.
+    let button = |output: &egui::FullOutput, caption: &str| drawn_texts(output).into_iter().find(|(t, _, _)| t.split_whitespace().next() == Some(caption)).map(|(_, r, _)| r.center());
+    let shows = |output: &egui::FullOutput, caption: &str| button(output, caption).is_some();
+    let output = frame(&ctx, &mut app, vec![]);
+    assert!(shows(&output, "Allow") && shows(&output, "Deny"), "not typing: under it");
+    frame(&ctx, &mut app, key("i"));
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    assert!(matches!(app.input_mode, InputMode::Insert { .. }));
+    assert!(shows(&output, "Allow") && shows(&output, "Deny"), "typing: its answers still");
+    let allow = button(&output, "Allow").unwrap();
+    sent(&app);
+    frame(&ctx, &mut app, vec![egui::Event::PointerMoved(allow), egui::Event::PointerButton { pos: allow, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
+    frame(&ctx, &mut app, vec![egui::Event::PointerButton { pos: allow, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
+    assert!(sent(&app).iter().any(|c| c.starts_with("POST /api/threads/t/requests/r1")), "tapped while typing: answered");
+}

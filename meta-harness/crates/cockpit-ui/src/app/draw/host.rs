@@ -135,59 +135,61 @@ impl CockpitApp {
             None => (Host::Panel(self.desk.panels.focused()), self.panel_rects.get(self.desk.panels.focused()).copied()),
         };
         let Some(bounds) = bounds else { return };
-        let hosted = self.desk.view(kind);
-        let (at, anchor) = match self.input_mode {
-            InputMode::Insert { .. } => (At::Typing, hosted.typing_rect()),
-            _ => {
-                let view = self.desk.view(kind);
-                let here = hosted.here().or_else(|| view.cursor_key());
-                let spot = |key: &str| view.spots().into_iter().find(|s| s.key == key).map(|s| s.rect).or_else(|| hosted.drawn_at(key));
-                (At::Item, here.as_deref().and_then(spot))
-            }
+        let item = {
+            let view = self.desk.view(kind);
+            let here = view.here().or_else(|| view.cursor_key());
+            here.as_deref().and_then(|key| view.spots().into_iter().find(|s| s.key == key).map(|s| s.rect).or_else(|| view.drawn_at(key)))
         };
-        let anchor = anchor.map(|r| r.intersect(bounds)).filter(|r| r.is_positive());
+        let typing = matches!(self.input_mode, InputMode::Insert { .. });
         let where_ = self.here();
-        let here: Vec<Bound> = self.bound_actions().into_iter().filter(|b| b.layer == Layer::On && b.action.at() == Some(at) && self.applies(b, where_)).collect();
-        if here.is_empty() {
-            return;
-        }
-        let id = egui::Id::new("item_controls");
+        let bound: Vec<Bound> = self.bound_actions().into_iter().filter(|b| b.layer == Layer::On && self.applies(b, where_)).collect();
+        let at = |places: &[At]| -> Vec<Bound> { bound.iter().filter(|b| b.action.at().is_some_and(|a| places.contains(&a))).cloned().collect() };
+        // Typing: the box's own under it, and what waits on you still under
+        // it (its answers). Else what you're on's, what waits with them.
+        let groups: Vec<(&str, Option<egui::Rect>, Vec<Bound>)> = match typing {
+            true => vec![("item_controls", self.desk.view(kind).typing_rect(), at(&[At::Typing])), ("waiting_controls", item, at(&[At::Waiting]))],
+            false => vec![("item_controls", item, at(&[At::Item, At::Waiting]))],
+        };
         let look = crate::theme::look();
         let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, at: host, note: &mut self.note, asked: &mut self.asked };
         // In a bar: its host's row, the buttons then what they act on
-        // (whether or not the item is on screen). Floating: under the item (above it
-        // when there's no room).
-        match self.item_bars.iter().find(|(h, _)| *h == host).map(|(_, rect)| *rect) {
-            Some(bar) => {
-                let what = self.desk.view(kind).target().map(|t| t.in_words());
-                egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(bar.min).show(ctx, |ui| {
-                    ui.set_clip_rect(bar);
-                    Frame::NONE.inner_margin(crate::theme::margin2(look.space_s, look.space_s)).show(ui, |ui| {
-                        ui.set_width(bar.width() - look.space_s * 2.0);
-                        // The buttons first, as on every line: what they act
-                        // on after them, never pushing them.
-                        ui.horizontal(|ui| {
-                            crate::actions::controls(ui, &here, &mut cx);
-                            if let Some(what) = what {
-                                ui.label(RichText::new(what).size(look.text_small).color(colors().muted));
-                            }
-                        });
+        // (whether or not the item is on screen), all in the one row.
+        if let Some(bar) = self.item_bars.iter().find(|(h, _)| *h == host).map(|(_, rect)| *rect) {
+            let here: Vec<Bound> = groups.into_iter().flat_map(|(_, _, here)| here).collect();
+            if here.is_empty() {
+                return;
+            }
+            let what = self.desk.view(kind).target().map(|t| t.in_words());
+            egui::Area::new(egui::Id::new("item_controls")).order(egui::Order::Foreground).fixed_pos(bar.min).show(ctx, |ui| {
+                ui.set_clip_rect(bar);
+                Frame::NONE.inner_margin(crate::theme::margin2(look.space_s, look.space_s)).show(ui, |ui| {
+                    ui.set_width(bar.width() - look.space_s * 2.0);
+                    // The buttons first, as on every line: what they act
+                    // on after them, never pushing them.
+                    ui.horizontal(|ui| {
+                        crate::actions::controls(ui, &here, &mut cx);
+                        if let Some(what) = what {
+                            ui.label(RichText::new(what).size(look.text_small).color(colors().muted));
+                        }
                     });
                 });
-            }
-            // Floating needs the item on screen.
-            None => {
-                let Some(anchor) = anchor else { return };
-                let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(anchor.width(), look.text_title * 2.0), |r| r.size());
-                let below = anchor.bottom() + look.space_s;
-                let y = if below + size.y <= bounds.bottom() { below } else { (anchor.top() - look.space_s - size.y).max(bounds.top()) };
-                egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(egui::pos2(anchor.left(), y)).show(ctx, |ui| {
-                    Frame::NONE.fill(colors().overlay_raised).stroke(Stroke::new(look.line_thin, colors().border)).corner_radius(look.radius_m).inner_margin(crate::theme::margin(look.space_s)).show(ui, |ui| {
-                        ui.set_max_width(anchor.width().max(look.quick_look_width / 3.0).min(bounds.width()));
-                        ui.horizontal_wrapped(|ui| crate::actions::controls(ui, &here, &mut cx));
-                    });
+            });
+            return;
+        }
+        // Floating: under what they're for (above it when there's no
+        // room); it needs to be on screen.
+        for (id, anchor, here) in groups {
+            let id = egui::Id::new(id);
+            let Some(anchor) = anchor.map(|r| r.intersect(bounds)).filter(|r| r.is_positive() && !here.is_empty()) else { continue };
+            let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(anchor.width(), look.text_title * 2.0), |r| r.size());
+            let below = anchor.bottom() + look.space_s;
+            let y = if below + size.y <= bounds.bottom() { below } else { (anchor.top() - look.space_s - size.y).max(bounds.top()) };
+            egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(egui::pos2(anchor.left(), y)).show(ctx, |ui| {
+                Frame::NONE.fill(colors().overlay_raised).stroke(Stroke::new(look.line_thin, colors().border)).corner_radius(look.radius_m).inner_margin(crate::theme::margin(look.space_s)).show(ui, |ui| {
+                    ui.set_max_width(anchor.width().max(look.quick_look_width / 3.0).min(bounds.width()));
+                    ui.horizontal_wrapped(|ui| crate::actions::controls(ui, &here, &mut cx));
                 });
-            }
+            });
         }
     }
 
