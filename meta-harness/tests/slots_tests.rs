@@ -318,10 +318,11 @@ async fn a_chats_message_and_turn_are_tagged_named_by_the_slot_and_kept() {
     let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/prompt"), Some(r#"{"text":"hello there"}"#)).await;
     assert_eq!(status, 200, "{body}");
     let mut lead = Mcp::lead(addr).await;
-    // Its first turn's first message: the answer the fake harness gives.
+    // Its first turn's second message: the answer the fake harness gives
+    // (the first is the prompt).
     let mut said = String::new();
     for _ in 0..50 {
-        let (error, out) = lead.tool("tag", json!({ "tag": "greeting", "subject": "chat helper turn 1 message 1" })).await;
+        let (error, out) = lead.tool("tag", json!({ "tag": "greeting", "subject": "chat helper turn 1 message 2" })).await;
         said = out;
         if !error {
             break;
@@ -333,13 +334,13 @@ async fn a_chats_message_and_turn_are_tagged_named_by_the_slot_and_kept() {
     assert!(!error, "{said}");
     let (_, read) = lead.tool("tag_read", json!({ "tag": "greeting" })).await;
     // Named with its session (the start of its id: a slot has several).
-    assert!(read.contains("1. chat helper@native-") && read.contains(" turn 1 message 1 (tagged by lead; as it is now):\necho: hello there"), "{read}");
-    assert!(read.contains(" turn 1 (tagged by lead; as it is now):\necho: hello there"), "{read}");
+    assert!(read.contains("1. chat helper@native-") && read.contains(" turn 1 message 2 (tagged by lead; as it is now):\necho: hello there"), "{read}");
+    assert!(read.contains(" turn 1 (tagged by lead; as it is now):\nyou: hello there\necho: hello there"), "{read}");
     // The whole session, by the slot's name alone: each turn, numbered (#11).
     let (error, said) = lead.tool("tag", json!({ "tag": "whole", "subject": "chat helper" })).await;
     assert!(!error, "{said}");
     let (_, read) = lead.tool("tag_read", json!({ "tag": "whole" })).await;
-    assert!(read.contains("1. chat helper@native-") && read.contains(":\nturn 1\necho: hello there"), "{read}");
+    assert!(read.contains("1. chat helper@native-") && read.contains(":\nturn 1\nyou: hello there\necho: hello there"), "{read}");
     // Kept in the logs: the tag holds where, never the text.
     let tag = state.tags.tags.find("greeting").unwrap();
     assert!(tag.on.iter().all(|t| t.kept.is_some()) && !serde_json::to_string(&tag).unwrap().contains("hello there"));
@@ -447,7 +448,7 @@ async fn a_tagged_turn_follows_its_session_numbering_it_anew_and_its_slot_closin
     }
     assert!(named(&state).starts_with("chat helper@native-") && named(&state).ends_with(" turn 9"), "{}", named(&state));
     let (_, read) = lead.tool("tag_read", json!({ "tag": "first", "thing": 1 })).await;
-    assert!(read.contains(" turn 9 (as it is now):\necho: first"), "the same turn, by its new number: {read}");
+    assert!(read.contains(" turn 9 (as it is now):\nyou: first\necho: first"), "the same turn, by its new number: {read}");
     // Its slot closed: named as no slot's session, and named back so.
     state.harness.slots.close(&SlotId::new(&slot)).await.unwrap();
     for _ in 0..200 {
