@@ -74,6 +74,8 @@ pub struct ChatStreamState {
     /// agent's said to be), and which of their changes it took.
     settings: crate::config::ChatUi,
     seen_settings: u64,
+    /// Unchanged lines shown around a change (the Changes view's).
+    context: usize,
 }
 
 /// A chat view's own state: what's typed, where the cursor is, what was
@@ -100,6 +102,9 @@ pub struct ChatView {
     /// How tall each row was last drawn (by its first item), and as what:
     /// a row out of sight takes that room without being drawn.
     pub(crate) heights: std::collections::HashMap<harness_contracts::ItemId, (render::Measure, f32)>,
+    /// The changes calls made, compared (by item and block), and as of
+    /// which change of the item.
+    pub(crate) diffs: std::collections::HashMap<(harness_contracts::ItemId, usize), (u64, Hunks)>,
     /// What in the item a hint picked: one of its links, or code blocks.
     pub(crate) pick: Option<Pick>,
     /// Where it's looking (the shared rules move it, a message a stop);
@@ -134,6 +139,7 @@ impl Default for ChatView {
             indicator: Default::default(),
             live_at: None,
             heights: Default::default(),
+            diffs: Default::default(),
             pick: None,
             scrolling: Default::default(),
             spots: Vec::new(),
@@ -216,6 +222,9 @@ impl ChatView {
         Place::of(&ChatPlace { message: self.cursor, slot: Some(self.slot.clone()) })
     }
 }
+
+/// A change's hunks, compared once.
+pub(crate) type Hunks = std::rc::Rc<Vec<harness_contracts::changes::Hunk>>;
 
 /// What a stream's shape was worked out from: its thread, as of which
 /// update, and which change of the folds.

@@ -164,6 +164,14 @@ fn compared(value: &str) -> Option<Comparison> {
     value.parse().ok()
 }
 
+/// Where to put the cursor once the list is in: a row (by its key), or a
+/// file (in whichever group it's in).
+#[derive(Clone, Debug, PartialEq)]
+enum Restore {
+    Row(String),
+    File(String),
+}
+
 pub struct ChangesView {
     /// The desk's comparison, and its list (as last read there).
     comparison: Comparison,
@@ -188,8 +196,8 @@ pub struct ChangesView {
     /// Changes folded to their one line, by file and place in it.
     folded: std::collections::BTreeSet<(FileKey, usize)>,
     cursor: usize,
-    /// A place to put the cursor back on once the list is in.
-    restore: Option<String>,
+    /// A place to put the cursor on once the list is in.
+    restore: Option<Restore>,
     /// How to show the cursor once laid out (asked before it was).
     show: Option<Show>,
     /// Where it's looking (the shared rules move it), the time last drawn,
@@ -568,11 +576,22 @@ impl ChangesView {
                 }
             }
         }
-        if let Some(key) = self.restore.take() {
-            match self.rows().iter().position(|r| self.row_key(r) == key) {
-                Some(at) => self.put_cursor(at, Show::Middle),
-                None => self.restore = Some(key),
-            }
+        self.tend_restore();
+    }
+
+    /// The cursor on the place asked for, once the list has it (till
+    /// then, kept).
+    fn tend_restore(&mut self) {
+        let Some(restore) = self.restore.take() else { return };
+        let found = self.list().and_then(|_| {
+            self.rows().iter().position(|row| match &restore {
+                Restore::Row(key) => self.row_key(row) == *key,
+                Restore::File(path) => matches!(row, Row::File(_)) && self.file_of(row).is_some_and(|f| f.path == *path),
+            })
+        });
+        match found {
+            Some(at) => self.put_cursor(at, Show::Middle),
+            None => self.restore = Some(restore),
         }
     }
 
@@ -971,7 +990,7 @@ impl ActionProvider for ChangesView {
                 // A whole file: the cursor follows it to its new group.
                 if hunk.is_none() {
                     let to = if *stage { Group::Staged } else if file.status == FileStatus::Added && file.old_path.is_none() { Group::Untracked } else { Group::Unstaged };
-                    self.restore = Some(format!("f:{to:?}:{}", file.path));
+                    self.restore = Some(Restore::Row(format!("f:{to:?}:{}", file.path)));
                 }
                 let inbox = self.inbox.clone();
                 cx.net.change_stage(*stage, &file.path, hunk, cx.ctx.clone(), move |r| push(&inbox, Reply::Staged(r)));
@@ -1102,13 +1121,17 @@ impl Navigable for ChangesView {
         }
     }
 
-    /// A message: its turn's changes, compared. A component: its first
-    /// change.
+    /// A message: its turn's changes, compared (on the file it points to,
+    /// when it does). A component: its first change.
     fn show_target(&mut self, target: &Target) -> Result<(), String> {
-        if let Target::Message { turn, .. } = target {
+        if let Target::Message { turn, link, .. } = target {
             let comparison = turn.as_deref().and_then(|t| self.turn(t)).map(|t| t.comparison.clone()).ok_or("The timeline didn't see this turn's start.")?;
             self.compare(comparison);
             self.show_timeline(false);
+            if let Some((path, _)) = link {
+                self.restore = Some(Restore::File(path.clone()));
+                self.tend_restore();
+            }
             return Ok(());
         }
         let id = target.component().ok_or("There's no component here.")?;
@@ -1127,7 +1150,7 @@ impl Navigable for ChangesView {
         if let Some(Some(key)) = place.read::<Option<String>>() {
             match self.rows().iter().position(|r| self.row_key(r) == key) {
                 Some(at) => self.put_cursor(at, Show::Middle),
-                None => self.restore = Some(key),
+                None => self.restore = Some(Restore::Row(key)),
             }
         }
     }

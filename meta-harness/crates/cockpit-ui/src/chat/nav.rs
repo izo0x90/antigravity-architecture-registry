@@ -134,6 +134,7 @@ impl Navigable for ChatStreamState {
         // The chat's settings changed: what it starts with, taken.
         if let Some(settings) = shared.settings.since(&mut self.seen_settings) {
             self.settings = settings.chat.clone();
+            self.context = settings.changes.context as usize;
             self.ui.folds.set_verbosity(self.settings.shows);
             if let Some(shown) = crate::indicator::Shown::named(&self.settings.indicator) {
                 self.ui.indicator = shown;

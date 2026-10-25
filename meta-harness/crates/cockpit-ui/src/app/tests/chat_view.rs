@@ -492,3 +492,34 @@ fn the_files_a_message_names_open_in_the_code_view() {
     frame(&ctx, &mut app, vec![]);
     assert_eq!((app.focused_kind(), app.desk.code().current_file.as_str(), app.desk.code().target_line), (BufferKind::Code, "lib.rs", Some(7)));
 }
+
+/// A file a call changed is "+2 −1 src/a.rs" under it, folded; opened, its
+/// hunks as the Changes view draws them. A change item's the same.
+#[test]
+fn a_change_is_folded_as_what_it_adds_and_removes_and_opens_as_its_hunks() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Chat);
+    let diff = harness_contracts::Diff { path: "src/a.rs".into(), old_text: Some("a\nb\nc\n".into()), new_text: "a\nB\nc\nd\n".into() };
+    let edit = ItemBody::ToolCall { kind: ToolKind::Edit, name: "edit".into(), input: None, output: vec![ContentBlock::Diff(diff.clone())], locations: vec![] };
+    {
+        let mut agents = app.desk.shared.agents.get_mut();
+        agents.apply(titled(40, "Edit a.rs", edit));
+        agents.apply(item(41, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "between".into() }], streaming: false }));
+        agents.apply(item(42, ItemBody::FileChange { path: "src/b.rs".into(), diff: Some(harness_contracts::Diff { path: "src/b.rs".into(), old_text: None, new_text: "x\ny\n".into() }) }));
+    }
+    let shown = |ctx: &egui::Context, app: &mut CockpitApp| {
+        frame(ctx, app, vec![]);
+        texts(&frame(ctx, app, vec![]))
+    };
+    let text = shown(&ctx, &mut app);
+    assert!(text.contains("+2 −1 src/a.rs") && text.contains("+2 −0") && !text.contains("@@"), "folded: {text}");
+    app.desk.chat_mut().move_to("40");
+    app.desk.chat_mut().fold(crate::nav::Fold::Open);
+    let text = shown(&ctx, &mut app);
+    assert!(text.contains("@@ −1,3 +1,4 @@") && text.lines().any(|l| l == "B"), "its hunks: {text}");
+    app.desk.chat_mut().move_to("42");
+    app.desk.chat_mut().fold(crate::nav::Fold::Open);
+    let text = shown(&ctx, &mut app);
+    let open = format!("{} +2 −0", crate::nav::fold_mark(true));
+    assert!(text.contains(&open) && text.lines().any(|l| l == "src/b.rs"), "a change item's, opened: {text}");
+}

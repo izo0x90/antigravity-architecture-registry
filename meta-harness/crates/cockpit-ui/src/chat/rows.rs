@@ -119,11 +119,13 @@ pub(crate) fn is_call(item: &TurnItem) -> bool {
     matches!(item.body, ItemBody::ToolCall { .. } | ItemBody::CommandExecution { .. } | ItemBody::FileChange { .. })
 }
 
-/// Whether an item folds on its own: a call with output, reasoning.
+/// Whether an item folds on its own: a call with output, a change with
+/// its diff, reasoning.
 pub(crate) fn folds(item: &TurnItem) -> bool {
     match &item.body {
         ItemBody::ToolCall { output, .. } => !output.is_empty(),
         ItemBody::CommandExecution { output, .. } => output.is_some(),
+        ItemBody::FileChange { diff, .. } => diff.is_some(),
         ItemBody::Reasoning { .. } => true,
         _ => false,
     }

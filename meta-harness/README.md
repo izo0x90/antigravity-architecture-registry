@@ -361,6 +361,9 @@ colours a file of the language their fence names (`POST
 The files a message's words name (`src/a.rs:12`, a path with a folder or a
 line) are links under it, as a call's places are: Enter opens the one
 you're on in the code view, at its line.
+A file a call changed is "+12 −3 src/a.rs" under it, folded; opened, its
+hunks as the Changes view draws them; `g x` shows the turn's changes in
+the Changes view, on that file.
 
 Tool servers: every session gets ours (`/api/mcp/sse`) and the project's,
 kept in `.nah/mcp.toml` (`GET`/`PUT /api/mcp/servers`; `Space p a` adds

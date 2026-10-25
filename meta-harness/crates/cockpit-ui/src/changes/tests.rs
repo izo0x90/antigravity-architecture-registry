@@ -237,7 +237,7 @@ fn the_user_stages_a_file_or_a_change_and_the_cursor_follows_the_file() {
     let stage = fed.view.actions().into_iter().find(|a| a.id == "changes.stage").unwrap();
     fed.view.run(&stage, None, &mut RunCx { net: &fed.net, ctx: &fed.ctx, input_mode: &mut parts.2, at: crate::keymap::Host::Panel(0), note: &mut parts.0, asked: &mut parts.1 });
     assert_eq!(fed.sent("POST /api/changes/stage"), 1);
-    assert_eq!(fed.view.restore.as_deref(), Some("f:Staged:a.rs"), "the cursor follows it");
+    assert_eq!(fed.view.restore, Some(super::Restore::Row("f:Staged:a.rs".into())), "the cursor follows it");
     push(&fed.view.inbox, Reply::Staged(Ok(serde_json::Value::Null)));
     fed.view.tick(&fed.net, &fed.ctx);
     assert_eq!(fed.view.take_asks(), [Ask::Refresh(Refresh::Changes)], "the desk reads them again");
@@ -264,6 +264,17 @@ fn as_a_destination_it_shows_touched_components_and_turns_it_saw() {
     fed.frame();
     assert_eq!(fed.shared.changes.comparison(), &turn, "its turn, compared");
     assert!(fed.view.show_target(&message("u2")).is_err());
+    // A message pointing to a file: the cursor goes on it once the list
+    // is in, in whichever group it's in.
+    let linked = Target::Message { thread: None, turn: Some("u1".into()), index: 0, link: Some(("b.rs".into(), None)) };
+    assert_eq!(fed.view.show_target(&linked), Ok(()));
+    assert_eq!(fed.view.restore, Some(super::Restore::File("b.rs".into())));
+    let mut fed = view_with_changes();
+    let now = Comparison::default();
+    fed.timeline(Timeline { windows: vec![], turns: vec![harness_contracts::changes::TurnChanges { thread: "t".into(), turn: "u3".into(), comparison: now, files: 1, alongside: vec![] }] });
+    assert_eq!(fed.view.show_target(&Target::Message { thread: None, turn: Some("u3".into()), index: 0, link: Some(("b.rs".into(), None)) }), Ok(()), "the comparison it shows: the list is in");
+    let on = fed.view.cursor_row().and_then(|r| fed.view.file_of(&r).map(|f| f.path.clone()));
+    assert_eq!((on.as_deref(), fed.view.restore.as_ref()), (Some("b.rs"), None));
 }
 
 /// Draws the view in a window `h` high; the text drawn.

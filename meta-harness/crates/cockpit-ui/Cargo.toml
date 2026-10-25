@@ -26,6 +26,9 @@ egui_graphs = "0.29.0"
 getrandom = { version = "0.3", features = ["wasm_js"] }
 egui-phosphor = { version = "0.11.0", features = ["regular", "fill"] }
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+# A change an agent made (its file's text before and after) as the Changes
+# view's hunks; its clock the browser's on the web.
+similar = { version = "3.2", default-features = false, features = ["std", "text", "wasm32_web_time"] }
 
 # The browser's own (only `web/` uses them: anything else that did wouldn't
 # build natively, where the tests run).

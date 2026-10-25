@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::hosted::{Status, Tone};
+use harness_contracts::changes::Hunk;
 
 /// The banners' name as a place (`here`).
 pub(crate) const BANNERS: &str = "banners";
@@ -24,14 +25,10 @@ pub(super) fn render_steps(ui: &mut egui::Ui, steps: &[PlanStep]) {
     }
 }
 
-pub(super) fn block_detail(block: &ContentBlock) -> String {
+/// A call's output block (not a change: that's drawn as its hunks), as
+/// text.
+fn block_detail(block: &ContentBlock) -> String {
     match block {
-        ContentBlock::Diff(d) => {
-            let old = d.old_text.as_deref().map(|t| t.lines().count()).unwrap_or(0);
-            let new = d.new_text.lines().count();
-            let preview: String = d.new_text.lines().take(12).collect::<Vec<_>>().join("\n");
-            format!("{}  (−{old} +{new} lines)\n{preview}", d.path)
-        }
         ContentBlock::Resource { uri, text: Some(text) } => format!("{uri}\n{}", text.chars().take(600).collect::<String>()),
         other => block_summary(other),
     }
@@ -59,6 +56,34 @@ pub(crate) struct Measure {
     changed: u64,
     width: f32,
     text: f32,
+}
+
+/// A call's output, folded, in words: the files it changed ("+12 −3
+/// src/a.rs", "+20 −5 in 3 files"), and the rest ("output").
+fn output_words(changes: &[(usize, &str, Hunks)], blocks: usize) -> String {
+    let (added, removed) = changes.iter().fold((0, 0), |(a, r), (_, _, hunks)| {
+        let (more, fewer) = crate::diff::counted(hunks);
+        (a + more, r + fewer)
+    });
+    let changed = match changes {
+        [] => None,
+        [(_, path, _)] => Some(format!("+{added} −{removed} {path}")),
+        _ => Some(format!("+{added} −{removed} in {} files", changes.len())),
+    };
+    match (changed, blocks > changes.len()) {
+        (Some(changed), true) => format!("{changed} · output"),
+        (Some(changed), false) => changed,
+        (None, _) => "output".to_owned(),
+    }
+}
+
+/// A file's change drawn as the Changes view draws one: its name, its
+/// hunks (one column).
+fn draw_change(ui: &mut egui::Ui, path: &str, hunks: &[Hunk]) {
+    ui.label(RichText::new(path).monospace().size(crate::theme::look().text_small).color(colors().info));
+    for hunk in hunks {
+        crate::diff::draw_hunk(ui, hunk, false);
+    }
 }
 
 /// The most of the chat's height what waits on you takes (it scrolls past
@@ -147,6 +172,7 @@ impl ChatStreamState {
         if self.ui.folds_for.is_some() && self.ui.folds_for != thread {
             self.ui.folds.afresh();
             self.ui.heights.clear();
+            self.ui.diffs.clear();
         }
         self.ui.folds_for = thread;
     }
@@ -443,6 +469,21 @@ impl ChatStreamState {
         }
     }
 
+    /// The change `n` of `item` (at `index` in the stream) as hunks: its
+    /// file before and after, compared once per change of the item.
+    fn hunks_of(&mut self, view: &ThreadView, item: &TurnItem, index: usize, n: usize, diff: &harness_contracts::Diff) -> Hunks {
+        let changed = view.changed(index);
+        let key = (item.id.clone(), n);
+        if let Some((was, hunks)) = self.ui.diffs.get(&key)
+            && *was == changed
+        {
+            return hunks.clone();
+        }
+        let hunks = std::rc::Rc::new(crate::diff::hunks(diff.old_text.as_deref().unwrap_or_default(), &diff.new_text, self.context));
+        self.ui.diffs.insert(key, (changed, hunks.clone()));
+        hunks
+    }
+
     /// Item `index`'s files (`places`, its links in order), each a place
     /// of its own (`3:1`): the cursor goes on it (a click), and it opens
     /// (Enter, a double click).
@@ -505,12 +546,16 @@ impl ChatStreamState {
                     ui.label(RichText::new(format!("{tag} {icon} {title}")).monospace().size(crate::theme::look().text_body).color(color));
                     self.places(ui, index, &nav::links_of(item));
                 });
-                // Its output, or what its sub-agent did (its items follow,
-                // open): folded unless opened.
+                // Its output (a file it changed, as "+12 −3"), or what its
+                // sub-agent did (its items follow, open): folded unless
+                // opened.
                 let open = self.ui.folds.item_open(item);
+                // (Each change: its block's place in the output, its file, its hunks.)
+                let changes: Vec<(usize, &str, Hunks)> =
+                    output.iter().enumerate().filter_map(|(n, b)| if let ContentBlock::Diff(diff) = b { Some((n, diff)) } else { None }).map(|(n, diff)| (n, diff.path.as_str(), self.hunks_of(view, item, row.first, n, diff))).collect();
                 let said = match (row.nested, output.is_empty()) {
                     (0, true) => None,
-                    (0, false) => Some("output".to_owned()),
+                    (0, false) => Some(output_words(&changes, output.len())),
                     (1, _) => Some("1 step by its sub-agent".to_owned()),
                     (n, _) => Some(format!("{n} steps by its sub-agent")),
                 };
@@ -518,14 +563,31 @@ impl ChatStreamState {
                     ui.label(RichText::new(format!("{} {said}", crate::nav::fold_mark(open))).size(crate::theme::look().text_small).color(colors().muted));
                 }
                 if open {
-                    for block in output {
-                        ui.label(RichText::new(block_detail(block)).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                    for (n, block) in output.iter().enumerate() {
+                        match changes.iter().find(|(at, ..)| *at == n) {
+                            Some((_, path, hunks)) => draw_change(ui, path, hunks),
+                            None => {
+                                ui.label(RichText::new(block_detail(block)).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                            }
+                        }
                     }
                 }
             }
-            ItemBody::FileChange { path, .. } => {
-                let link = ui.label(RichText::new(format!("{} {path}", icon::PENCIL_SIMPLE)).monospace().size(crate::theme::look().text_body).color(colors().info));
-                self.ui.drawing.push(Spot { key: format!("{index}:0"), rect: link.rect });
+            // A file changed: its place; "+12 −3", folded unless opened.
+            ItemBody::FileChange { path, diff } => {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(icon::PENCIL_SIMPLE).size(crate::theme::look().text_body).color(colors().info));
+                    self.places(ui, index, &nav::links_of(item));
+                });
+                if let Some(diff) = diff {
+                    let hunks = self.hunks_of(view, item, row.first, 0, diff);
+                    let open = self.ui.folds.item_open(item);
+                    let (added, removed) = crate::diff::counted(&hunks);
+                    ui.label(RichText::new(format!("{} +{added} −{removed}", crate::nav::fold_mark(open))).size(crate::theme::look().text_small).color(colors().muted));
+                    if open {
+                        draw_change(ui, path, &hunks);
+                    }
+                }
             }
             ItemBody::CommandExecution { command, output, exit_code } => {
                 ui.label(RichText::new(format!("$ {command}")).monospace().size(crate::theme::look().text_body));
