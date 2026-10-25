@@ -139,7 +139,7 @@ fn draw_change(ui: &mut egui::Ui, diff: &harness_contracts::Diff, change: &Chang
             ui.label(RichText::new("Comparing…").size(look.text_small).color(colors().muted));
         }
         Change::TooBig => {
-            ui.label(RichText::new("Too big to compare here: the Changes view shows the turn's changes (g x).").size(look.text_small).color(colors().muted));
+            ui.label(RichText::new("Too big to compare here: the Changes view shows the turn's changes.").size(look.text_small).color(colors().muted));
         }
         Change::Written => {
             ui.label(RichText::new(&diff.new_text).monospace().size(look.text_small).color(colors().muted));
