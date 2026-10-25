@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use harness_contracts::{
-    AdapterEvent, Failure, RequestId, RequestResponse, RequestStatus, RuntimePolicy, SteerInput,
+    AdapterEvent, Attachment, Failure, RequestId, RequestResponse, RequestStatus, RuntimePolicy, SteerInput,
     ThreadId, TurnId, TurnInput, TurnStatus,
 };
 use harness_core::{HarnessError, Result, SessionRuntime};
@@ -70,15 +70,15 @@ pub(crate) struct Link {
     pub cx: ConnectionTo<Agent>,
     pub native_id: acp::SessionId,
     pub shared: Arc<Shared>,
-    /// It takes a message's pieces as pieces.
-    pub takes_pieces: bool,
+    /// How it's sent a message's pieces.
+    pub sending: crate::pieces::Sending,
 }
 
 /// Sends `input` as turn `turn`'s prompt; when it ends, the next waiting
 /// turn goes. Its end is taken in order with what the agent sends: what
 /// it says after answering this prompt is the next turn's.
 fn send_prompt(link: Arc<Link>, turn: TurnId, input: TurnInput) {
-    let request = acp::PromptRequest::new(link.native_id.clone(), crate::pieces::blocks(input, link.takes_pieces));
+    let request = acp::PromptRequest::new(link.native_id.clone(), prompt_blocks(input, link.sending));
     let (on_end, ended) = (link.clone(), turn.clone());
     let sent = link.cx.send_request(request).on_receiving_result(move |result| async move {
         match result {
@@ -149,6 +149,23 @@ impl AcpSession {
     }
 }
 
+/// A turn's input as the agent gets it: its text and pieces (as pieces,
+/// when it takes them), then its attachments.
+fn prompt_blocks(input: TurnInput, sending: crate::pieces::Sending) -> Vec<acp::ContentBlock> {
+    let TurnInput { text, attachments, pieces } = input;
+    let mut blocks = crate::pieces::blocks(text, pieces, sending);
+    for attachment in attachments {
+        blocks.push(match attachment {
+            Attachment::File { path } => {
+                let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+                acp::ContentBlock::ResourceLink(acp::ResourceLink::new(name, format!("file://{path}")))
+            }
+            Attachment::Image { mime_type, data_base64 } => acp::ContentBlock::Image(acp::ImageContent::new(data_base64, mime_type)),
+        });
+    }
+    blocks
+}
+
 #[async_trait]
 impl SessionRuntime for AcpSession {
     fn thread_id(&self) -> &ThreadId {
@@ -193,7 +210,7 @@ impl SessionRuntime for AcpSession {
         };
         let params = serde_json::json!({
             "sessionId": self.link.native_id.to_string(),
-            "prompt": crate::pieces::blocks(input.clone(), self.link.takes_pieces),
+            "prompt": prompt_blocks(input.clone(), self.link.sending),
             "_meta": { "steering": { "idleBehavior": PROMPT_REQUIRED } },
         });
         let request = UntypedMessage::new(STEERING_METHOD, params).map_err(acp_error)?;

@@ -37,10 +37,9 @@ pub struct AcpSettings {
     /// it, by the call's id (a JSON pointer): its items nest under that
     /// call's.
     pub parent_call: Option<String>,
-    /// How its replay writes a piece of a message back into the message's
-    /// text: words around `{uri}` and `{content}` (`pieces::Template`).
-    /// None: a replayed message is shown as it comes.
-    pub replayed_piece: Option<String>,
+    /// How its replay writes a message's pieces back into the message's
+    /// text. None: a replayed message is shown as it comes.
+    pub replay: Option<ReplaySettings>,
     /// How it reports who it's signed in as.
     pub sign_in: Option<SignInSettings>,
     /// Its logins: by a login command of its own, or run by itself.
@@ -82,11 +81,26 @@ impl AcpSettings {
         {
             return Err(format!("home.dir names {}, which isn't one of its dirs", home.dir));
         }
-        if let Some(template) = &self.replayed_piece {
-            crate::pieces::Template::parse(template).map_err(|why| format!("replayed_piece: {why}"))?;
+        if let Some(replay) = &self.replay {
+            crate::pieces::Replay::parse(&replay.piece, replay.listed.as_deref()).map_err(|why| format!("replay: {why}"))?;
         }
         Ok(())
     }
+}
+
+/// How a harness writes a message's pieces into its replay: after the
+/// message's words, each piece as `piece` (words around `{uri}`, its label,
+/// and `{content}`, its text), all of them first listed as `listed` when
+/// they are (`{uri}` and words). Every chunk of a message it replays is
+/// the whole message (`whole_chunks`: two in a row are two messages).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplaySettings {
+    pub piece: String,
+    #[serde(default)]
+    pub listed: Option<String>,
+    #[serde(default)]
+    pub whole_chunks: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]

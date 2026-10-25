@@ -283,7 +283,7 @@ fn full_app() -> (egui::Context, CockpitApp) {
     app.desk.queue_mut().on_event(&arch_graph::ArchEvent::QueueUpdated { snapshot: Box::new(snapshot) });
     crate::chat::tests::conversation_events().into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
     for n in 4..40 {
-        app.desk.shared.agents.get_mut().apply(crate::chat::tests::item(n, harness_contracts::ItemBody::UserMessage { text: format!("message {n}"), links: Vec::new(), handed_on: Vec::new() }));
+        app.desk.shared.agents.get_mut().apply(crate::chat::tests::item(n, harness_contracts::ItemBody::UserMessage { text: format!("message {n}"), pieces: Vec::new() }));
     }
     // A terminal with lines on its screen, come over its socket.
     app.desk.shared.terminals.get_mut().apply(&harness_contracts::ClientEvent::TerminalUpdated { terminal: crate::terminals::tests::terminal("t1") });

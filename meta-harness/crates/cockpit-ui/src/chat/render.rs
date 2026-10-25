@@ -646,17 +646,18 @@ impl ChatStreamState {
             // Your messages and the agent's: as every conversation draws them.
             // Yours with its links as chips (places of their own, Enter goes
             // to what each is), what they handed on with it folded under it.
-            ItemBody::UserMessage { text, links, handed_on } => {
-                let drawn = self.ui.messages.draw(ui, egui::Id::new(&item.id), &crate::conversation::Message { links, ..crate::conversation::Message::new("user", text) });
+            ItemBody::UserMessage { text, pieces } => {
+                let links = harness_contracts::links_of(pieces);
+                let drawn = self.ui.messages.draw(ui, egui::Id::new(&item.id), &crate::conversation::Message { links: &links, ..crate::conversation::Message::new("user", text) });
                 for (n, rect) in drawn.chips.iter().enumerate() {
                     self.ui.drawing.push(Spot { key: Pick::Chip(n).key(index), rect: *rect });
                 }
-                if !handed_on.is_empty() {
+                if !pieces.is_empty() {
                     let open = self.ui.folds.item_open(item);
                     ui.label(RichText::new(format!("{} what went with it", crate::nav::fold_mark(open))).size(crate::theme::look().text_small).color(colors().muted));
                     if open {
-                        for piece in handed_on {
-                            ui.label(RichText::new(piece).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                        for piece in pieces {
+                            ui.label(RichText::new(&piece.text).monospace().size(crate::theme::look().text_small).color(colors().muted));
                         }
                     }
                 }

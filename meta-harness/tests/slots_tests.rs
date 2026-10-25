@@ -134,20 +134,21 @@ async fn a_report_reaches_a_running_lead_or_waits_for_one() {
     let delivered = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if let Ok(ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } }) = events.recv().await
-                && let ItemBody::UserMessage { text, links, handed_on } = item.body
+                && let ItemBody::UserMessage { text, pieces } = item.body
                 && text.contains("Why?")
             {
-                return (text, links, handed_on);
+                return (text, pieces);
             }
         }
     })
     .await
     .expect("delivered");
-    let (text, links, handed_on) = delivered;
+    let (text, pieces) = delivered;
+    let links = harness_contracts::links_of(&pieces);
     assert!(text.starts_with("From the user (discussion d1):\n\nWhy?\n\n---\n\nFrom the user (discussion d1):\n\nSee #gone."), "{text}");
     let said: String = text.chars().skip(links[0].start).take(links[0].end - links[0].start).collect();
     assert_eq!(said, "#gone", "the link moved with its words");
-    assert!(handed_on.len() == 1 && handed_on[0].contains("gone since it was linked"), "{handed_on:?}");
+    assert!(pieces.len() == 1 && pieces[0].text.contains("gone since it was linked"), "{pieces:?}");
 }
 
 /// A store that can be made to fail, for what happens then.

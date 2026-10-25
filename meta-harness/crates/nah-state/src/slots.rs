@@ -119,8 +119,8 @@ impl SlotStore for StateDb {
 
     fn hold_report(&self, report: &HeldReport) -> Result<(), String> {
         self.transaction(|tx| {
-            let links = serde_json::to_string(&report.links).map_err(failed)?;
-            tx.execute("INSERT INTO held_reports (to_slot, from_slot, text, links, at_ms) VALUES (?1, ?2, ?3, ?4, ?5)", params![report.to.as_str(), report.from, report.text, links, report.at_ms as i64]).map_err(failed)?;
+            let links = serde_json::to_string(&report.message.links).map_err(failed)?;
+            tx.execute("INSERT INTO held_reports (to_slot, from_slot, text, links, at_ms) VALUES (?1, ?2, ?3, ?4, ?5)", params![report.to.as_str(), report.from, report.message.text, links, report.at_ms as i64]).map_err(failed)?;
             Ok(())
         })
         .map_err(|e| e.to_string())
@@ -131,7 +131,7 @@ impl SlotStore for StateDb {
             let mut stmt = tx.prepare("SELECT from_slot, text, links, at_ms FROM held_reports WHERE to_slot = ?1 ORDER BY seq").map_err(failed)?;
             // (Links that don't read: the text alone.)
             let reports = stmt
-                .query_map(params![to.as_str()], |r| Ok(HeldReport { to: to.clone(), from: r.get(0)?, text: r.get(1)?, links: serde_json::from_str(&r.get::<_, String>(2)?).unwrap_or_default(), at_ms: r.get::<_, i64>(3)? as u64 }))
+                .query_map(params![to.as_str()], |r| Ok(HeldReport { to: to.clone(), from: r.get(0)?, message: harness_contracts::Message { text: r.get(1)?, links: serde_json::from_str(&r.get::<_, String>(2)?).unwrap_or_default() }, at_ms: r.get::<_, i64>(3)? as u64 }))
                 .map_err(failed)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(failed)?;

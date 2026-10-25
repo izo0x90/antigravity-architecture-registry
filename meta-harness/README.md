@@ -376,8 +376,11 @@ draws them, unnumbered (a call's texts may be a part of the file); one
 written whole (no old text came with it) says so; `g x` shows the turn's changes in
 the Changes view, on that file. Your messages show as you typed them,
 what they link as chips (Enter goes to what one links) and what was handed
-on with them folded under them: the server keeps what was typed by the
-text the agent was handed, so a session's replayed history shows it too.
+on with them folded under them. Each tag or thing a message links goes to
+the agent as a piece of its own, labelled with what it links, where the
+words link it and how long it is; a session's replayed history is read
+back from those labels, as each harness's pack says it writes them
+(`[provides.settings.replay]`). Nothing of a message is kept besides.
 
 Tool servers: every session gets ours (`/api/mcp/sse`) and the project's,
 kept in `.nah/mcp.toml` (`GET`/`PUT /api/mcp/servers`; `Space p a` adds

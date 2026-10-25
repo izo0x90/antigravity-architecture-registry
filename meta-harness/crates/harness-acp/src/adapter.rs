@@ -82,7 +82,7 @@ impl AcpAdapter {
         let init = cx.send_request(acp::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client)).block_task().await.map_err(acp_error)?;
         let declared = AcpDeclaredCapabilities::of(&init, &self.profile);
         // Before a replay: how its messages' pieces are read back.
-        lock(&shared.state).read_pieces_by(self.profile.replayed_pieces(&declared.declared));
+        lock(&shared.state).replays_by(self.profile.replayed_pieces(&declared.declared), self.profile.chunks());
         let agent = &init.agent_capabilities;
         let mcp: Vec<acp::McpServer> = config.mcp_servers.iter().map(|s| mcp_server(s, agent.mcp_capabilities.sse)).collect();
         let meta = self.profile.session_meta();
@@ -136,7 +136,7 @@ impl AcpAdapter {
 
         let session = AcpSession {
             thread_id: config.thread_id.clone(),
-            link: Arc::new(Link { cx, native_id, shared, takes_pieces: declared.declared.pieces }),
+            link: Arc::new(Link { cx, native_id, shared, sending: if declared.declared.pieces { crate::pieces::Sending::AsPieces } else { crate::pieces::Sending::InText } }),
             declared: declared.declared,
             supports_close: agent.session_capabilities.close.is_some(),
             connection,

@@ -100,7 +100,7 @@ fn long_unbreakable_lines_stay_inside_a_narrow_panel() {
     }
     let steps = vec![harness_contracts::PlanStep { text: format!("read {long}"), status: harness_contracts::StepStatus::Pending }];
     let cases: Vec<(&str, Vec<ClientEvent>)> = vec![
-        ("your message", vec![item(100, ItemBody::UserMessage { text: format!("read {long} please"), links: Vec::new(), handed_on: Vec::new() })]),
+        ("your message", vec![item(100, ItemBody::UserMessage { text: format!("read {long} please"), pieces: Vec::new() })]),
         ("a message's words", vec![item(100, said(format!("It's in {long}, and `{long}` too. {words}")))]),
         ("a message's code block", vec![item(100, said(format!("```\n{long} {long}\n```")))]),
         ("a message's table", vec![item(100, said(format!("| file | lines |\n|---|---|\n| {long} | 3 |\n\n{words}")))]),
@@ -619,11 +619,11 @@ fn your_message_shows_its_links_as_chips_and_what_went_with_it_folded() {
     focus(&ctx, &mut app, BufferKind::Chat);
     told(&app, ClientEvent::TagUpdated { tag: harness_contracts::Tag { id: harness_contracts::TagId::new("x1"), name: "flaky".into(), colour: 2, note: String::new(), noted_by: String::new(), on: Vec::new() } });
     let handed_on = "#flaky\n- terminal t1 line 3: the attached words";
-    let links = vec![harness_contracts::Link { start: 8, end: 14, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("x1") }, include: harness_contracts::Include::Auto }];
+    let piece = harness_contracts::Piece { links: vec![harness_contracts::Link { start: 8, end: 14, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("x1") }, include: harness_contracts::Include::Auto }], text: handed_on.into() };
     {
         let mut agents = app.desk.shared.agents.get_mut();
-        agents.apply(item(40, ItemBody::UserMessage { text: "look at #flaky.".into(), links, handed_on: vec![handed_on.into()] }));
-        agents.apply(item(41, ItemBody::UserMessage { text: "older one, as sent".into(), links: Vec::new(), handed_on: Vec::new() }));
+        agents.apply(item(40, ItemBody::UserMessage { text: "look at #flaky.".into(), pieces: vec![piece] }));
+        agents.apply(item(41, ItemBody::UserMessage { text: "older one, as sent".into(), pieces: Vec::new() }));
     }
     frame(&ctx, &mut app, vec![]);
     let text = texts(&frame(&ctx, &mut app, vec![]));

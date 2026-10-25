@@ -1,0 +1,56 @@
+{
+ "recorded": "2026-10-25: a prompt of words and two pieces, then the session replayed (session/load) in a fresh process: every user_message_chunk, as sent.",
+ "words": "see #flaky and @a.rs: reply with the two secret words, nothing else.",
+ "pieces": [
+  {
+   "label": "nah://tag/flaky?at=4-10-auto&len=46",
+   "text": "#flaky (a tag)\nThe first secret word is HERON."
+  },
+  {
+   "label": "nah://thing?subject=%7B%22kind%22%3A%22code_file%22%2C%22path%22%3A%22a.rs%22%7D&at=15-20-pointer&len=52",
+   "text": "@a.rs\n- a.rs:\n  // The second secret word is MAPLE.\n"
+  }
+ ],
+ "replayed": [
+  {
+   "sessionUpdate": "user_message_chunk",
+   "content": {
+    "type": "text",
+    "text": "see #flaky and @a.rs: reply with the two secret words, nothing else."
+   },
+   "messageId": "8740a0b7-7cb6-40ab-a319-1ff9ed5830dd"
+  },
+  {
+   "sessionUpdate": "user_message_chunk",
+   "content": {
+    "type": "text",
+    "text": "nah://tag/flaky?at=4-10-auto&len=46"
+   },
+   "messageId": "8740a0b7-7cb6-40ab-a319-1ff9ed5830dd"
+  },
+  {
+   "sessionUpdate": "user_message_chunk",
+   "content": {
+    "type": "text",
+    "text": "nah://thing?subject=%7B%22kind%22%3A%22code_file%22%2C%22path%22%3A%22a.rs%22%7D&at=15-20-pointer&len=52"
+   },
+   "messageId": "8740a0b7-7cb6-40ab-a319-1ff9ed5830dd"
+  },
+  {
+   "sessionUpdate": "user_message_chunk",
+   "content": {
+    "type": "text",
+    "text": "\n<context ref=\"nah://tag/flaky?at=4-10-auto&len=46\">\n#flaky (a tag)\nThe first secret word is HERON.\n</context>"
+   },
+   "messageId": "8740a0b7-7cb6-40ab-a319-1ff9ed5830dd"
+  },
+  {
+   "sessionUpdate": "user_message_chunk",
+   "content": {
+    "type": "text",
+    "text": "\n<context ref=\"nah://thing?subject=%7B%22kind%22%3A%22code_file%22%2C%22path%22%3A%22a.rs%22%7D&at=15-20-pointer&len=52\">\n@a.rs\n- a.rs:\n  // The second secret word is MAPLE.\n\n</context>"
+   },
+   "messageId": "8740a0b7-7cb6-40ab-a319-1ff9ed5830dd"
+  }
+ ]
+}

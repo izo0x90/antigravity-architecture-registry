@@ -1,108 +1,48 @@
 //! A message's pieces, sent and read back. Each tag or thing a message
 //! links goes to the agent as a piece of its own (an embedded resource),
-//! labelled with what it is and where the message links it; an agent that
-//! takes no pieces gets them after the text, written our way. A replayed
-//! message is read back by the way its agent writes a piece into it (its
-//! pack's `replayed_piece`), or ours: each label says what its piece is
-//! and where the text links it, so nothing is kept, looked up or matched.
+//! labelled (`Piece::label`) with what it links, where the message links
+//! it, and how long its text is; an agent that takes no pieces gets them
+//! after the text, written our way. A replayed message is read back by the
+//! way its agent writes pieces into it (its pack's `replay`), or ours: each
+//! label says what its piece is and how long, so nothing is kept, looked
+//! up or matched, and nothing in a piece's text is mistaken for another.
+
+use std::sync::LazyLock;
 
 use agent_client_protocol::schema::v1 as acp;
-use harness_contracts::{Attachment, Include, Link, Linked, Piece, TagId, TurnInput};
-use url::form_urlencoded;
-
-/// What our labels start with.
-const SCHEME: &str = "nah://";
+use harness_contracts::{LABEL_START, Link, Piece};
 
 /// How we write a piece after a message's text, for an agent that takes
 /// no pieces (and read it back from its replay).
 const OURS: &str = "\n\n--- Linked ({uri}), as it is now:\n{content}";
 
-/// A piece's label: what it links (a tag, or a thing), how it goes in,
-/// and the spans of the message's text that link it (`nah://tag/<id>?at=4-9,20-25&include=auto`).
-pub fn label(piece: &Piece) -> String {
-    let Some(first) = piece.links.first() else { return format!("{SCHEME}piece") };
-    let at: Vec<String> = piece.links.iter().map(|l| format!("{}-{}", l.start, l.end)).collect();
-    // Linked twice, it goes whole if either link asks for it.
-    let include = if piece.links.iter().any(|l| l.include == Include::Whole) { Include::Whole } else { first.include };
-    let mut query = form_urlencoded::Serializer::new(String::new());
-    query.append_pair("at", &at.join(","));
-    query.append_pair("include", include_word(include));
-    match &first.to {
-        Linked::Tag { tag } => format!("{SCHEME}tag/{}?{}", form_urlencoded::byte_serialize(tag.as_str().as_bytes()).collect::<String>(), query.finish()),
-        Linked::Thing { subject } => {
-            query.append_pair("subject", &serde_json::to_string(subject).unwrap_or_default());
-            format!("{SCHEME}thing?{}", query.finish())
-        }
-    }
+static OURS_READ: LazyLock<Replay> = LazyLock::new(|| Replay { listed: None, piece: Template::ours() });
+
+/// How an agent is sent a message's pieces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sending {
+    /// As pieces (it takes embedded resources).
+    AsPieces,
+    /// Written after the text, our way.
+    InText,
 }
 
-fn include_word(include: Include) -> &'static str {
-    match include {
-        Include::Auto => "auto",
-        Include::Whole => "whole",
-        Include::Pointer => "pointer",
-    }
-}
-
-/// The links a label says its piece is linked by (none: not one of ours).
-pub fn links_of(label: &str) -> Option<Vec<Link>> {
-    let (path, query) = label.strip_prefix(SCHEME)?.split_once('?')?;
-    let (mut at, mut include, mut subject) = (None, None, None);
-    for (key, value) in form_urlencoded::parse(query.as_bytes()) {
-        match key.as_ref() {
-            "at" => at = Some(value.into_owned()),
-            "include" => include = Some(value.into_owned()),
-            "subject" => subject = Some(value.into_owned()),
-            _ => {}
-        }
-    }
-    let to = match path.strip_prefix("tag/") {
-        Some(tag) => Linked::Tag { tag: TagId::new(form_urlencoded::parse(format!("t={tag}").as_bytes()).next()?.1.into_owned()) },
-        None if path == "thing" => Linked::Thing { subject: serde_json::from_str(&subject?).ok()? },
-        None => return None,
-    };
-    let include = match include?.as_str() {
-        "auto" => Include::Auto,
-        "whole" => Include::Whole,
-        "pointer" => Include::Pointer,
-        _ => return None,
-    };
-    at?.split(',')
-        .map(|span| {
-            let (start, end) = span.split_once('-')?;
-            let (start, end) = (start.parse().ok()?, end.parse().ok()?);
-            (start < end).then(|| Link { start, end, to: to.clone(), include })
-        })
-        .collect()
-}
-
-/// A turn's input as the agent gets it: its text, a piece for each tag
-/// or thing it links (`takes_pieces`; else written after the text, our
-/// way), then its attachments.
-pub fn blocks(input: TurnInput, takes_pieces: bool) -> Vec<acp::ContentBlock> {
-    let TurnInput { mut text, attachments, pieces } = input;
-    let mut blocks = Vec::with_capacity(1 + pieces.len() + attachments.len());
-    if takes_pieces {
-        blocks.push(acp::ContentBlock::Text(acp::TextContent::new(text)));
+/// A message's text and pieces as the agent gets them: its text, then a
+/// piece for each, or each written after the text.
+pub fn blocks(text: String, pieces: Vec<Piece>, sending: Sending) -> Vec<acp::ContentBlock> {
+    if sending == Sending::InText {
+        let mut text = text;
         for p in &pieces {
-            let contents = acp::TextResourceContents::new(p.text.clone(), label(p)).mime_type("text/plain".to_owned());
-            blocks.push(acp::ContentBlock::Resource(acp::EmbeddedResource::new(acp::EmbeddedResourceResource::TextResourceContents(contents))));
+            text.push_str(&OURS_READ.piece.write(&p.label(), &p.text));
         }
-    } else {
-        let ours = Template::ours();
-        for p in &pieces {
-            text.push_str(&ours.write(&label(p), &p.text));
-        }
-        blocks.push(acp::ContentBlock::Text(acp::TextContent::new(text)));
+        return vec![acp::ContentBlock::Text(acp::TextContent::new(text))];
     }
-    for attachment in attachments {
-        blocks.push(match attachment {
-            Attachment::File { path } => {
-                let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
-                acp::ContentBlock::ResourceLink(acp::ResourceLink::new(name, format!("file://{path}")))
-            }
-            Attachment::Image { mime_type, data_base64 } => acp::ContentBlock::Image(acp::ImageContent::new(data_base64, mime_type)),
-        });
+    let mut blocks = Vec::with_capacity(1 + pieces.len());
+    blocks.push(acp::ContentBlock::Text(acp::TextContent::new(text)));
+    for p in pieces {
+        let label = p.label();
+        let contents = acp::TextResourceContents::new(p.text, label).mime_type("text/plain".to_owned());
+        blocks.push(acp::ContentBlock::Resource(acp::EmbeddedResource::new(acp::EmbeddedResourceResource::TextResourceContents(contents))));
     }
     blocks
 }
@@ -114,60 +54,58 @@ enum Part {
     Content,
 }
 
-/// How a piece is written into a message's text: words around `{uri}`
-/// (its label: once or more, each followed by words that end it) and
-/// `{content}` (its text: once, after the first `{uri}`).
+/// How something is written with a piece's label (`{uri}`) and maybe its
+/// text (`{content}`): the words around them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Template {
-    /// Up to its content.
+struct Template {
+    /// Up to its content (all of it, when it has none).
     head: Vec<Part>,
-    /// What ends its content (may be nothing: the next piece, or the end,
-    /// ends it).
+    /// After its content.
     tail: String,
+    content: bool,
 }
 
 impl Template {
-    pub fn parse(template: &str) -> Result<Self, String> {
+    fn parse(template: &str, content: bool) -> Result<Self, String> {
         let mut parts = Vec::new();
         let mut rest = template;
         while !rest.is_empty() {
             let next = [("{uri}", Part::Uri), ("{content}", Part::Content)].into_iter().filter_map(|(word, part)| rest.find(word).map(|at| (at, word, part))).min_by_key(|(at, ..)| *at);
-            match next {
-                Some((at, word, part)) => {
-                    if at > 0 {
-                        parts.push(Part::Text(rest[..at].to_owned()));
-                    }
-                    parts.push(part);
-                    rest = &rest[at + word.len()..];
-                }
-                None => {
-                    parts.push(Part::Text(rest.to_owned()));
-                    rest = "";
-                }
+            let Some((at, word, part)) = next else {
+                parts.push(Part::Text(rest.to_owned()));
+                break;
+            };
+            if at > 0 {
+                parts.push(Part::Text(rest[..at].to_owned()));
             }
+            parts.push(part);
+            rest = &rest[at + word.len()..];
         }
-        let content = parts.iter().position(|p| *p == Part::Content).ok_or("it has no {content}")?;
-        let (head, tail) = (parts[..content].to_vec(), &parts[content + 1..]);
+        // A label ends with its length's digits: a digit right after one
+        // would read as more of it.
+        if parts.windows(2).any(|w| w[0] == Part::Uri && matches!(&w[1], Part::Text(t) if t.starts_with(|c: char| c.is_ascii_digit()))) {
+            return Err("a {uri} can't be followed by a digit".into());
+        }
+        let (head, tail) = match parts.iter().position(|p| *p == Part::Content) {
+            Some(at) if content => (parts[..at].to_vec(), parts[at + 1..].to_vec()),
+            Some(_) => return Err("it can't have a {content}".into()),
+            None if content => return Err("it has no {content}".into()),
+            None => (parts, Vec::new()),
+        };
         if !head.contains(&Part::Uri) {
             return Err("it has no {uri} before its {content}".into());
         }
-        if tail.iter().any(|p| !matches!(p, Part::Text(_))) {
-            return Err("after its {content} it may have only words".into());
-        }
-        // Each label's end is found by the words after it.
-        if head.windows(2).any(|w| w[0] == Part::Uri && !matches!(&w[1], Part::Text(t) if !t.is_empty())) || head.last() == Some(&Part::Uri) {
-            return Err("each {uri} needs words after it".into());
-        }
-        let tail = tail.iter().map(|p| if let Part::Text(t) = p { t.as_str() } else { "" }).collect();
-        Ok(Self { head, tail })
+        let tail = tail.into_iter().map(|p| if let Part::Text(t) = p { Ok(t) } else { Err("after its {content} it may have only words".to_owned()) }).collect::<Result<String, _>>()?;
+        Ok(Self { head, tail, content })
     }
 
-    /// Ours: for an agent that takes no pieces.
-    pub fn ours() -> Self {
-        Self::parse(OURS).unwrap_or_else(|e| unreachable!("our own template reads: {e}"))
+    fn ours() -> Self {
+        let (head, content) = OURS.split_once("{content}").unwrap_or((OURS, ""));
+        let (before, after) = head.split_once("{uri}").unwrap_or((head, ""));
+        Self { head: vec![Part::Text(before.to_owned()), Part::Uri, Part::Text(after.to_owned())], tail: content.to_owned(), content: true }
     }
 
-    /// A piece written as this template writes it.
+    /// A piece written as this writes it.
     fn write(&self, label: &str, content: &str) -> String {
         let mut out = String::new();
         for part in &self.head {
@@ -177,98 +115,158 @@ impl Template {
                 Part::Content => {}
             }
         }
-        out.push_str(content);
-        out.push_str(&self.tail);
+        if self.content {
+            out.push_str(content);
+            out.push_str(&self.tail);
+        }
         out
     }
 
-    /// Where the next piece starts in `text` at or after `from`: its
-    /// start, where its content starts, and its links.
-    fn next_piece(&self, text: &str, from: usize) -> Option<(usize, usize, Vec<Link>)> {
-        let lead = match self.head.first() {
-            Some(Part::Text(t)) => t.as_str(),
+    /// What starts it, before a label: where to look for one.
+    fn lead(&self) -> &str {
+        match self.head.first() {
+            Some(Part::Text(t)) => t,
             _ => "",
-        };
-        let needle = format!("{lead}{SCHEME}");
-        let mut search = from;
-        while let Some(found) = text.get(search..).and_then(|t| t.find(&needle)) {
-            let start = search + found;
-            if let Some((content, links)) = self.head_at(text, start) {
-                return Some((start, content, links));
-            }
-            search = start + needle.len();
         }
-        None
     }
 
-    /// The template's head read at `at`: where its content starts, and its links.
-    fn head_at(&self, text: &str, at: usize) -> Option<(usize, Vec<Link>)> {
+    /// This written at `at` in `text`: its label, the label's links, its
+    /// content's length, and where its content (or its end) is.
+    fn head_at<'a>(&self, text: &'a str, at: usize) -> Option<(&'a str, Vec<Link>, usize, usize)> {
         let mut pos = at;
-        let mut label: Option<&str> = None;
-        for (n, part) in self.head.iter().enumerate() {
+        let mut found: Option<Labelled<'a>> = None;
+        for part in &self.head {
             match part {
                 Part::Text(t) => {
-                    if !text.get(pos..)?.starts_with(t.as_str()) {
-                        return None;
-                    }
-                    pos += t.len();
+                    pos += text.get(pos..)?.starts_with(t.as_str()).then_some(t.len())?;
                 }
                 Part::Uri => {
-                    let Some(Part::Text(ends)) = self.head.get(n + 1) else { return None };
-                    let len = text.get(pos..)?.find(ends.as_str())?;
-                    let this = &text[pos..pos + len];
-                    if this.contains(char::is_whitespace) || label.is_some_and(|l| l != this) {
+                    let (links, len, label_len) = Piece::read_label(text.get(pos..)?)?;
+                    let label = &text[pos..pos + label_len];
+                    if found.as_ref().is_some_and(|(l, ..)| *l != label) {
                         return None;
                     }
-                    label = Some(this);
-                    pos += len;
+                    found = Some((label, links, len));
+                    pos += label_len;
                 }
                 Part::Content => return None,
             }
         }
-        Some((pos, links_of(label?)?))
+        let (label, links, len) = found?;
+        Some((label, links, len, pos))
     }
 
-    /// A replayed message's text read back: its own text, and its pieces.
-    /// None: no piece in it, or one whose links aren't spans of its text
-    /// (not ours): it's shown as it came.
+    /// A piece written at `at` in `text` (labelled `expected`, when
+    /// that's known): it, and where it ends.
+    fn piece_at(&self, text: &str, at: usize, expected: Option<&str>) -> Option<(Piece, usize)> {
+        let (label, links, len, pos) = self.head_at(text, at)?;
+        if expected.is_some_and(|e| e != label) {
+            return None;
+        }
+        let content = text.get(pos..pos + len)?;
+        let end = pos + len;
+        let end = end + text.get(end..)?.starts_with(self.tail.as_str()).then_some(self.tail.len())?;
+        Some((Piece { links, text: content.to_owned() }, end))
+    }
+}
+
+/// A label read, its links, and its content's length.
+type Labelled<'a> = (&'a str, Vec<Link>, usize);
+
+/// How an agent's replay writes the pieces of a message back into its
+/// text, after its words: each piece (`piece`), all of them first listed
+/// by their labels when it lists them (`listed`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Replay {
+    listed: Option<Template>,
+    piece: Template,
+}
+
+impl Replay {
+    /// From a pack's `replay` (what a piece is written as; what each is
+    /// listed as first, when they are).
+    pub fn parse(piece: &str, listed: Option<&str>) -> Result<Self, String> {
+        Ok(Self {
+            piece: Template::parse(piece, true).map_err(|why| format!("its piece: {why}"))?,
+            listed: listed.map(|l| Template::parse(l, false).map_err(|why| format!("its list: {why}"))).transpose()?,
+        })
+    }
+
+    /// Ours: for an agent that takes no pieces.
+    pub fn ours() -> Self {
+        OURS_READ.clone()
+    }
+
+    /// A piece as we write it after a message's text.
+    #[cfg(test)]
+    pub fn ours_written(label: &str, content: &str) -> String {
+        OURS_READ.piece.write(label, content)
+    }
+
+    /// A replayed message's text read back: its own words, and its pieces.
+    /// None: there's none in it, or what follows its words isn't wholly
+    /// pieces whose links are in its words (it's shown as it came).
     pub fn read(&self, text: &str) -> Option<(String, Vec<Piece>)> {
-        let (start, mut content, mut links) = self.next_piece(text, 0)?;
-        let words = &text[..start];
-        let len = words.chars().count();
-        let mut pieces = Vec::new();
-        loop {
-            let next = self.next_piece(text, content);
-            let until = next.as_ref().map_or(text.len(), |(s, ..)| *s);
-            let body = &text[content..until];
-            let body = match self.tail.as_str() {
-                "" => body.trim_end_matches('\n'),
-                tail => &body[..body.rfind(tail)?],
-            };
-            if links.iter().any(|l| l.end > len) {
-                return None;
+        let first = self.listed.as_ref().unwrap_or(&self.piece);
+        let needle = format!("{}{LABEL_START}", first.lead());
+        let mut from = 0;
+        while let Some(found) = text.get(from..).and_then(|t| t.find(&needle)) {
+            let at = from + found;
+            if let Some(pieces) = self.pieces_from(text, at) {
+                let words = &text[..at];
+                let len = words.chars().count();
+                return pieces.iter().flat_map(|p| &p.links).all(|l| l.end <= len).then(|| (words.to_owned(), pieces));
             }
-            pieces.push(Piece { links, text: body.to_owned() });
-            match next {
-                Some((_, c, l)) => (content, links) = (c, l),
-                None => break,
+            from = at + needle.len();
+        }
+        None
+    }
+
+    /// The pieces written from `at` to the end of `text`.
+    fn pieces_from(&self, text: &str, at: usize) -> Option<Vec<Piece>> {
+        let mut pos = at;
+        let mut pieces = Vec::new();
+        match &self.listed {
+            Some(listed) => {
+                let mut labels = Vec::new();
+                while let Some((label, .., end)) = listed.head_at(text, pos) {
+                    labels.push(label);
+                    pos = end;
+                }
+                for label in labels {
+                    let (piece, end) = self.piece.piece_at(text, pos, Some(label))?;
+                    pieces.push(piece);
+                    pos = end;
+                }
+            }
+            None => {
+                while pos < text.len() {
+                    let (piece, end) = self.piece.piece_at(text, pos, None)?;
+                    pieces.push(piece);
+                    pos = end;
+                }
             }
         }
-        Some((words.to_owned(), pieces))
+        (pos == text.len() && !pieces.is_empty()).then_some(pieces)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use harness_contracts::{Subject, TerminalId};
+    use harness_contracts::{Include, Linked, Subject, TagId, TerminalId};
 
     use super::*;
 
-    const CLAUDE: &str = "{uri}\n<context ref=\"{uri}\">\n{content}\n</context>";
-    const ANTIGRAVITY: &str = "Embedded resource ({uri}):\n{content}";
+    /// A pack's replay, as it ships.
+    fn shipped(pack: &str) -> Replay {
+        let path = format!("{}/../../packs/harness/{pack}/pack.toml", env!("CARGO_MANIFEST_DIR"));
+        let manifest: toml::Value = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let replay = &manifest["provides"]["settings"]["replay"];
+        Replay::parse(replay["piece"].as_str().unwrap(), replay.get("listed").and_then(|l| l.as_str())).unwrap()
+    }
 
-    fn tag(start: usize, end: usize) -> Link {
-        Link { start, end, to: Linked::Tag { tag: TagId::new("flaky build") }, include: Include::Auto }
+    fn tag(start: usize, end: usize, include: Include) -> Link {
+        Link { start, end, to: Linked::Tag { tag: TagId::new("flaky build") }, include }
     }
 
     fn lines(start: usize, end: usize) -> Link {
@@ -276,85 +274,91 @@ mod tests {
         Link { start, end, to: Linked::Thing { subject }, include: Include::Pointer }
     }
 
-    /// "see #flaky and @out, #flaky again"
+    /// "see #flaky and @out, #flaky again": a tag linked twice (each link
+    /// its own way), lines once; their texts hold what looks like labels
+    /// and the templates' own words.
     fn sent() -> (&'static str, Vec<Piece>) {
         let text = "see #flaky and @out, #flaky again";
         let pieces = vec![
-            Piece { links: vec![tag(4, 10), tag(21, 27)], text: "#flaky (fails on Mondays)\n- lines 1 to 2:\n  a (b) c\n</context> inside".into() },
-            Piece { links: vec![lines(15, 19)], text: "@out\n- lines 3 to 9 (7 lines; its start only)".into() },
+            Piece { links: vec![tag(4, 10, Include::Auto), tag(21, 27, Include::Pointer)], text: "#flaky (fails)\n</context>\nnah://tag/x?at=0-1-auto&len=3\nEmbedded resource (nah://tag/x?at=0-1-auto&len=0):\n".into() },
+            Piece { links: vec![lines(15, 19)], text: "@out\n- lines 3 to 9 (7 lines; its start only)\n".into() },
         ];
         (text, pieces)
     }
 
-    #[test]
-    fn a_label_says_what_its_piece_links_and_where() {
-        let (_, pieces) = sent();
-        let label = label(&pieces[0]);
-        assert_eq!(label, "nah://tag/flaky+build?at=4-10%2C21-27&include=auto");
-        assert_eq!(links_of(&label), Some(pieces[0].links.clone()));
-        let thing = label_of_thing();
-        assert!(!thing.contains(['(', ')', '"', ' ', '\n']), "{thing}: nothing an agent's own writing ends a label at");
-        assert_eq!(links_of(&thing), Some(pieces[1].links.clone()));
-        assert_eq!(links_of("nah://tag/x?at=9-3&include=auto"), None, "not a span");
-        assert_eq!(links_of("https://example.com/x?at=1-2&include=auto"), None, "not ours");
-    }
-
-    fn label_of_thing() -> String {
-        label(&sent().1[1])
-    }
-
-    /// What each agent replays (as recorded: Claude Code's label, then
-    /// its context; Antigravity's words run on into its own heading), and
-    /// ours, read back to the text and its pieces.
-    #[test]
-    fn a_replayed_message_reads_back_to_its_text_and_pieces_whoever_wrote_it() {
-        let (text, pieces) = sent();
-        let claude = Template::parse(CLAUDE).unwrap();
-        let antigravity = Template::parse(ANTIGRAVITY).unwrap();
-        for (name, template) in [("claude", &claude), ("antigravity", &antigravity), ("ours", &Template::ours())] {
-            let replayed: String = std::iter::once(text.to_owned()).chain(pieces.iter().map(|p| template.write(&label(p), &p.text))).collect();
-            let (words, read) = template.read(&replayed).unwrap_or_else(|| panic!("{name}: {replayed}"));
-            assert_eq!(words, text, "{name}");
-            assert_eq!(read, pieces, "{name}");
+    /// As each agent writes a message's pieces into its replay (read in its
+    /// source: Claude Code's connector lists every label after the words,
+    /// then every piece as a `<context>`; Antigravity's server runs each
+    /// on after the words as `Embedded resource (…):`), and ours.
+    fn replayed(agent: &str, text: &str, pieces: &[Piece]) -> String {
+        let mut out = text.to_owned();
+        match agent {
+            "claude-code" => {
+                pieces.iter().for_each(|p| out.push_str(&p.label()));
+                pieces.iter().for_each(|p| out.push_str(&format!("\n<context ref=\"{}\">\n{}\n</context>", p.label(), p.text)));
+            }
+            "antigravity-acp" => pieces.iter().for_each(|p| out.push_str(&format!("Embedded resource ({}):\n{}", p.label(), p.text))),
+            _ => pieces.iter().for_each(|p| out.push_str(&Template::ours().write(&p.label(), &p.text))),
         }
-        // The recorded replays themselves.
-        let recorded = "Look at #probe-note. What is the secret word in it?nah://tag/probe-note?at=8-19&include=auto\n<context ref=\"nah://tag/probe-note?at=8-19&include=auto\">\n#probe-note (a tag)\nThe secret word is PELICAN-42.\n</context>";
-        let (words, read) = claude.read(recorded).unwrap();
-        assert_eq!((words.as_str(), read[0].text.as_str()), ("Look at #probe-note. What is the secret word in it?", "#probe-note (a tag)\nThe secret word is PELICAN-42."));
-        let recorded = "Look at #probe-note. What is the secret word in it?Embedded resource (nah://tag/probe-note?at=8-19&include=auto):\n#probe-note (a tag)\nThe secret word is PELICAN-42.";
-        assert_eq!(antigravity.read(recorded).unwrap().1[0].links, vec![Link { start: 8, end: 19, to: Linked::Tag { tag: TagId::new("probe-note") }, include: Include::Auto }]);
+        out
     }
 
     #[test]
-    fn what_isnt_a_piece_of_ours_is_left_as_it_came() {
-        let antigravity = Template::parse(ANTIGRAVITY).unwrap();
-        assert_eq!(antigravity.read("plain words"), None);
-        assert_eq!(antigravity.read("see nah://tag/x?at=0-3&include=auto"), None, "a label, not where a piece is");
-        // A label whose spans aren't in the text: not ours.
-        assert_eq!(antigravity.read("hi Embedded resource (nah://tag/x?at=0-30&include=auto):\nx"), None);
-        // An agent's own resource (another scheme) in a message: not a piece.
+    fn a_replayed_message_reads_back_to_its_words_and_pieces_whoever_wrote_it() {
+        let (text, pieces) = sent();
+        for (agent, replay) in [("claude-code", shipped("claude-code")), ("antigravity-acp", shipped("antigravity-acp")), ("ours", Replay::ours())] {
+            for n in 0..=pieces.len() {
+                let replayed = replayed(agent, text, &pieces[..n]);
+                let read = replay.read(&replayed);
+                match n {
+                    0 => assert_eq!(read, None, "{agent}: no piece, as it came"),
+                    _ => assert_eq!(read, Some((text.to_owned(), pieces[..n].to_vec())), "{agent}, {n} pieces: {replayed}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn what_isnt_wholly_pieces_of_ours_is_left_as_it_came() {
+        let (text, pieces) = sent();
+        let claude = shipped("claude-code");
+        let antigravity = shipped("antigravity-acp");
+        let whole = replayed("antigravity-acp", text, &pieces);
+        // Another message run on after it (an agent that joins them).
+        assert_eq!(antigravity.read(&format!("{whole}try again")), None);
+        // Cut short, or a byte off.
+        assert_eq!(antigravity.read(&whole[..whole.len() - 1]), None);
+        // A label's span past the words: not ours.
+        let far = Piece { links: vec![tag(4, 60, Include::Auto)], text: "x".into() };
+        assert_eq!(antigravity.read(&replayed("antigravity-acp", text, &[far])), None);
+        // Labels pasted into your own words, then the real pieces: the
+        // words are all you wrote.
+        let pasted = format!("look: {} ok", replayed("claude-code", "x", &pieces[..1]));
+        let real = Piece { links: vec![tag(0, 4, Include::Auto)], text: "#new".into() };
+        assert_eq!(claude.read(&replayed("claude-code", &pasted, std::slice::from_ref(&real))), Some((pasted.clone(), vec![real])));
+        // An agent's own resource (another scheme): not a piece.
         assert_eq!(antigravity.read("hi Embedded resource (file:///a.rs):\nfn a() {}"), None);
     }
 
     #[test]
-    fn a_template_needs_a_label_ended_by_words_and_one_content() {
-        assert!(Template::parse(CLAUDE).is_ok() && Template::parse(ANTIGRAVITY).is_ok());
-        assert!(Template::parse("{uri}{content}").is_err(), "the label's end can't be found");
-        assert!(Template::parse("({uri})").is_err(), "no content");
-        assert!(Template::parse("{content} ({uri})").is_err(), "the label after the content");
+    fn a_template_has_a_label_its_content_once_and_no_digit_after_a_label() {
+        assert!(Replay::parse("{uri}{content}", None).is_ok(), "a label ends itself");
+        assert!(Replay::parse("({uri})", None).is_err(), "no content");
+        assert!(Replay::parse("{content} ({uri})", None).is_err(), "the label after the content");
+        assert!(Replay::parse("{uri}1{content}", None).is_err(), "a digit after a label");
+        assert!(Replay::parse("{uri}{content}", Some("[{uri}] {content}")).is_err(), "a list has no content");
     }
 
     #[test]
     fn an_agent_that_takes_pieces_gets_them_as_pieces_else_written_after_the_text() {
         let (text, pieces) = sent();
-        let input = TurnInput { pieces: pieces.clone(), ..TurnInput::of(text) };
-        let as_pieces = blocks(input.clone(), true);
+        let as_pieces = blocks(text.into(), pieces.clone(), Sending::AsPieces);
         assert!(matches!(&as_pieces[0], acp::ContentBlock::Text(t) if t.text == text));
         let acp::ContentBlock::Resource(r) = &as_pieces[1] else { panic!("{:?}", as_pieces[1]) };
-        let acp::EmbeddedResourceResource::TextResourceContents(c) = &r.resource else { panic!() };
-        assert_eq!((c.uri.as_str(), c.text.as_str()), (label(&pieces[0]).as_str(), pieces[0].text.as_str()));
-        let as_text = blocks(input, false);
+        let acp::EmbeddedResourceResource::TextResourceContents(c) = &r.resource else { panic!("{r:?}") };
+        assert_eq!((c.uri.as_str(), c.text.as_str()), (pieces[0].label().as_str(), pieces[0].text.as_str()));
+        let as_text = blocks(text.into(), pieces.clone(), Sending::InText);
         let [acp::ContentBlock::Text(t)] = as_text.as_slice() else { panic!("{as_text:?}") };
-        assert_eq!(Template::ours().read(&t.text), Some((text.to_owned(), pieces)));
+        assert_eq!(Replay::ours().read(&t.text), Some((text.to_owned(), pieces)));
     }
 }

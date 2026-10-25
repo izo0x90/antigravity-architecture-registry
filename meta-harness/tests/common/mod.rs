@@ -119,7 +119,7 @@ impl SessionRuntime for FakeSession {
         // it links), then ends.
         self.emit(AdapterEvent::TurnUpdated { turn: Turn { status: TurnStatus::Running, failure: None, ..turn.clone() } });
         self.emit(AdapterEvent::ItemUpdated {
-            item: TurnItem { id: ItemId::new(format!("yours-{}", turn.id)), thread_id: self.thread.id.clone(), turn_id: turn.id.clone(), native_id: None, parent_id: None, ordinal: 0, status: ItemStatus::Completed, title: None, body: { let (links, handed_on) = harness_contracts::Piece::split(input.pieces.clone()); ItemBody::UserMessage { text: input.text.clone(), links, handed_on } } },
+            item: TurnItem { id: ItemId::new(format!("yours-{}", turn.id)), thread_id: self.thread.id.clone(), turn_id: turn.id.clone(), native_id: None, parent_id: None, ordinal: 0, status: ItemStatus::Completed, title: None, body: ItemBody::UserMessage { text: input.text.clone(), pieces: input.pieces.clone() } },
         });
         // "[tool]": it runs a tool first (what the tool gave, two lines).
         if input.text.contains("[tool]") {

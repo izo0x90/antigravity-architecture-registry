@@ -19,7 +19,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use harness_contracts::{
     AdapterEvent, ClientEvent, InstanceId, ItemBody, McpServer, ModelSelection, NativeId, ProviderStatus, RuntimePolicy, SessionKey, Slot, SlotId,
-    SlotSession, SlotStatus, Starter, ThreadId, ThreadStatus, TurnId, TurnInput, TurnItem, LEAD, Expanded, Link, Message, Piece,
+    SlotSession, SlotStatus, Starter, ThreadId, ThreadStatus, TurnId, TurnInput, TurnItem, LEAD, Message, Piece,
 };
 
 use crate::{EventHub, HarnessError, InstanceRegistry, OpenThread, Result, SessionManager};
@@ -47,10 +47,9 @@ pub struct HeldReport {
     pub to: SlotId,
     /// Who it's from, as the slot reads it (`sub 1 (sub-slot)`).
     pub from: String,
-    pub text: String,
-    /// What its text links (the user's, in a discussion): handed on with
-    /// it as it is when it's delivered.
-    pub links: Vec<Link>,
+    /// What it says, and what that links (the user's, in a discussion):
+    /// handed on as it is when it's delivered.
+    pub message: Message,
     pub at_ms: u64,
 }
 
@@ -195,11 +194,21 @@ pub struct SlotManager {
     expand: std::sync::OnceLock<Expand>,
 }
 
-/// What a message's links hand an agent with it, a piece for each tag or
-/// thing (and what the sender is told), as far as the slot it's for
-/// (`reader`) may read it (none: no slot's, all of it: a check before
-/// sending). Only the user's messages have links (agents' are plain text).
-pub type Expand = Arc<dyn Fn(&str, &[Link], Option<&SlotId>) -> (Vec<Piece>, Vec<String>) + Send + Sync>;
+/// A message as an agent is handed it: its text, and a piece for each tag
+/// or thing it links; and what the sender should be told (linked whole
+/// but past the budget: sent as its start).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Expanded {
+    pub message: Message,
+    pub pieces: Vec<Piece>,
+    pub notes: Vec<String>,
+}
+
+/// `message` as an agent is handed it, as far as the slot it's for
+/// (`reader`) may read what it links (none: no slot's, all of it: a check
+/// before sending). Only the user's messages have links (agents' are
+/// plain text).
+pub type Expand = Arc<dyn Fn(Message, Option<&SlotId>) -> Expanded + Send + Sync>;
 
 /// What heads a message a slot is told.
 fn told_from(from: &str) -> String {
@@ -569,9 +578,9 @@ impl SlotManager {
     pub async fn expanded(&self, message: Message, reader: Option<SlotId>) -> Expanded {
         let message = message.valid();
         let Some(expand) = self.expand.get().cloned().filter(|_| !message.links.is_empty()) else { return Expanded { message, ..Expanded::default() } };
-        let (text, links) = (message.text.clone(), message.links.clone());
-        let (pieces, notes) = tokio::task::spawn_blocking(move || expand(&text, &links, reader.as_ref())).await.unwrap_or_default();
-        Expanded { message, pieces, notes }
+        // (Its words kept if the reading fails: sent without what it links.)
+        let words = Message::text(message.text.clone());
+        tokio::task::spawn_blocking(move || expand(message, reader.as_ref())).await.unwrap_or(Expanded { message: words, ..Expanded::default() })
     }
 
     /// `message` as the input of a turn: its text and its pieces.
@@ -592,8 +601,9 @@ impl SlotManager {
             Origin::Lead => Message::text(message.text).after(&format!("From the lead ({}):\n\n", self.slot(&self.lead()).map(|s| s.name).unwrap_or_else(|_| LEAD.into()))),
         };
         let input = self.input(message, to).await;
-        // Listening first: a quick turn's end isn't missed.
-        let mut events = session.events();
+        // Listening first, when its answer is waited for: a quick turn's
+        // end isn't missed.
+        let mut events = wait.map(|_| session.events());
         let turn = match delivery {
             Delivery::Queue => session.start_turn(input).await?,
             Delivery::AddToRunning => session.inject(input).await?,
@@ -601,7 +611,7 @@ impl SlotManager {
         if from == Origin::Lead {
             self.store.note(LEAD, "sent", &self.slot(to).map(|s| s.name).unwrap_or_default(), None);
         }
-        let Some(wait) = wait else {
+        let (Some(wait), Some(events)) = (wait, events.as_mut()) else {
             return Ok(Sent::Started { turn });
         };
         let mut items: Vec<TurnItem> = Vec::new();
@@ -641,8 +651,7 @@ impl SlotManager {
                 Ok(Reported::Delivered)
             }
             None => {
-                let message = message.valid();
-                self.store.hold_report(&HeldReport { to: to.clone(), from: from.to_owned(), text: message.text, links: message.links, at_ms: now_ms() }).map_err(store_error)?;
+                self.store.hold_report(&HeldReport { to: to.clone(), from: from.to_owned(), message: message.valid(), at_ms: now_ms() }).map_err(store_error)?;
                 Ok(Reported::Held)
             }
         }
@@ -660,7 +669,7 @@ impl SlotManager {
         if reports.is_empty() {
             return 0;
         }
-        let each = reports.iter().map(|r| Message { text: r.text.clone(), links: r.links.clone() }.after(&told_from(&r.from))).collect();
+        let each = reports.iter().map(|r| r.message.clone().after(&told_from(&r.from))).collect();
         let input = self.input(Message::joined(each, "\n\n---\n\n"), id).await;
         let sent = match self.sessions.get(thread) {
             Ok(session) => session.start_turn(input).await.map(|_| ()),
@@ -846,7 +855,7 @@ mod tests {
     fn a_turns_reply_is_its_assistant_messages_in_order() {
         let items = vec![
             item("a", 2, says("second")),
-            item("a", 0, ItemBody::UserMessage { text: "asked".into(), links: Vec::new(), handed_on: Vec::new() }),
+            item("a", 0, ItemBody::UserMessage { text: "asked".into(), pieces: Vec::new() }),
             item("b", 1, says("another turn")),
             item("a", 1, says("first")),
         ];

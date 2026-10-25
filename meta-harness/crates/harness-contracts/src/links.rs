@@ -103,8 +103,8 @@ impl From<&String> for Message {
 
 /// What one tag or thing a message links hands an agent with it: the
 /// links that hand it on (one per place the text links it, all to the
-/// same), and its text as the agent is handed it (its heading, then each
-/// thing it's on: whole, its start, or why it isn't there).
+/// same thing), and its text as the agent is handed it (its heading, then
+/// each thing it's on: whole, its start, or why it isn't there).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Piece {
@@ -112,29 +112,104 @@ pub struct Piece {
     pub text: String,
 }
 
+/// The links of a message's `pieces`, in the order its text has them.
+pub fn links_of(pieces: &[Piece]) -> Vec<Link> {
+    let mut links: Vec<Link> = pieces.iter().flat_map(|p| p.links.iter().cloned()).collect();
+    links.sort_by_key(|l| l.start);
+    links
+}
+
+/// What a piece's label starts with.
+pub const LABEL_START: &str = "nah://";
+
 impl Piece {
-    /// The links of `pieces` in the text's order, and each piece's text:
-    /// what a message shows of what went with it.
-    pub fn split(pieces: Vec<Piece>) -> (Vec<Link>, Vec<String>) {
-        let mut links = Vec::new();
-        let mut texts = Vec::with_capacity(pieces.len());
-        for p in pieces {
-            links.extend(p.links);
-            texts.push(p.text);
+    /// Its label: what it links, each place the message's text links it
+    /// (and how it goes in), and how long its text is, in bytes: the label
+    /// and its text can be found again in any text they're written into
+    /// (`nah://tag/flaky?at=4-10-auto,21-27-pointer&len=120`; a thing's:
+    /// `nah://thing?subject=<its JSON>&at=…&len=…`). Its length comes last:
+    /// the label ends with its digits.
+    pub fn label(&self) -> String {
+        let at: Vec<String> = self.links.iter().map(|l| format!("{}-{}-{}", l.start, l.end, include_word(l.include))).collect();
+        let at = at.join(",");
+        let len = self.text.len();
+        match self.links.first().map(|l| &l.to) {
+            Some(Linked::Tag { tag }) => format!("{LABEL_START}tag/{}?at={at}&len={len}", escaped(tag.as_str())),
+            Some(Linked::Thing { subject }) => format!("{LABEL_START}thing?subject={}&at={at}&len={len}", escaped(&serde_json::to_string(subject).unwrap_or_default())),
+            None => format!("{LABEL_START}none?len={len}"),
         }
-        links.sort_by_key(|l| l.start);
-        (links, texts)
+    }
+
+    /// The label at the start of `text`: its links, how long its text is,
+    /// and how long the label is (none: no label of ours starts there). A
+    /// label has no white space: it's never looked for past one.
+    pub fn read_label(text: &str) -> Option<(Vec<Link>, usize, usize)> {
+        let rest = text.strip_prefix(LABEL_START)?;
+        let word = &rest[..rest.find(char::is_whitespace).unwrap_or(rest.len())];
+        let (path, query) = word.split_once('?')?;
+        let len_at = query.find("&len=")?;
+        let digits = query[len_at + 5..].bytes().take_while(u8::is_ascii_digit).count();
+        let len: usize = query[len_at + 5..len_at + 5 + digits].parse().ok()?;
+        let label_len = LABEL_START.len() + path.len() + 1 + len_at + 5 + digits;
+        let mut subject = None;
+        let mut at = None;
+        for pair in query[..len_at].split('&') {
+            match pair.split_once('=')? {
+                ("subject", v) => subject = Some(unescaped(v)?),
+                ("at", v) => at = Some(v),
+                _ => return None,
+            }
+        }
+        let to = match path.strip_prefix("tag/") {
+            Some(tag) => Linked::Tag { tag: TagId::new(unescaped(tag)?) },
+            None if path == "thing" => Linked::Thing { subject: serde_json::from_str(&subject?).ok()? },
+            None => return None,
+        };
+        let links = at?
+            .split(',')
+            .map(|span| {
+                let mut parts = span.splitn(3, '-');
+                let (start, end) = (parts.next()?.parse().ok()?, parts.next()?.parse().ok()?);
+                let include = serde_json::from_value(serde_json::Value::String(parts.next()?.to_owned())).ok()?;
+                (start < end).then(|| Link { start, end, to: to.clone(), include })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some((links, len, label_len))
     }
 }
 
-/// A message as an agent is handed it: its text, and a piece for each tag
-/// or thing it links; and what the sender should be told (linked whole
-/// but past the budget: sent as its start).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Expanded {
-    pub message: Message,
-    pub pieces: Vec<Piece>,
-    pub notes: Vec<String>,
+fn include_word(include: Include) -> String {
+    match serde_json::to_value(include) {
+        Ok(serde_json::Value::String(word)) => word,
+        _ => String::new(),
+    }
+}
+
+/// `text` with every byte but letters, digits and `-._~` as `%XX`.
+fn escaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for b in text.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+fn unescaped(text: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(text.len());
+    let mut it = text.bytes();
+    while let Some(b) = it.next() {
+        if b == b'%' {
+            let hex = [it.next()?, it.next()?];
+            bytes.push(u8::from_str_radix(std::str::from_utf8(&hex).ok()?, 16).ok()?);
+        } else {
+            bytes.push(b);
+        }
+    }
+    String::from_utf8(bytes).ok()
 }
 
 impl Message {
@@ -147,11 +222,15 @@ impl Message {
     /// Messages one after the other, `between` each, their links moved along.
     pub fn joined(messages: Vec<Message>, between: &str) -> Self {
         let mut out = Message::default();
+        let (mut chars, between_chars) = (0, between.chars().count());
         for (n, m) in messages.into_iter().enumerate() {
-            let head = if n == 0 { out.text.clone() } else { format!("{}{between}", out.text) };
-            let next = m.after(&head);
-            out.links.extend(next.links);
-            out.text = next.text;
+            if n > 0 {
+                out.text.push_str(between);
+                chars += between_chars;
+            }
+            out.links.extend(m.links.into_iter().map(|l| Link { start: l.start + chars, end: l.end + chars, ..l }));
+            chars += m.text.chars().count();
+            out.text.push_str(&m.text);
         }
         out
     }
@@ -170,18 +249,32 @@ mod tests {
         let m = Message { text: "see #x".into(), links: vec![link(4, 6)] };
         let after = m.clone().after("From é:\n");
         assert_eq!((after.text.as_str(), after.links[0].start), ("From é:\nsee #x", 12));
-        let both = Message::joined(vec![m.clone(), m], "\n--\n");
-        assert_eq!(both.text, "see #x\n--\nsee #x");
-        assert_eq!(both.links.iter().map(|l| (l.start, l.end)).collect::<Vec<_>>(), vec![(4, 6), (14, 16)]);
+        let both = Message::joined(vec![m.clone(), Message::text("é"), m], "\n--\n");
+        assert_eq!(both.text, "see #x\n--\né\n--\nsee #x");
+        assert_eq!(both.links.iter().map(|l| (l.start, l.end)).collect::<Vec<_>>(), vec![(4, 6), (19, 21)]);
         let said = |l: &Link| both.text.chars().skip(l.start).take(l.end - l.start).collect::<String>();
         assert!(both.links.iter().all(|l| said(l) == "#x"));
     }
 
     #[test]
-    fn a_messages_pieces_give_its_links_in_order_and_their_texts() {
-        let pieces = vec![Piece { links: vec![link(9, 11), link(0, 2)], text: "a".into() }, Piece { links: vec![link(4, 6)], text: "b".into() }];
-        let (links, texts) = Piece::split(pieces);
-        assert_eq!(links.iter().map(|l| l.start).collect::<Vec<_>>(), vec![0, 4, 9]);
-        assert_eq!(texts, vec!["a", "b"]);
+    fn a_label_says_what_its_piece_links_where_and_how_long_it_is_and_reads_back() {
+        let subject = crate::Subject::TerminalLines { terminal: crate::TerminalId::new("t 1"), shell: 1, first: 3, last: 9, command: None };
+        let pieces = [
+            Piece { links: vec![link(4, 10), Link { include: Include::Pointer, ..link(21, 27) }], text: "#x é\n(fails)".into() },
+            Piece { links: vec![Link { start: 0, end: 4, to: Linked::Thing { subject }, include: Include::Whole }], text: String::new() },
+            Piece { links: vec![Link { to: Linked::Tag { tag: TagId::new("a b/c?d&len=1") }, ..link(1, 2) }], text: "x".into() },
+        ];
+        assert_eq!(pieces[0].label(), format!("nah://tag/x?at=4-10-auto,21-27-pointer&len={}", pieces[0].text.len()));
+        for p in &pieces {
+            let label = p.label();
+            assert!(!label.contains(|c: char| c.is_whitespace() || "()\"<>".contains(c)), "{label}: nothing an agent's own writing ends a label at");
+            // Read back where it's written, followed by anything.
+            let written = format!("{label}nah://more");
+            assert_eq!(Piece::read_label(&written), Some((p.links.clone(), p.text.len(), label.len())), "{label}");
+        }
+        assert_eq!(Piece::read_label("nah://tag/x?at=9-3-auto&len=1"), None, "not a span");
+        assert_eq!(Piece::read_label("nah://tag/x?at=1-3-auto"), None, "no length");
+        assert_eq!(Piece::read_label("nah://tag/x?at=1-3-auto &len=1"), None, "past a space: not read");
+        assert_eq!(Piece::read_label("https://tag/x?at=1-3-auto&len=1"), None, "not ours");
     }
 }

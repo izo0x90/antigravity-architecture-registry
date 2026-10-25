@@ -25,6 +25,8 @@ pub struct Profile {
     /// What of the project its file access never reaches (the server's own,
     /// harnesses' kept homes included).
     pub private: Vec<PathBuf>,
+    /// Its settings' replay, read once (checked when they were read).
+    replay: Option<crate::pieces::Replay>,
 }
 
 /// What the agent's `initialize` answer says it does beyond the protocol.
@@ -41,7 +43,8 @@ pub struct Declared {
 impl Profile {
     pub fn new(settings: AcpSettings, project: &Path, launch: Option<&Launch>) -> Self {
         let places = Places::new(&settings, project, launch);
-        Self { settings, project: project.to_path_buf(), places, kept_home: None, private: Vec::new() }
+        let replay = settings.replay.as_ref().and_then(|r| crate::pieces::Replay::parse(&r.piece, r.listed.as_deref()).ok());
+        Self { settings, project: project.to_path_buf(), places, kept_home: None, private: Vec::new(), replay }
     }
 
     /// With its home kept in `dir` (by the project).
@@ -164,10 +167,18 @@ impl Profile {
     /// How a replayed message's pieces are read back: as its agent writes
     /// them, when it takes pieces (its pack says how, else they're shown
     /// as they come), or as we write them for one that takes none.
-    pub fn replayed_pieces(&self, declared: &Declared) -> Option<crate::pieces::Template> {
+    pub fn replayed_pieces(&self, declared: &Declared) -> Option<crate::pieces::Replay> {
         match declared.pieces {
-            true => self.settings.replayed_piece.as_deref().and_then(|t| crate::pieces::Template::parse(t).ok()),
-            false => Some(crate::pieces::Template::ours()),
+            true => self.replay.clone(),
+            false => Some(crate::pieces::Replay::ours()),
+        }
+    }
+
+    /// What a chunk of a message it replays is.
+    pub fn chunks(&self) -> crate::state::Chunks {
+        match self.settings.replay.as_ref().is_some_and(|r| r.whole_chunks) {
+            true => crate::state::Chunks::Whole,
+            false => crate::state::Chunks::OfItsId,
         }
     }
 

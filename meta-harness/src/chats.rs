@@ -405,13 +405,13 @@ mod tests {
     #[test]
     fn a_turn_says_your_message_the_answer_and_a_line_per_tool_call_with_what_it_gave_under_it() {
         let items = [
-            item(0, ItemBody::UserMessage { text: "fix the build".into(), links: Vec::new(), handed_on: Vec::new() }),
+            item(0, ItemBody::UserMessage { text: "fix the build".into(), pieces: Vec::new() }),
             item(1, ItemBody::ToolCall { kind: ToolKind::Execute, name: "Bash".into(), input: None, output: vec![ContentBlock::Text { text: "error: 1\nwarning: 2".into() }], locations: Vec::new() }),
             item(2, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Fixed.".into() }], streaming: false }),
         ];
         assert_eq!(turn_text(&items), format!("you: fix the build\n• Bash\n{DETAIL}error: 1\n{DETAIL}warning: 2\nFixed.\n"));
         // What a message says never passes for detail (only detail is folded).
-        let says = [item(0, ItemBody::UserMessage { text: format!("see:\n{DETAIL}not detail"), links: Vec::new(), handed_on: Vec::new() })];
+        let says = [item(0, ItemBody::UserMessage { text: format!("see:\n{DETAIL}not detail"), pieces: Vec::new() })];
         assert!(!turn_text(&says).lines().any(|l| l.starts_with(DETAIL)), "{}", turn_text(&says));
         let refs: Vec<&TurnItem> = items.iter().collect();
         let numbers = message_numbers(&refs);

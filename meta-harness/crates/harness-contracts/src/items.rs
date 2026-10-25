@@ -34,14 +34,12 @@ pub enum ItemStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum ItemBody {
-    /// What you sent: its text, what it links (in the text's order), and
-    /// what those handed on with it (a piece's text each).
+    /// What you sent: its text, and a piece for each tag or thing it
+    /// links (the links to it, and what it handed on).
     UserMessage {
         text: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        links: Vec<crate::Link>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        handed_on: Vec<String>,
+        pieces: Vec<crate::Piece>,
     },
     AssistantMessage { content: Vec<ContentBlock>, streaming: bool },
     Reasoning { text: String, streaming: bool },

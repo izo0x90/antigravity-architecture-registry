@@ -483,9 +483,9 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     // apart from its words.
     let yours = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if matches!(item.body, harness_contracts::ItemBody::UserMessage { .. }) && format!("{:?}", item.body).contains("look at #checked."))).await;
     let harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item: yours } } = yours else { unreachable!() };
-    let harness_contracts::ItemBody::UserMessage { text: sent, links, handed_on } = yours.body else { unreachable!() };
-    assert_eq!((sent.as_str(), links.len()), ("look at #checked.", 1), "its own words and link");
-    assert!(handed_on.len() == 1 && handed_on[0].starts_with("#checked"), "what was handed on, apart: {handed_on:?}");
+    let harness_contracts::ItemBody::UserMessage { text: sent, pieces } = yours.body else { unreachable!() };
+    assert_eq!((sent.as_str(), pieces.len(), pieces[0].links.len()), ("look at #checked.", 1, 1), "its own words and link");
+    assert!(pieces[0].text.starts_with("#checked"), "what was handed on, apart: {pieces:?}");
     let echoed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if matches!(item.body, harness_contracts::ItemBody::AssistantMessage { .. }) && format!("{:?}", item.body).contains("echo: look at #checked."))).await;
     let echoed = format!("{echoed:?}");
     assert!(echoed.contains("#checked (the echo works; noted by lead)") && echoed.contains("tagged-line"), "an agent's note says whose: {echoed}");

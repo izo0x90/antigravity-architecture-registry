@@ -81,7 +81,7 @@ pub(crate) fn conversation_events() -> Vec<ClientEvent> {
     chat.push(session(AdapterEvent::ThreadUpdated { thread }));
     chat.push(ClientEvent::SlotUpdated { slot: lead(Some("t")) });
     chat.push(session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn"), thread_id: ThreadId::new("t"), ordinal: 1, status: TurnStatus::Completed, failure: None, usage: None } }));
-    chat.push(item(0, ItemBody::UserMessage { text: "fix the parser".into(), links: Vec::new(), handed_on: Vec::new() }));
+    chat.push(item(0, ItemBody::UserMessage { text: "fix the parser".into(), pieces: Vec::new() }));
     chat.push(item(1, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Looking at it.".into() }], streaming: false }));
     let locations = vec![FileLocation { path: "src/parse.rs".into(), line: Some(12) }, FileLocation { path: "src/lex.rs".into(), line: None }];
     chat.push(item(2, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations }));
@@ -431,7 +431,7 @@ fn the_cursor_stays_on_its_item_and_what_was_opened_through_a_reconnect() {
     let turn = |id: &str, ordinal, status| session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new(id), thread_id: ThreadId::new("t"), ordinal, status, failure: None, usage: None } });
     chat.apply(turn("turn", 1, TurnStatus::Running));
     chat.apply(turn("next", 2, TurnStatus::Queued));
-    chat.apply(in_turn(item(10, ItemBody::UserMessage { text: "then the lexer".into(), links: Vec::new(), handed_on: Vec::new() }), "next"));
+    chat.apply(in_turn(item(10, ItemBody::UserMessage { text: "then the lexer".into(), pieces: Vec::new() }), "next"));
     let on = |chat: &Fed| chat.thread().and_then(|v| v.in_stream(chat.ui.cursor?).map(|i| i.id.to_string()));
     chat.motion(Motion::Up, 1);
     chat.motion(Motion::Last, 1);
@@ -448,7 +448,7 @@ fn the_cursor_stays_on_its_item_and_what_was_opened_through_a_reconnect() {
     }
     chat.apply(turn("turn", 1, TurnStatus::Running));
     chat.apply(turn("next", 2, TurnStatus::Queued));
-    chat.apply(in_turn(item(10, ItemBody::UserMessage { text: "then the lexer".into(), links: Vec::new(), handed_on: Vec::new() }), "next"));
+    chat.apply(in_turn(item(10, ItemBody::UserMessage { text: "then the lexer".into(), pieces: Vec::new() }), "next"));
     chat.apply(item(4, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Done.".into() }], streaming: false }));
     assert_eq!(chat.shape().rows.len(), rows, "the run still open, its rows as they were");
 }

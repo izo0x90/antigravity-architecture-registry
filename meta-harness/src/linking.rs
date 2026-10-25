@@ -13,25 +13,25 @@ fn said_at(text: &str, link: &Link) -> Option<String> {
 
 /// A part for each tag or thing `links` link (in `text`), with every link
 /// to it; linked twice, it's whole if either link asks for it.
-pub(crate) fn attached(tags: &nah_tags::Tags, things: &Things, text: &str, links: &[Link]) -> Vec<Attached> {
-    let mut out: Vec<Attached> = Vec::new();
+pub(crate) fn attached(tags: &nah_tags::Tags, things: &Things, text: &str, links: &[Link]) -> Vec<(Vec<Link>, Attached)> {
+    let mut out: Vec<(Vec<Link>, Attached)> = Vec::new();
     things.pass(|| {
         for link in links {
-            if let Some(o) = out.iter_mut().find(|o| o.links[0].to == link.to) {
+            if let Some((to, part)) = out.iter_mut().find(|(to, _)| to[0].to == link.to) {
                 if link.include == Include::Whole {
-                    o.include = Include::Whole;
+                    part.include = Include::Whole;
                 }
-                o.links.push(link.clone());
+                to.push(link.clone());
                 continue;
             }
             let said = said_at(text, link);
-            let mut one = match &link.to {
+            let part = match &link.to {
                 Linked::Tag { tag } => match tags.attached(tag, link.include) {
                     Some(attached) => attached,
                     // Deleted since it was linked: said, by what the message says there.
                     None => {
                         let heading = said.clone().unwrap_or_else(|| tag.to_string());
-                        Attached { links: Vec::new(), heading, include: link.include, things: Vec::new(), gone: true }
+                        Attached { heading, include: link.include, things: Vec::new(), gone: true }
                     }
                 },
                 Linked::Thing { subject } => {
@@ -41,11 +41,10 @@ pub(crate) fn attached(tags: &nah_tags::Tags, things: &Things, text: &str, links
                         Some(said) if said.trim_start_matches('@') != what => format!("{said} ({what})"),
                         _ => format!("@{what}"),
                     };
-                    Attached { links: Vec::new(), heading, include: link.include, things: vec![AttachedThing { read_by: format!("`thing_read` (\"{what}\")"), what, subject, kept: None, whole: "`thing_read`" }], gone: false }
+                    Attached { heading, include: link.include, things: vec![AttachedThing { read_by: format!("`thing_read` (\"{what}\")"), what, subject, kept: None, whole: "`thing_read`" }], gone: false }
                 }
             };
-            one.links.push(link.clone());
-            out.push(one);
+            out.push((vec![link.clone()], part));
         }
     });
     out

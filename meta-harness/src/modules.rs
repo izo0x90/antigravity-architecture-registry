@@ -315,18 +315,20 @@ impl AppState {
         // What a message links (a tag, a thing) is handed on with it, as
         // far as the slot told may read it.
         let (tags, things, slots, access, discussions) = (p.tags.clone(), p.things.clone(), Arc::downgrade(&p.slots), gate.access.clone(), p.discussions.clone());
-        p.slots.expand_prompts_with(Arc::new(move |text: &str, links: &[harness_contracts::Link], reader: Option<&harness_contracts::SlotId>| {
-            let attached = crate::linking::attached(&tags, &things, text, links);
+        p.slots.expand_prompts_with(Arc::new(move |message: harness_contracts::Message, reader: Option<&harness_contracts::SlotId>| {
+            let (links, attached): (Vec<_>, Vec<_>) = crate::linking::attached(&tags, &things, &message.text, &message.links).into_iter().unzip();
             let slot = reader.and_then(|id| slots.upgrade().and_then(|s| s.get(id).map(|slot| (s, slot))));
-            match (reader, slot) {
-                (None, _) => things.attach(attached, &|_| true),
+            let (texts, notes) = match (reader, slot) {
+                (None, _) => things.attach(&attached, &|_| true),
                 (Some(_), Some((slots, slot))) => {
                     let reach = crate::mcp::sets::reach::Reach::of_slot(&slots, &access, &discussions, &slot);
-                    things.attach(attached, &|s| reach.reaches(s))
+                    things.attach(&attached, &|s| reach.reaches(s))
                 }
                 // A slot gone meanwhile: nothing handed on (named only).
-                (Some(_), None) => things.attach(attached, &|_| false),
-            }
+                (Some(_), None) => things.attach(&attached, &|_| false),
+            };
+            let pieces = links.into_iter().zip(texts).map(|(links, text)| harness_contracts::Piece { links, text }).collect();
+            harness_core::slots::Expanded { message, pieces, notes }
         }));
         Ok(Self {
             server: ServerState { gate: gate.clone(), shutdown: stopping.clone() },

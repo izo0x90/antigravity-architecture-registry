@@ -1,12 +1,12 @@
 //! What a message links, as an agent is handed it with the message: a
-//! piece for each tag or thing linked, its heading, then each of its
+//! text for each tag or thing linked, its heading, then each of its
 //! things whole (small, or asked for whole) or as a pointer (its name, its
 //! size, its first lines, and how to read the rest), all within one budget
-//! for the message: past it, a piece is only named. The things are read
+//! for the message: past it, it's only named. The things are read
 //! through their owners, as everything here is; one the reader may not
 //! read (`reaches`) is named, not handed on.
 
-use harness_contracts::{Include, Kept, Link, Piece, Subject};
+use harness_contracts::{Include, Kept, Subject};
 
 use crate::{Things, some_of};
 
@@ -19,11 +19,9 @@ pub const ATTACHED_MOST: usize = 16_000;
 const POINTER_LINES: usize = 10;
 const POINTER_LINE: usize = 200;
 
-/// One tag's or thing's part: the links to it, what heads it, its things,
-/// whether they go in whole; or what's gone (a tag deleted since it was
-/// linked).
+/// One tag's or thing's part: what heads it, its things, whether they go
+/// in whole; or what's gone (a tag deleted since it was linked).
 pub struct Attached {
-    pub links: Vec<Link>,
     pub heading: String,
     pub include: Include,
     pub things: Vec<AttachedThing>,
@@ -50,19 +48,19 @@ fn cut(glimpsed: &str, most: usize) -> bool {
     glimpsed.chars().count() > most
 }
 
-/// What a piece left out past the message's budget says.
+/// What a part left out past the message's budget says.
 fn left_out_past_budget() -> String {
     format!("(left out: the message's {} KB are spent; `tag_read` or `thing_read` reads it)", ATTACHED_MOST / 1000)
 }
 
 impl Things {
-    /// A piece for each of `attached`, as a reader who `reaches` what it
-    /// may read is handed it; and what the sender is told (a thing linked
-    /// whole that didn't fit, a link to what's gone, what's left out past
-    /// the budget).
-    pub fn attach(&self, attached: Vec<Attached>, reaches: &dyn Fn(&Subject) -> bool) -> (Vec<Piece>, Vec<String>) {
+    /// The text of each of `attached`, in order, as a reader who `reaches`
+    /// what it may read is handed it; and what the sender is told (a thing
+    /// linked whole that didn't fit, a link to what's gone, what's left
+    /// out past the budget).
+    pub fn attach(&self, attached: &[Attached], reaches: &dyn Fn(&Subject) -> bool) -> (Vec<String>, Vec<String>) {
         let mut notes = Vec::new();
-        let mut pieces = Vec::with_capacity(attached.len());
+        let mut texts = Vec::with_capacity(attached.len());
         let mut spent = 0;
         let mut left_out = 0;
         for a in attached {
@@ -71,7 +69,7 @@ impl Things {
             if ATTACHED_MOST.saturating_sub(spent) < POINTER_LINE {
                 left_out += a.things.len().max(1);
                 out.push_str(&format!("\n{}", left_out_past_budget()));
-                pieces.push(Piece { links: a.links, text: out });
+                texts.push(out);
                 continue;
             }
             if a.gone {
@@ -130,12 +128,12 @@ impl Things {
                 left_out += its_left_out;
             }
             spent += out.len();
-            pieces.push(Piece { links: a.links, text: out });
+            texts.push(out);
         }
         if left_out > 0 {
             notes.push(format!("{left_out} linked thing(s) left out: the message's {} KB were spent.", ATTACHED_MOST / 1000));
         }
-        (pieces, notes)
+        (texts, notes)
     }
 }
 
@@ -162,12 +160,12 @@ mod tests {
     }
 
     fn one(subject: Subject, include: Include) -> Attached {
-        Attached { links: Vec::new(), heading: "@it".into(), include, things: vec![AttachedThing { what: "it".into(), subject, kept: None, read_by: "`thing_read` (\"it\")".into(), whole: "`thing_read`" }], gone: false }
+        Attached { heading: "@it".into(), include, things: vec![AttachedThing { what: "it".into(), subject, kept: None, read_by: "`thing_read` (\"it\")".into(), whole: "`thing_read`" }], gone: false }
     }
 
-    /// All the pieces' text, as the agent reads them.
-    fn all(pieces: &[Piece]) -> String {
-        pieces.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join("\n")
+    /// All the texts, as the agent reads them.
+    fn all(texts: &[String]) -> String {
+        texts.join("\n")
     }
 
     #[test]
@@ -175,25 +173,25 @@ mod tests {
         let (_dir, things, _owner) = things();
         let every = |_: &Subject| true;
         // The fixture says "text of lines a to b": one line, small.
-        let (small, notes) = things.attach(vec![one(lines(1, 2), Include::Auto)], &every);
-        assert!(small[0].text.starts_with("@it\n- it:\n  text of lines 1 to 2") && notes.is_empty(), "{}", all(&small));
+        let (small, notes) = things.attach(&[one(lines(1, 2), Include::Auto)], &every);
+        assert!(small[0].starts_with("@it\n- it:\n  text of lines 1 to 2") && notes.is_empty(), "{}", all(&small));
         // Linked as a pointer: its start, and how to read the rest.
-        let (pointer, _) = things.attach(vec![one(lines(1, 2), Include::Pointer)], &every);
-        assert!(pointer[0].text.contains("- it (1 lines; its start only: `thing_read` (\"it\") reads the rest)"), "{}", all(&pointer));
-        // Many linked: a piece each; what goes in stays within the budget,
+        let (pointer, _) = things.attach(&[one(lines(1, 2), Include::Pointer)], &every);
+        assert!(pointer[0].contains("- it (1 lines; its start only: `thing_read` (\"it\") reads the rest)"), "{}", all(&pointer));
+        // Many linked: a text each; what goes in stays within the budget,
         // the rest named, said.
         let many: Vec<Attached> = (0..2000).map(|n| one(lines(n, n + 1), Include::Pointer)).collect();
-        let (spent, notes) = things.attach(many, &every);
+        let (spent, notes) = things.attach(&many, &every);
         assert_eq!(spent.len(), 2000);
-        let handed: usize = spent.iter().filter(|p| !p.text.contains("left out")).map(|p| p.text.len()).sum();
+        let handed: usize = spent.iter().filter(|t| !t.contains("left out")).map(String::len).sum();
         assert!(handed < ATTACHED_MOST + 2 * POINTER_LINE * POINTER_LINES, "{handed}");
-        assert!(spent.last().unwrap().text.contains("(left out: the message's 16 KB are spent") && notes.iter().any(|n| n.contains("left out")), "{notes:?}");
+        assert!(spent.last().unwrap().contains("(left out: the message's 16 KB are spent") && notes.iter().any(|n| n.contains("left out")), "{notes:?}");
         // Not the reader's to read: named, not handed on, and said.
-        let (hidden, notes) = things.attach(vec![one(lines(1, 2), Include::Whole)], &|_: &Subject| false);
-        assert!(hidden[0].text.contains("(not handed on: this reader can't read it)") && !hidden[0].text.contains("text of lines") && notes.len() == 1, "{}", all(&hidden));
+        let (hidden, notes) = things.attach(&[one(lines(1, 2), Include::Whole)], &|_: &Subject| false);
+        assert!(hidden[0].contains("(not handed on: this reader can't read it)") && !hidden[0].contains("text of lines") && notes.len() == 1, "{}", all(&hidden));
         // A link to what's gone: said.
-        let (gone, notes) = things.attach(vec![Attached { links: Vec::new(), heading: "#flaky".into(), include: Include::Auto, things: Vec::new(), gone: true }], &every);
-        assert!(gone[0].text.contains("(gone since it was linked") && notes[0].starts_with("#flaky: gone"), "{gone:?}");
+        let (gone, notes) = things.attach(&[Attached { heading: "#flaky".into(), include: Include::Auto, things: Vec::new(), gone: true }], &every);
+        assert!(gone[0].contains("(gone since it was linked") && notes[0].starts_with("#flaky: gone"), "{gone:?}");
         // Text that ends in … isn't taken as cut.
         assert!(!cut("Wait…", 10) && cut(&some_of("a".repeat(20), 10), 10));
     }
