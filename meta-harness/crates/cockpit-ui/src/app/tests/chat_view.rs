@@ -470,3 +470,25 @@ fn a_messages_code_blocks_are_coloured_picked_and_copied() {
     let output = frame(&ctx, &mut app, key("c"));
     assert_eq!((copied(&output).as_deref(), app.note.as_deref()), (Some("print(1)\nprint(2)"), Some("Copied the code block (2 lines).")));
 }
+
+/// The files an agent's words name are links under its message, as a
+/// call's places are: places of their own (`f`), and Enter opens the one
+/// picked (else the first) in the code view, at its line.
+#[test]
+fn the_files_a_message_names_open_in_the_code_view() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Chat);
+    let said = "Fixed in `src/chat/render.rs:42`, and lib.rs:7 too.";
+    app.desk.shared.agents.get_mut().apply(item(40, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: said.into() }], streaming: false }));
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    let shown = texts(&output);
+    assert!(shown.contains("src/chat/render.rs:42") && shown.contains("lib.rs:7"), "{shown}");
+    let keys: Vec<String> = app.desk.chat().spots().into_iter().map(|s| s.key).collect();
+    assert!(keys.contains(&"40:0".to_owned()) && keys.contains(&"40:1".to_owned()), "{keys:?}");
+    app.desk.chat_mut().move_to("40:1");
+    assert!(app.bound_actions().iter().any(|b| b.action.label == "Open lib.rs"), "Enter says which");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!((app.focused_kind(), app.desk.code().current_file.as_str(), app.desk.code().target_line), (BufferKind::Code, "lib.rs", Some(7)));
+}

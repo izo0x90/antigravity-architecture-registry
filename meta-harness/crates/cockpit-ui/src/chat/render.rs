@@ -443,6 +443,20 @@ impl ChatStreamState {
         }
     }
 
+    /// Item `index`'s files (`places`, its links in order), each a place
+    /// of its own (`3:1`): the cursor goes on it (a click), and it opens
+    /// (Enter, a double click).
+    fn places(&mut self, ui: &mut egui::Ui, index: usize, places: &[(String, Option<usize>)]) {
+        for (n, (path, line)) in places.iter().enumerate() {
+            let label = match line {
+                Some(line) => format!("{} {path}:{line}", icon::FOLDER_OPEN),
+                None => format!("{} {path}", icon::FOLDER_OPEN),
+            };
+            let link = ui.label(RichText::new(label).monospace().size(crate::theme::look().text_small).color(colors().info));
+            self.ui.drawing.push(Spot { key: format!("{index}:{n}"), rect: link.rect });
+        }
+    }
+
     /// Item `index`'s code blocks, where they were drawn: places of their
     /// own (`3:c0`).
     fn code_spots(&mut self, index: usize, drawn: &[Rect]) {
@@ -467,6 +481,11 @@ impl ChatStreamState {
                 let under = content.iter().filter(|b| !matches!(b, ContentBlock::Text { .. })).map(block_summary).collect();
                 let drawn = self.ui.messages.draw(ui, &crate::conversation::Message { markdown: true, under, ..crate::conversation::Message::new(&by, &text) });
                 self.code_spots(index, &drawn);
+                // The files its words name, as a call's places are.
+                let places = nav::links_of(item);
+                if !places.is_empty() {
+                    ui.horizontal_wrapped(|ui| self.places(ui, index, &places));
+                }
             }
             // Reasoning, a call's output: folded unless opened (the fold
             // keys, or its control under it while you're on it).
@@ -478,19 +497,13 @@ impl ChatStreamState {
                     ui.label(RichText::new(text).monospace().size(crate::theme::look().text_body).color(colors().muted));
                 }
             }
-            ItemBody::ToolCall { name, output, locations, .. } => {
+            ItemBody::ToolCall { name, output, .. } => {
                 let (tag, color) = status_tag(item.status);
                 let title = item.title.clone().unwrap_or_else(|| name.clone());
                 let icon = words::of(&item.body).map_or("", |s| s.icon);
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(format!("{tag} {icon} {title}")).monospace().size(crate::theme::look().text_body).color(color));
-                    for (n, loc) in locations.iter().enumerate() {
-                        let label = match loc.line { Some(l) => format!("{} {}:{l}", icon::FOLDER_OPEN, loc.path), None => format!("{} {}", icon::FOLDER_OPEN, loc.path) };
-                        // A place it went: the cursor goes on it (a click),
-                        // and it opens (Enter, a double click).
-                        let link = ui.label(RichText::new(label).monospace().size(crate::theme::look().text_small).color(colors().info));
-                        self.ui.drawing.push(Spot { key: format!("{index}:{n}"), rect: link.rect });
-                    }
+                    self.places(ui, index, &nav::links_of(item));
                 });
                 // Its output, or what its sub-agent did (its items follow,
                 // open): folded unless opened.

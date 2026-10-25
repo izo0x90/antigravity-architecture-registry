@@ -358,6 +358,9 @@ since anything"), with a heartbeat of its updates beside it ("At work:",
 `[chat] indicator`). A message's code blocks are coloured as the code view
 colours a file of the language their fence names (`POST
 /api/code/highlight`); `c` copies the one you're on (`f` picks one).
+The files a message's words name (`src/a.rs:12`, a path with a folder or a
+line) are links under it, as a call's places are: Enter opens the one
+you're on in the code view, at its line.
 
 Tool servers: every session gets ours (`/api/mcp/sse`) and the project's,
 kept in `.nah/mcp.toml` (`GET`/`PUT /api/mcp/servers`; `Space p a` adds

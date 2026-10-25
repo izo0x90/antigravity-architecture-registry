@@ -211,6 +211,51 @@ fn closes(line: &str, mark: &str) -> bool {
     trimmed.len() >= mark.len() && trimmed.chars().all(|x| x == c) && line.len() - line.trim_start_matches(' ').len() <= 3
 }
 
+/// The most places a message's words are read for.
+const PLACES_MOST: usize = 12;
+
+/// The files a message's words name, in order, each once: a path (a
+/// folder in it, or a line after it: `src/a.rs`, `lib.rs:12`, `a.rs:12:5`
+/// is line 12), not a web address or a version number.
+pub fn places(text: &str) -> Vec<(String, Option<usize>)> {
+    let mut out: Vec<(String, Option<usize>)> = Vec::new();
+    let apart = |c: char| c.is_whitespace() || matches!(c, '`' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\'' | '<' | '>' | ',' | ';' | '*');
+    for word in text.split(apart) {
+        if out.len() == PLACES_MOST {
+            break;
+        }
+        if word.contains("://") {
+            continue;
+        }
+        let word = word.trim_end_matches(['.', ':', '!', '?']);
+        let (path, line) = match word.split_once(':') {
+            Some((path, rest)) => {
+                let digits = &rest[..rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len())];
+                match digits.parse::<usize>() {
+                    Ok(line) if line > 0 => (path, Some(line)),
+                    // (Something after a colon that isn't a line: not a place.)
+                    _ => continue,
+                }
+            }
+            None => (word, None),
+        };
+        let path = path.strip_prefix("./").unwrap_or(path);
+        if is_path(path) && (path.contains('/') || line.is_some()) && !out.iter().any(|(p, l)| p == path && *l == line) {
+            out.push((path.to_owned(), line));
+        }
+    }
+    out
+}
+
+/// Whether `word` reads as a file's path: path characters, a name with an
+/// extension (letters in it) last.
+fn is_path(word: &str) -> bool {
+    let name = word.rsplit('/').next().unwrap_or(word);
+    let Some((stem, extension)) = name.rsplit_once('.') else { return false };
+    let path_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/');
+    !stem.is_empty() && !word.starts_with('/') && word.chars().all(path_char) && (1..=8).contains(&extension.len()) && extension.chars().all(|c| c.is_ascii_alphanumeric()) && extension.chars().any(|c| c.is_ascii_alphabetic())
+}
+
 /// Markdown cut around its tables (lines of cells, `| … |`, with a
 /// `|---|` line among them), in order.
 fn tables_apart(text: &str) -> Vec<Part<'_>> {
@@ -566,6 +611,17 @@ mod tests {
         ]);
         assert_eq!(parts("```\n| a |\n|---|\nstill"), [Part::Code { fence: "", code: "| a |\n|---|\nstill" }], "not closed yet: to the end");
         assert_eq!(parts("    ```\nindented: words"), [Part::Words("    ```\nindented: words")], "four spaces in: no fence");
+    }
+
+    /// A message's words name files: paths with a folder, or a line after
+    /// them; each once, in order; not a web address, a version, a bare name,
+    /// or a colon with no line after it.
+    #[test]
+    fn the_files_a_message_names_are_read_from_its_words() {
+        let text = "See src/chat/render.rs:42, and `lib.rs:7` (and lib.rs:7 again); ./crates/a.rs too.\n\
+                    Not https://x.io/a.rs:3, v1.2.3, render.rs, e.g. this, note: that, /abs/a.rs or a.rs:x.";
+        assert_eq!(places(text), [("src/chat/render.rs".to_owned(), Some(42)), ("lib.rs".to_owned(), Some(7)), ("crates/a.rs".to_owned(), None)]);
+        assert_eq!(places("Cargo.toml:5:3 and [the file](src/x.ts)"), [("Cargo.toml".to_owned(), Some(5)), ("src/x.ts".to_owned(), None)]);
     }
 
     #[test]

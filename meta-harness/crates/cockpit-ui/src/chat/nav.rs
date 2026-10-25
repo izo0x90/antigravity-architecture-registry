@@ -2,11 +2,13 @@
 
 use super::*;
 
-/// The files an item points at, in the order they're drawn.
+/// The files an item points at, in the order they're drawn: a call's
+/// places, a change's file, the files a message's words name.
 pub(super) fn links_of(item: &TurnItem) -> Vec<(String, Option<usize>)> {
     match &item.body {
         ItemBody::ToolCall { locations, .. } => locations.iter().map(|l| (l.path.clone(), l.line.map(|l| l as usize))).collect(),
         ItemBody::FileChange { path, .. } => vec![(path.clone(), None)],
+        ItemBody::AssistantMessage { .. } => crate::conversation::places(&item.body.said().unwrap_or_default()),
         _ => Vec::new(),
     }
 }
