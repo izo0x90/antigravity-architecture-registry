@@ -47,7 +47,7 @@ impl CockpitApp {
             let choices = self.slots_to_ask().into_iter().map(|(name, role)| Choice::new(name.clone(), name.clone()).detail(Some(if name == lead { "the lead (asked unless another is picked)".to_owned() } else { role }))).collect();
             out.push(Action::new("discuss.ask", format!("Who answers {} on {}?", d.kind.words(), d.words), "An agent slot: the lead, unless another is picked", S::DiscussAsk).param(Param::Choice(choices)).group(Group::Act).importance(MINOR));
             let asked = d.asked.as_ref().map(|a| format!(", asking {a}")).unwrap_or_default();
-            out.push(Action::new("discuss.write", format!("{} on {}{asked}", crate::spec::capitalized(d.kind.words()), d.words), "What it asks (# links a tag, @ a file or a symbol)", S::DiscussWrite).param(Param::Writing { hint: "what you ask".into(), start: d.text.clone(), links: true }).group(Group::Act).importance(MINOR));
+            out.push(Action::new("discuss.write", format!("{} on {}{asked}", crate::nav::capitalized(d.kind.words()), d.words), "What it asks (# links a tag, @ a file or a symbol)", S::DiscussWrite).param(Param::Writing { hint: "what you ask".into(), start: d.text.clone(), links: true }).group(Group::Act).importance(MINOR));
         }
         out
     }

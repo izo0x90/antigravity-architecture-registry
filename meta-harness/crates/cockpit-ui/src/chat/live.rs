@@ -9,34 +9,48 @@ use super::*;
 use crate::indicator::{Activity, Liveness, Next, Stage};
 
 /// The indicator's spot beside the words.
-pub(super) const SPOT: Vec2 = Vec2::new(64.0, 12.0);
+pub(super) fn spot() -> Vec2 {
+    let look = crate::theme::look();
+    Vec2::new(look.space_huge + look.space_xl, look.text_label)
+}
+
+/// A while, in words: "12 s", "3 min".
+fn span_words(seconds: f64) -> String {
+    if seconds < 60.0 { format!("{} s", seconds as u64) } else { format!("{} min", (seconds / 60.0) as u64) }
+}
+
+/// When a while's words next change (a second's, or a minute's, turn).
+fn span_changes(seconds: f64) -> f64 {
+    if seconds < 60.0 { 1.0 - seconds.fract() } else { 60.0 - seconds % 60.0 }
+}
 
 impl ChatStreamState {
     /// The agent at work at `now`, as plain data: its updates over the
-    /// last while (as long as it can be before it's quiet too long).
+    /// trace's span.
     pub(super) fn activity(&self, view: &ThreadView, now: f64) -> Activity {
         let (receiving, quiet) = (self.settings.receiving_s, self.settings.quiet_after_s);
         let since_last = view.arrivals().back().map(|(t, _)| (now - t).max(0.0));
+        let asking = view.requests().iter().any(|r| self.agents().waits(r));
         let liveness = match since_last {
-            _ if !self.agents().connected() => Liveness::Disconnected,
+            _ if !self.connected => Liveness::Disconnected,
+            _ if asking => Liveness::Asking,
             // (Nothing's come since it was known: no time to say.)
             None => Liveness::Waiting,
             Some(s) if s < receiving => Liveness::Receiving,
             Some(s) if s < quiet => Liveness::Waiting,
             Some(_) => Liveness::Quiet,
         };
-        let updates = view.arrivals().iter().filter(|(t, _)| now - *t <= quiet).copied().collect();
+        let updates = view.arrivals().iter().filter(|(t, _)| now - *t <= crate::indicator::TRACE_S).copied().collect();
         Activity { liveness, updates, since_last, doing: self.doing(view) }
     }
 
     /// What it's doing, from the running turn's latest item.
     fn doing(&self, view: &ThreadView) -> String {
-        let Some(turn) = view.running() else { return "Working".into() };
-        let Some(item) = view.items_of(&turn.id).next_back() else { return "Starting".into() };
+        let Some(turn) = view.running() else { return words::WORKING.into() };
+        let Some(item) = view.items_of(&turn.id).next_back() else { return words::STARTING.into() };
         match &item.body {
-            ItemBody::Request { request_id } if self.waits_on_you(view, request_id) => "Asking you".into(),
-            ItemBody::AssistantMessage { .. } => "Writing".into(),
-            _ => words::doing(item).unwrap_or_else(|| "Working".into()),
+            ItemBody::AssistantMessage { .. } => words::WRITING.into(),
+            _ => words::doing(item).unwrap_or_else(|| words::WORKING.into()),
         }
     }
 
@@ -48,12 +62,9 @@ impl ChatStreamState {
         {
             return Some(format!("it can't run: {reason}"));
         }
-        Some(match self.instance()?.status.clone() {
+        Some(match &self.instance()?.status {
             ProviderStatus::Ready => "the server still reaches it".into(),
-            ProviderStatus::Starting => "its harness is starting again".into(),
-            ProviderStatus::NeedsAuth => "it needs you to sign in".into(),
-            ProviderStatus::Unavailable { reason } => format!("its harness can't run: {reason}"),
-            ProviderStatus::Error { message } => format!("its harness failed: {message}"),
+            other => format!("its harness {}", crate::agents::status_words(other)),
         })
     }
 
@@ -64,10 +75,11 @@ impl ChatStreamState {
         match activity.liveness {
             Liveness::Receiving => (format!("{}…", activity.doing), colors().info, Next::In(self.settings.receiving_s - since)),
             Liveness::Waiting if activity.since_last.is_none() => (format!("{}…", activity.doing), colors().muted, Next::OnChange),
-            Liveness::Waiting => (format!("{}… {} s since anything", activity.doing, since as u64), colors().muted, Next::In((1.0 - since.fract()).min(self.settings.quiet_after_s - since))),
+            Liveness::Waiting => (format!("{}… {} since anything", activity.doing, span_words(since)), colors().muted, Next::In(span_changes(since).min(self.settings.quiet_after_s - since))),
+            Liveness::Asking => ("Waiting on you".to_owned(), colors().info, Next::OnChange),
             Liveness::Quiet => {
                 let reach = self.reach().map(|r| format!(" · {r}")).unwrap_or_default();
-                (format!("No word for {} min{reach}", (since / 60.0) as u64), colors().warn, Next::In(60.0 - since % 60.0))
+                (format!("No word for {}{reach}", span_words(since)), colors().warn, Next::In(span_changes(since)))
             }
             Liveness::Disconnected => ("The connection to the server is down".to_owned(), colors().warn, Next::OnChange),
         }
@@ -79,14 +91,15 @@ impl ChatStreamState {
     pub(super) fn render_live(&self, ui: &mut egui::Ui, activity: &Activity) -> Option<Rect> {
         let (words, color, _) = self.live_words(activity);
         let look = crate::theme::look();
-        let room = ui.available_width() - SPOT.x - ui.spacing().item_spacing.x;
+        let spot = spot();
+        let room = ui.available_width() - spot.x - ui.spacing().item_spacing.x;
         let label = egui::Label::new(RichText::new(words).size(look.text_small).color(color)).truncate();
-        if room < SPOT.x {
+        if room < spot.x {
             ui.add(label);
             return None;
         }
-        ui.allocate_ui(Vec2::new(room, SPOT.y), |ui| ui.add(label));
-        Some(ui.allocate_exact_size(SPOT, egui::Sense::hover()).0)
+        ui.allocate_ui(Vec2::new(room, spot.y), |ui| ui.add(label));
+        Some(ui.allocate_exact_size(spot, egui::Sense::hover()).0)
     }
 
     /// After the stream's drawn: the live line's indicator where its spot
@@ -94,7 +107,8 @@ impl ChatStreamState {
     /// its turn's still in sight, pinned at the stream's top), on the
     /// stage (the panel, the items on screen), see-through over the panel;
     /// the next frame asked for when it or the words next move (gently;
-    /// nothing asked while it's out of sight).
+    /// nothing asked while it's out of sight; the words alone when there's
+    /// no room for the indicator).
     pub(super) fn show_live(&mut self, ui: &mut egui::Ui, visible: Rect, panel: Rect, items: &[Rect]) {
         let Some(live) = self.ui.live_at.take() else { return };
         let spot = if visible.intersects(live.line) {
@@ -102,12 +116,13 @@ impl ChatStreamState {
         } else if live.line.bottom() <= visible.top() && live.turn_bottom > visible.top() + live.line.height() {
             self.pin_live(ui, visible, &live)
         } else {
-            None
+            return;
         };
-        let Some(spot) = spot else { return };
         let (now, activity) = (ui.input(|i| i.time), &live.activity);
         let (_, _, mut next) = self.live_words(activity);
-        if let Some(drawer) = self.ui.indicator.drawer() {
+        if let Some(spot) = spot
+            && let Some(drawer) = self.ui.indicator.drawer()
+        {
             let stage = Stage { spot, panel, items: items.iter().filter(|r| r.intersects(visible)).copied().collect() };
             let over = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Middle, ui.id().with("live over"))).with_clip_rect(panel);
             next = sooner(next, drawer.draw(&ui.painter_at(spot.intersect(visible)), &over, activity, &stage, now));

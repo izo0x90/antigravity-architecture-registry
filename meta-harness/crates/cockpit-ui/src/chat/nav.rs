@@ -39,8 +39,9 @@ impl ChatStreamState {
     /// again.
     pub(super) fn moves(&self) -> Vec<Action> {
         let mut out = crate::nav::list_moves();
-        out.push(Move::Motion(Motion::NextSibling).offer("Next message"));
-        out.push(Move::Motion(Motion::PrevSibling).offer("Previous message"));
+        for (motion, words) in [(Motion::NextSibling, "Next message"), (Motion::PrevSibling, "Previous message")] {
+            out.push(Move::Motion(motion).offer_if(!self.messages_beside(motion).is_empty(), words));
+        }
         // Enter: a folded run opens; else the file it points to does.
         let here = self.here().unwrap_or_default();
         out.push(match (here.unfolds(), self.chip_here(), self.target()) {
@@ -62,23 +63,28 @@ impl ChatStreamState {
 }
 
 impl ChatStreamState {
-    /// The `count`th message (yours or the agent's) after the cursor's row
-    /// (`forward`), or before it: the calls and the rest between passed
-    /// over (following the latest: from the newest).
-    fn step_message(&mut self, forward: bool, count: usize) {
+    /// The messages (yours or the agent's) after the cursor's row
+    /// (`Motion::NextSibling`) or before it, nearest first, each by its
+    /// place in the stream: the calls and the rest between passed over
+    /// (following the latest: none after, every one before).
+    fn messages_beside(&self, motion: Motion) -> Vec<usize> {
         let shape = self.shape();
-        let Some(view) = self.thread() else { return };
-        let is_message = |row: &rows::Row| !row.folded && view.in_stream(row.first).is_some_and(|i| matches!(i.body, ItemBody::UserMessage { .. } | ItemBody::AssistantMessage { .. }));
+        let Some(view) = self.thread() else { return Vec::new() };
+        let is_message = |row: &&rows::Row| !row.folded && view.in_stream(row.first).is_some_and(|i| matches!(i.body, ItemBody::UserMessage { .. } | ItemBody::AssistantMessage { .. }));
         let from = self.ui.cursor.and_then(|c| shape.row_of(c));
-        let messages: Vec<usize> = match (forward, from) {
-            (true, Some(at)) => shape.rows.iter().enumerate().skip(at + 1).filter(|(_, r)| is_message(r)).map(|(n, _)| n).collect(),
-            (true, None) => Vec::new(),
-            (false, at) => shape.rows.iter().enumerate().take(at.unwrap_or(shape.rows.len())).filter(|(_, r)| is_message(r)).map(|(n, _)| n).rev().collect(),
-        };
-        drop(view);
-        let to = messages.get(count.max(1) - 1).or(messages.last()).map(|n| shape.rows[*n].first);
-        if let Some(to) = to {
-            self.put_cursor(to, crate::viewport::Show::InView);
+        match (motion, from) {
+            (Motion::NextSibling, Some(at)) => shape.rows.iter().skip(at + 1).filter(is_message).map(|r| r.first).collect(),
+            (Motion::NextSibling, None) => Vec::new(),
+            (_, at) => shape.rows.iter().take(at.unwrap_or(shape.rows.len())).filter(is_message).map(|r| r.first).rev().collect(),
+        }
+    }
+
+    /// The `count`th message beside the cursor (`messages_beside`), or
+    /// the last there is.
+    fn step_message(&mut self, motion: Motion, count: usize) {
+        let messages = self.messages_beside(motion);
+        if let Some(to) = messages.get(count.max(1) - 1).or(messages.last()).copied() {
+            self.put_cursor(to, crate::viewport::Show::InView, render::Reveal::Row);
         }
     }
 
@@ -215,6 +221,7 @@ impl Navigable for ChatStreamState {
         self.settle();
         self.agents.follow(&shared.agents);
         self.comparer.follow(&shared.comparer);
+        self.connected = *shared.socket.get() == crate::net::WsState::Open;
         self.unsent.follow(&shared.drafts);
         self.ui.messages.follow(shared);
         self.tend();
@@ -257,7 +264,7 @@ impl Navigable for ChatStreamState {
                 None => harness_contracts::Subject::ChatTurn { session: session.clone(), turn: *turn, turn_id: String::new() },
             };
             let at = self.tagged_indexes(&subject).first().copied().ok_or_else(|| format!("Turn {turn} isn't in the chat (its session holds it no more)."))?;
-            self.put_cursor(at, crate::viewport::Show::Middle);
+            self.put_cursor(at, crate::viewport::Show::Middle, render::Reveal::Item);
             return Ok(());
         }
         let Target::Agent { slot, thread } = target else { return Err("Not an agent's chat.".into()) };
@@ -320,10 +327,10 @@ impl Navigable for ChatStreamState {
         let fresh = self.ui.cursor.is_none();
         match motion {
             // Following the latest: the first move lands on the newest.
-            Motion::Down | Motion::Up if fresh => self.put_cursor(last.first, Show::InView),
+            Motion::Down | Motion::Up if fresh => self.put_cursor(last.first, Show::InView, render::Reveal::Row),
             // Message of that number (as a place says it).
-            Motion::Line(i) => self.put_cursor(i.saturating_sub(1), Show::Middle),
-            Motion::NextSibling | Motion::PrevSibling => self.step_message(motion == Motion::NextSibling, count),
+            Motion::Line(i) => self.put_cursor(i.saturating_sub(1), Show::Middle, render::Reveal::Row),
+            Motion::NextSibling | Motion::PrevSibling => self.step_message(motion, count),
             _ => {
                 if let Some(go) = Go::of(motion, count) {
                     self.go(go);
@@ -396,11 +403,14 @@ impl Navigable for ChatStreamState {
         self.ui.cursor.and_then(|c| shape.row_of(c)).map(|r| shape.rows[r].first.to_string())
     }
 
-    /// A message ("3"), one of its links ("3:1") or code blocks ("3:c0").
+    /// An item ("3": shown itself, a folded run holding it opened), a
+    /// folded run's row ("3:run"), one of an item's links ("3:1"), code
+    /// blocks ("3:c0") or chips ("3:l0").
     fn move_to(&mut self, key: &str) {
         let (index, part) = key.split_once(':').map_or((key, None), |(i, p)| (i, Some(p)));
         let Ok(index) = index.parse::<usize>() else { return };
-        self.put_cursor(index, crate::viewport::Show::Middle);
+        let reveal = if part.is_none() { render::Reveal::Item } else { render::Reveal::Row };
+        self.put_cursor(index, crate::viewport::Show::Middle, reveal);
         self.ui.pick = part.and_then(Pick::of);
     }
 }

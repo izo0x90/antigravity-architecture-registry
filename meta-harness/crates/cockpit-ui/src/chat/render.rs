@@ -58,6 +58,18 @@ pub(crate) struct Measure {
     text: f32,
 }
 
+/// What the cursor going to an item shows: the row it starts (a folded
+/// run, for its first call), or the item itself (a run holding it opened,
+/// its first's too: a search's hit).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Reveal {
+    Row,
+    Item,
+}
+
+/// A folded run's row as a place: its key after its first item's.
+pub(super) const RUN: &str = "run";
+
 /// A file a call changed, as it's shown: compared (its hunks, what they
 /// add and remove), on its way, or written whole (no old text came with
 /// it: there's nothing to compare it with).
@@ -181,7 +193,8 @@ impl ChatStreamState {
             // past that.
             let pending = self.pending();
             if !pending.is_empty() {
-                let most = (whole * WAITING_SHARE).max(80.0);
+                // (At least a card's title and its row of answers.)
+                let most = (whole * WAITING_SHARE).max(4.0 * ui.spacing().interact_size.y);
                 egui::ScrollArea::vertical().id_salt(("chat_waiting", cx.at)).max_height(most).min_scrolled_height(most).auto_shrink([false, true]).show(ui, |ui| {
                     for (index, request) in &pending {
                         let on = index.is_some() && self.ui.cursor == *index;
@@ -418,7 +431,7 @@ impl ChatStreamState {
             // Each turn under its line (what it is, how it went).
             if turn != Some(&item.turn_id) {
                 if turn.is_some() {
-                    ui.add(egui::Separator::default().spacing(8.0));
+                    ui.add(egui::Separator::default().spacing(crate::theme::look().space_m));
                 }
                 turn = Some(&item.turn_id);
                 if let Some(t) = view.turn(&item.turn_id) {
@@ -447,7 +460,8 @@ impl ChatStreamState {
             // card); here, the line saying where it was asked.
             let waiting = matches!(&item.body, ItemBody::Request { request_id } if self.waits_on_you(view, request_id));
             if !waiting {
-                self.ui.drawing.push(Spot { key: row.first.to_string(), rect });
+                let key = if row.folded { format!("{}:{RUN}", row.first) } else { row.first.to_string() };
+                self.ui.drawing.push(Spot { key, rect });
             }
             if let Some(live) = self.ui.live_at.as_mut().filter(|l| l.turn == item.turn_id) {
                 live.turn_bottom = rect.bottom();
@@ -455,7 +469,7 @@ impl ChatStreamState {
             ui.add_space(crate::theme::look().space_xs);
         }
         if turn.is_some() {
-            ui.add(egui::Separator::default().spacing(8.0));
+            ui.add(egui::Separator::default().spacing(crate::theme::look().space_m));
         }
     }
 
@@ -465,7 +479,7 @@ impl ChatStreamState {
         let line = format!("{} {}", crate::nav::fold_mark(false), rows::summary(&run));
         let what = rows::Folding::of_run(&run).map(|f| f.words()).unwrap_or_default();
         ui.add(egui::Label::new(RichText::new(line).size(crate::theme::look().text_body).color(colors().muted)).truncate())
-            .on_hover_text(format!("{}{}, folded", what.get(..1).unwrap_or_default().to_uppercase(), what.get(1..).unwrap_or_default()));
+            .on_hover_text(format!("{}, folded", crate::nav::capitalized(&what)));
     }
 
     /// A turn's line: its number, what it changed, and whether it's queued,
@@ -500,9 +514,9 @@ impl ChatStreamState {
     }
 
     /// The cursor on item `index` (what hides it opened: a folded run
-    /// holding it, unless it's the run's first, and the calls whose
-    /// sub-agents it's within), shown.
-    pub(super) fn put_cursor(&mut self, index: usize, show: crate::viewport::Show) {
+    /// holding it, and the calls whose sub-agents it's within; a run's
+    /// first stays its run's row unless `reveal` is the item), shown.
+    pub(super) fn put_cursor(&mut self, index: usize, show: crate::viewport::Show, reveal: Reveal) {
         let Some(last) = self.shape().rows.last().map(|r| r.last) else { return };
         let index = index.min(last);
         // (Each pass opens one; one that doesn't open ends it.)
@@ -510,7 +524,8 @@ impl ChatStreamState {
         loop {
             let shape = self.shape();
             let Some(row) = shape.row_of(index).map(|r| &shape.rows[r]) else { return };
-            if row.first == index || opened == Some((row.first, row.last)) {
+            let shown = row.first == index && (reveal == Reveal::Row || !row.folded);
+            if shown || opened == Some((row.first, row.last)) {
                 break;
             }
             opened = Some((row.first, row.last));
@@ -567,7 +582,7 @@ impl ChatStreamState {
                 None => format!("{} {path}", icon::FOLDER_OPEN),
             };
             let link = ui.label(RichText::new(label).monospace().size(crate::theme::look().text_small).color(colors().info));
-            self.ui.drawing.push(Spot { key: format!("{index}:{n}"), rect: link.rect });
+            self.ui.drawing.push(Spot { key: Pick::Link(n).key(index), rect: link.rect });
         }
     }
 
@@ -575,7 +590,7 @@ impl ChatStreamState {
     /// own (`3:c0`).
     fn code_spots(&mut self, index: usize, drawn: &[Rect]) {
         for (n, rect) in drawn.iter().enumerate() {
-            self.ui.drawing.push(Spot { key: format!("{index}:c{n}"), rect: *rect });
+            self.ui.drawing.push(Spot { key: Pick::Code(n).key(index), rect: *rect });
         }
     }
 
@@ -591,7 +606,7 @@ impl ChatStreamState {
                 let (shown, links, handed_on) = crate::conversation::as_typed(text, typed.as_ref());
                 let drawn = self.ui.messages.draw(ui, egui::Id::new(&item.id), &crate::conversation::Message { links, ..crate::conversation::Message::new("user", shown) });
                 for (n, rect) in drawn.chips.iter().enumerate() {
-                    self.ui.drawing.push(Spot { key: format!("{index}:l{n}"), rect: *rect });
+                    self.ui.drawing.push(Spot { key: Pick::Chip(n).key(index), rect: *rect });
                 }
                 if let Some(handed_on) = handed_on {
                     let open = self.ui.folds.item_open(item);

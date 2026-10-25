@@ -78,6 +78,8 @@ pub struct ChatStreamState {
     seen_settings: u64,
     /// Unchanged lines shown around a change (the Changes view's).
     context: usize,
+    /// Whether the server's event socket is up (the shell's word).
+    connected: bool,
 }
 
 /// A chat view's own state: what's typed, where the cursor is, what was
@@ -232,6 +234,15 @@ pub(crate) enum Pick {
 }
 
 impl Pick {
+    /// Its place's key, in item `index` (`3:1`, `3:c0`, `3:l0`).
+    pub(crate) fn key(self, index: usize) -> String {
+        match self {
+            Self::Link(n) => format!("{index}:{n}"),
+            Self::Code(n) => format!("{index}:c{n}"),
+            Self::Chip(n) => format!("{index}:l{n}"),
+        }
+    }
+
     /// From a place's key after its item's (`1`, `c0`, `l0`).
     fn of(part: &str) -> Option<Self> {
         if let Some(code) = part.strip_prefix('c') {

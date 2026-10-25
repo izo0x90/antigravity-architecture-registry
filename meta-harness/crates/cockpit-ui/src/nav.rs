@@ -9,6 +9,12 @@ use harness_contracts::{NotificationId, SlotId, ThreadId};
 
 use crate::kind::BufferKind;
 
+/// `text` with its first letter a capital (any view's words).
+pub fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
+}
+
 /// A component's name from its id alone (`rust:a::b::run` → `run`), for
 /// when nothing here knows its card.
 pub fn short_name(id: &ComponentId) -> String {

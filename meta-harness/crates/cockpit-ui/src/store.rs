@@ -9,8 +9,8 @@ use harness_contracts::{
 };
 
 /// The agent's updates kept per thread (each tenth of a second once, the
-/// newest): a minute of steady updates.
-const ARRIVALS_KEPT: usize = 600;
+/// newest): as many as the indicator's trace shows of steady updates.
+const ARRIVALS_KEPT: usize = (crate::indicator::TRACE_S * 10.0) as usize;
 
 /// Each thread view made, numbered (so what's worked out from one isn't
 /// taken for another's, a resync's new view of the same thread).

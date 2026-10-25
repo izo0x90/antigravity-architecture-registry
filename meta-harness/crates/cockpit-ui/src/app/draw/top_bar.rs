@@ -187,7 +187,7 @@ impl CockpitApp {
 
                     // Status LEDs: SRV = event WebSocket to the meta-harness server,
                     // AGENT = the agent session behind it. Both flicker on traffic.
-                    let ws = self.desk.net.ws_state.lock().map(|s| *s).unwrap_or(WsState::Closed);
+                    let ws = *self.desk.shared.socket.get();
                     let (srv_color, srv_hint) = match ws {
                         WsState::Open => (colors().ok, "Meta-harness server: connected"),
                         WsState::Connecting => (colors().warn, "Meta-harness server: connecting…"),

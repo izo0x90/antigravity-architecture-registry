@@ -17,6 +17,8 @@ pub enum Liveness {
     Receiving,
     /// Nothing new, the connection fine.
     Waiting,
+    /// It waits on you (a request of its): quiet, as it should be.
+    Asking,
     /// No word for a long while.
     Quiet,
     /// The connection to the server is down.
@@ -27,8 +29,8 @@ pub enum Liveness {
 #[derive(Clone, Debug)]
 pub struct Activity {
     pub liveness: Liveness,
-    /// When its recent updates came (the clock's seconds), oldest first:
-    /// each tenth of a second that had any, and how many.
+    /// When its updates over the trace's span came (the clock's seconds),
+    /// oldest first: each tenth of a second that had any, and how many.
     pub updates: Vec<(f64, u32)>,
     /// Seconds since the last of them (none: none came since it was known).
     pub since_last: Option<f64>,
@@ -128,20 +130,26 @@ impl Default for Shown {
     }
 }
 
-/// A trace over the last few seconds that blips once for each update as it
-/// came: its rhythm is the real one. Waiting, it lies flat, a slow
-/// breathing dot beside it; quiet too long or cut off, it dims, amber.
+/// A trace over the last few seconds with a blip where updates came, as
+/// they came: its rhythm is the real one, as far as the trace's width
+/// shows it (updates closer than a blip's width are one blip, as tall as
+/// how many they are). Waiting, it lies flat, a slow breathing dot beside
+/// it; waiting on you, flat and still; quiet too long or cut off, it dims,
+/// amber.
 pub struct Heartbeat;
 
 /// The seconds the trace spans.
 pub const TRACE_S: f64 = 10.0;
+
+/// Updates in one blip that make it its full height (fewer, lower).
+const FULL_BLIP: u32 = 8;
 
 impl Indicator for Heartbeat {
     fn draw(&mut self, spot: &egui::Painter, _over: &egui::Painter, activity: &Activity, stage: &Stage, now: f64) -> Next {
         let (theme, look) = (crate::theme::colors(), crate::theme::look());
         let rect = stage.spot;
         let (line, faded) = match activity.liveness {
-            Liveness::Receiving | Liveness::Waiting => (theme.ok, false),
+            Liveness::Receiving | Liveness::Waiting | Liveness::Asking => (theme.ok, false),
             Liveness::Quiet | Liveness::Disconnected => (theme.warn, true),
         };
         let color = if faded { line.gamma_multiply(0.5) } else { line };
@@ -149,27 +157,30 @@ impl Indicator for Heartbeat {
         // The trace, and the dot's room at its right end (in the spot).
         let most = look.line_bold + 1.0;
         let trace = Rect::from_min_max(rect.min, Pos2::new(rect.right() - 2.0 * most - look.space_xs, rect.max.y));
-        let blip_w = 6.0;
+        let blip_w = look.space_sm;
         let x_at = |t: f64| trace.right() - blip_w - ((now - t) / TRACE_S) as f32 * (trace.width() - blip_w);
-        // The base line, then a blip for each update in sight (ones closer
-        // than a blip's width, as one).
+        // The base line, then the blips: each update where it came; ones
+        // closer than a blip's width, one blip as tall as how many.
         spot.line_segment([Pos2::new(trace.left(), mid), Pos2::new(trace.right(), mid)], Stroke::new(look.line_thin, color.gamma_multiply(0.5)));
-        let height = rect.height() / 2.0 - 1.0;
-        let mut drawn = f32::NEG_INFINITY;
         let in_sight = || activity.updates.iter().filter(|(t, _)| now - *t <= TRACE_S);
-        for (t, _) in in_sight() {
+        let mut blips: Vec<(f32, u32)> = Vec::new();
+        for (t, n) in in_sight() {
             let x = x_at(*t);
-            if x - drawn < blip_w {
-                continue;
+            match blips.last_mut() {
+                Some((at, count)) if x - *at < blip_w => *count += n,
+                _ => blips.push((x, *n)),
             }
-            drawn = x;
-            let blip = vec![Pos2::new(x, mid), Pos2::new(x + 2.0, mid - height), Pos2::new(x + 4.0, mid + height * 0.6), Pos2::new(x + blip_w, mid)];
+        }
+        let tallest = rect.height() / 2.0 - look.space_hair;
+        for (x, count) in blips {
+            let height = tallest * (0.5 + 0.5 * (count.min(FULL_BLIP) as f32 / FULL_BLIP as f32));
+            let blip = vec![Pos2::new(x, mid), Pos2::new(x + blip_w / 3.0, mid - height), Pos2::new(x + blip_w * 2.0 / 3.0, mid + height * 0.6), Pos2::new(x + blip_w, mid)];
             spot.add(egui::Shape::line(blip, Stroke::new(look.line_bold, color)));
         }
         // Waiting: a dot breathing slowly at its end.
         let waiting = activity.liveness == Liveness::Waiting;
         if waiting {
-            let breath = ((now * std::f64::consts::TAU / 3.0).sin() * 0.5 + 0.5) as f32;
+            let breath = ((now * std::f64::consts::TAU / BREATH_PERIOD_S).sin() * 0.5 + 0.5) as f32;
             spot.circle_filled(Pos2::new(rect.right() - most, mid), look.line_bold + breath, line.gamma_multiply(0.35 + 0.5 * breath));
         }
         // Moving: the trace a pixel at a time while a blip's in sight; the
@@ -184,8 +195,9 @@ impl Indicator for Heartbeat {
     }
 }
 
-/// How often the breathing dot is drawn again.
+/// How often the breathing dot is drawn again, and how long one breath is.
 const BREATH_S: f64 = 0.15;
+const BREATH_PERIOD_S: f64 = 3.0;
 
 #[cfg(test)]
 mod tests {

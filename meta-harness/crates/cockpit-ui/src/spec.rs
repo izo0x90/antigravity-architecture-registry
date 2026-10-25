@@ -865,17 +865,12 @@ fn how_known(r: &arch_graph::Relation, name: &str) -> (String, String) {
         return (format!("{name} (planned)"), String::new());
     }
     match Evidence::of(r) {
-        Some(e @ Evidence::Named) => (format!("{name} (matched by name)"), format!("\n{}: not confirmed by the language's own analyzer.", capitalized(&e.describe()))),
-        Some(e) => (name.to_owned(), format!("\n{}.", capitalized(&e.describe()))),
+        Some(e @ Evidence::Named) => (format!("{name} (matched by name)"), format!("\n{}: not confirmed by the language's own analyzer.", crate::nav::capitalized(&e.describe()))),
+        Some(e) => (name.to_owned(), format!("\n{}.", crate::nav::capitalized(&e.describe()))),
         None => (name.to_owned(), String::new()),
     }
 }
 
-/// `text` with its first letter a capital.
-pub(crate) fn capitalized(text: &str) -> String {
-    let mut chars = text.chars();
-    chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
-}
 
 fn push(inbox: &Arc<Mutex<Vec<Reply>>>, reply: Reply) {
     if let Ok(mut i) = inbox.lock() {

@@ -103,7 +103,7 @@ impl ActionProvider for ChatStreamState {
                 .map(|i| {
                     let label = match &i.status {
                         ProviderStatus::Ready => i.display_name.clone(),
-                        other => format!("{} ({other:?})", i.display_name),
+                        other => format!("{} ({})", i.display_name, crate::agents::status_words(other)),
                     };
                     Choice::new(i.instance_id.to_string(), label).current(Some(&i.instance_id) == self.active_instance().as_ref())
                 })

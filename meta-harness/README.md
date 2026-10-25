@@ -355,8 +355,10 @@ on its settings row (`Space m v`) says how much shows at first (quiet,
 normal, everything); each chat keeps what's picked for it through a
 reload, and one not picked for takes `[chat] shows` in the UI config. The
 running turn's line says what the agent is doing and how live it is
-("Reading render.rs… 12 s since anything"), with a heartbeat of its
-updates beside it ("At work:", `Space m a`, `[chat] indicator`). A message's code blocks are coloured as the code view
+("Reading render.rs… 12 s since anything"; "Waiting on you" while a
+request of its waits; "No word for 2 min" past `[chat] quiet_after_s`),
+with a heartbeat of its updates beside it ("At work:", `Space m a`,
+`[chat] indicator`). A message's code blocks are coloured as the code view
 colours a file of the language their fence names (`POST
 /api/code/highlight`). `c` copies what you're on, in every view: the code
 block `f` picked, else the message (a terminal's selection or line, the

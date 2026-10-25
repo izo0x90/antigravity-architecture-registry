@@ -176,6 +176,8 @@ pub struct Shared {
     pub comparer: Held<crate::comparer::Comparer>,
     /// Each link's colour (a tag's own), as the shell says from the tags.
     pub link_colours: Kept<LinkColours>,
+    /// The server's event socket, as the shell says it is each frame.
+    pub socket: Kept<crate::net::WsState>,
     /// The desk's server (`here`: home's own).
     pub server: String,
     /// Every server's open notifications, in the order they're gone through.

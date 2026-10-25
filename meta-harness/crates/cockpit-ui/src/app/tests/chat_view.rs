@@ -286,7 +286,7 @@ fn how_much_the_chat_shows_is_its_setting() {
     set(&ctx, &mut app, "quiet");
     assert_eq!(rows(&app), (40, 2), "quiet: the lone call folded too");
     let spots = app.desk.chat().spots();
-    assert!(app.desk.chat().cursor_key().as_deref() == Some("2") && spots.iter().any(|s| s.key == "2"), "the cursor on the run's row, drawn");
+    assert!(app.desk.chat().cursor_key().as_deref() == Some("2") && spots.iter().any(|s| s.key == "2:run"), "the cursor on the run's row, drawn");
     assert_eq!(app.desk.chat_mut().enter(), crate::nav::Step::Done, "Enter opens the run");
     assert_eq!(rows(&app), (41, 1));
     set(&ctx, &mut app, "quiet");

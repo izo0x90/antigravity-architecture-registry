@@ -11,8 +11,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 /// Event WebSocket to the meta-harness server.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum WsState {
+    #[default]
     Connecting,
     Open,
     Closed,

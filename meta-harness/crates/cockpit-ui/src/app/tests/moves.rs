@@ -334,7 +334,7 @@ fn enter_goes_in_and_backspace_comes_out_in_every_view() {
     // Chat: Enter on a folded run of calls opens it; on a call with a
     // file, opens that in the code view.
     focus(&ctx, &mut app, BufferKind::Chat);
-    app.desk.chat_mut().move_to("2");
+    app.desk.chat_mut().move_to("2:run");
     enter(&ctx, &mut app);
     assert_eq!(app.focused_kind(), BufferKind::Chat);
     enter(&ctx, &mut app);

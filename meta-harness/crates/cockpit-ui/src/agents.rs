@@ -131,11 +131,21 @@ pub struct Agents {
     /// Requests answered here whose answer is on its way (no longer
     /// waiting on you: another can't go to them meanwhile).
     answering: BTreeSet<harness_contracts::RequestId>,
-    /// The clock (seconds) as of this frame, events applied at it; whether
-    /// the server's event socket is up.
+    /// The clock (seconds) as of this frame, events applied at it.
     now: f64,
-    connected: bool,
     mailbox: Mailbox,
+}
+
+/// A harness's state, in words, after its name ("Claude Code can't run:
+/// no claude on the PATH").
+pub fn status_words(status: &ProviderStatus) -> String {
+    match status {
+        ProviderStatus::Ready => "is ready".into(),
+        ProviderStatus::Starting => "is starting".into(),
+        ProviderStatus::NeedsAuth => "needs you to sign in".into(),
+        ProviderStatus::Unavailable { reason } => format!("can't run: {reason}"),
+        ProviderStatus::Error { message } => format!("failed: {message}"),
+    }
 }
 
 impl Agents {
@@ -152,11 +162,6 @@ impl Agents {
             self.answering.remove(&request.id);
         }
         self.store.apply(event, self.now);
-    }
-
-    /// Whether the server's event socket is up (as of this frame).
-    pub fn connected(&self) -> bool {
-        self.connected
     }
 
     /// Whether `request` waits on you: pending, and no answer to it on its
@@ -254,11 +259,7 @@ impl Agents {
     /// it, as its instance says.
     pub fn harness_problem(&self) -> Option<String> {
         let instance = self.instance_in(&SlotId::new(LEAD))?;
-        match &instance.status {
-            ProviderStatus::Unavailable { reason } => Some(format!("{}: {reason}", instance.display_name)),
-            ProviderStatus::Error { message } => Some(format!("{}: {message}", instance.display_name)),
-            _ => None,
-        }
+        matches!(instance.status, ProviderStatus::Unavailable { .. } | ProviderStatus::Error { .. }).then(|| format!("{} {}", instance.display_name, status_words(&instance.status)))
     }
 
     /// How much the lead's session has done (the AGENT light blinks with it).
@@ -400,7 +401,6 @@ impl Agents {
     /// elsewhere waits on a session opening).
     pub fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
         self.now = ctx.input(|i| i.time);
-        self.connected = net.ws_state.lock().is_ok_and(|s| *s == crate::net::WsState::Open);
         if !self.tools_asked && !self.store.instances.is_empty() {
             self.tools_asked = true;
             let mailbox = self.mailbox.clone();
@@ -526,7 +526,7 @@ pub(crate) mod tests {
         assert_eq!(agents.harness_problem(), None);
         let reason = "antigravity-acp isn't installed (fix: meta-harness pack install antigravity-acp)";
         agents.apply(ClientEvent::InstanceUpdated { snapshot: snapshot(ProviderStatus::Unavailable { reason: reason.into() }) });
-        assert_eq!(agents.harness_problem().as_deref(), Some(format!("Antigravity: {reason}").as_str()), "the AGENT light's hint");
+        assert_eq!(agents.harness_problem().as_deref(), Some(format!("Antigravity can't run: {reason}").as_str()), "the AGENT light's hint");
         agents.apply(ClientEvent::InstanceUpdated { snapshot: snapshot(ProviderStatus::Ready) });
         assert_eq!(agents.harness_problem(), None);
     }

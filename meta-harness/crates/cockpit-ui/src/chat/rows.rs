@@ -364,8 +364,8 @@ pub(crate) fn shape(items: &[&TurnItem], folds: &Folds) -> Shape {
 /// (1 failed)".
 pub(crate) fn summary(calls: &[&TurnItem]) -> String {
     // (What it did, the thing it did it to; how many.)
-    let mut counts: Vec<(&str, &str, usize)> = Vec::new();
-    let mut count = |verb: &'static str, thing: &'static str| match counts.iter_mut().find(|(v, _, _)| *v == verb) {
+    let mut counts: Vec<(&str, Option<&str>, usize)> = Vec::new();
+    let mut count = |verb: &'static str, thing: Option<&'static str>| match counts.iter_mut().find(|(v, _, _)| *v == verb) {
         Some((_, _, n)) => *n += 1,
         None => counts.push((verb, thing, 1)),
     };
@@ -375,17 +375,14 @@ pub(crate) fn summary(calls: &[&TurnItem]) -> String {
     let words: Vec<String> = counts
         .into_iter()
         .map(|(verb, thing, n)| match (thing, n) {
-            ("", 1) => format!("{verb} once"),
-            ("", 2) => format!("{verb} twice"),
-            ("", n) => format!("{verb} {n} times"),
-            (thing, 1) => format!("{verb} 1 {thing}"),
-            (thing, n) => format!("{verb} {n} {thing}s"),
+            (None, 1) => format!("{verb} once"),
+            (None, 2) => format!("{verb} twice"),
+            (None, n) => format!("{verb} {n} times"),
+            (Some(thing), 1) => format!("{verb} 1 {thing}"),
+            (Some(thing), n) => format!("{verb} {n} {thing}s"),
         })
         .collect();
-    let mut said = words.join(", ");
-    if let Some(first) = said.get(..1) {
-        said = format!("{}{}", first.to_uppercase(), &said[1..]);
-    }
+    let mut said = crate::nav::capitalized(&words.join(", "));
     let failed = calls.iter().filter(|c| c.status == ItemStatus::Failed).count();
     if failed > 0 {
         said.push_str(&format!(" ({failed} failed)"));
