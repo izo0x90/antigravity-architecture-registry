@@ -198,8 +198,12 @@ impl ReaderScreen {
         let rows = usize::from(update.size.rows);
         let mut gone = Vec::new();
         let from = self.top;
-        if update.full || update.size != self.size || update.top < self.top || self.alternate || update.alternate {
+        // Anew when laid out anew, or as a program takes the whole screen or
+        // gives it back; while it has it, only the rows it changes come.
+        if update.full || update.size != self.size || update.top < self.top || self.alternate != update.alternate {
             self.rows = vec![Row::new(); rows];
+        } else if update.alternate {
+            self.rows.resize(rows, Row::new());
         } else {
             let moved = ((update.top - self.top) as usize).min(self.rows.len());
             gone = self.rows.drain(..moved).collect();
@@ -364,5 +368,25 @@ mod tests {
         assert_eq!(screen.get(12).map(text).as_deref(), Some("c"));
         // Laid out anew: nothing scrolled off.
         assert!(screen.take(&update(20, &[(0, "x")], true)).1.is_empty());
+    }
+
+    /// A program with the whole screen (an editor, a pager) redraws only
+    /// the rows it changes: the others stay as they were. Going in or out
+    /// starts the screen anew; nothing scrolls off while it's in.
+    #[test]
+    fn a_full_screen_programs_rows_stay_until_it_changes_them() {
+        let program = |rows: &[(u16, &str)], full: bool| ScreenUpdate { alternate: true, ..update(10, rows, full) };
+        let shown = |screen: &ReaderScreen| screen.rows().iter().map(text).collect::<Vec<_>>();
+        let mut screen = ReaderScreen::default();
+        screen.take(&update(10, &[(0, "$ less a.rs"), (1, "x"), (2, "y")], true));
+        // In: what it drew, only.
+        screen.take(&program(&[(0, "fn a() {"), (1, "}")], false));
+        assert_eq!(shown(&screen), ["fn a() {", "}", ""]);
+        // One row changed: the others are still there.
+        let (_, gone) = screen.take(&program(&[(2, ":")], false));
+        assert_eq!((shown(&screen), gone.len()), (vec!["fn a() {".to_owned(), "}".to_owned(), ":".to_owned()], 0));
+        // Out: the shell's screen, anew.
+        screen.take(&update(10, &[(0, "$ less a.rs"), (1, "$ ")], false));
+        assert_eq!(shown(&screen), ["$ less a.rs", "$ ", ""]);
     }
 }
