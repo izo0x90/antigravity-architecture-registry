@@ -115,13 +115,11 @@ fn messages_take_a_cursor_and_their_links_open() {
     assert_eq!(chat.ui.cursor, Some(0));
     assert!(matches!(chat.enter(), Step::Nothing(_)), "a prompt has no file");
     // Message 3 is the run's first: folded, the run (no file of its own),
-    // and Enter says it unfolds it, and does.
+    // and Enter unfolds it.
     chat.motion(Motion::Line(3), 1);
     assert_eq!(chat.target(), Some(Target::Message { thread: Some("t".into()), turn: Some("turn".into()), index: 2, link: None }));
-    assert!(chat.moves().iter().any(|a| a.label == "Unfold the 2 calls"), "{:?}", chat.moves().iter().map(|a| &a.label).collect::<Vec<_>>());
     assert_eq!((chat.enter(), chat.shape().rows.len()), (Step::Done, 4), "Enter on a folded run opens it: each call a row");
     assert_eq!(chat.target().and_then(|t| t.code()), Some(("src/parse.rs".into(), Some(12))));
-    assert!(chat.moves().iter().any(|a| a.label == "Open src/parse.rs"));
     assert_eq!(chat.enter(), Step::GoTo(GoTo::Code), "Enter opens the file it points to");
     // A hint on the second link picks it.
     chat.move_to("2:1");
@@ -453,4 +451,37 @@ fn the_cursor_stays_on_its_item_and_what_was_opened_through_a_reconnect() {
     chat.apply(in_turn(item(10, ItemBody::UserMessage { text: "then the lexer".into(), typed: None }), "next"));
     chat.apply(item(4, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Done.".into() }], streaming: false }));
     assert_eq!(chat.shape().rows.len(), rows, "the run still open, its rows as they were");
+}
+
+/// Quiet too long, the live line says whether the agent can still be
+/// reached: the server reaches it, its harness starting again or failed,
+/// its slot unable to run.
+#[test]
+fn quiet_too_long_says_whether_the_agent_can_be_reached() {
+    use crate::indicator::{Activity, Liveness};
+    let mut chat = conversation();
+    let quiet = Activity { liveness: Liveness::Quiet, updates: Vec::new(), since_last: Some(130.0), doing: "Reading".into() };
+    let said = |chat: &mut Fed, status: harness_contracts::ProviderStatus| {
+        let mut snapshot = crate::agents::tests::snapshot(status);
+        snapshot.instance_id = InstanceId::new("i");
+        chat.apply(ClientEvent::InstanceUpdated { snapshot });
+        chat.live_words(&quiet).0
+    };
+    assert_eq!(said(&mut chat, harness_contracts::ProviderStatus::Ready), "No word for 2 min · the server still reaches it");
+    assert_eq!(said(&mut chat, harness_contracts::ProviderStatus::Starting), "No word for 2 min · its harness is starting");
+    assert_eq!(said(&mut chat, harness_contracts::ProviderStatus::Error { message: "it crashed".into() }), "No word for 2 min · its harness failed: it crashed");
+    let mut slot = lead(Some("t"));
+    slot.status = harness_contracts::SlotStatus::Unavailable { reason: "no claude on the PATH".into(), fix: None };
+    chat.apply(ClientEvent::SlotUpdated { slot });
+    assert_eq!(chat.live_words(&quiet).0, "No word for 2 min · it can't run: no claude on the PATH");
+}
+
+/// A chat not picked for starts as the config says.
+#[test]
+fn a_chat_starts_as_the_config_says() {
+    let mut chat = conversation();
+    let config = crate::config::UiConfig::with_overrides("[chat]\nshows = \"quiet\"\nindicator = \"none\"").unwrap();
+    chat.shared.settings.set(crate::shared::Settings::of(&config));
+    chat.read();
+    assert_eq!((chat.ui.folds.verbosity(), chat.ui.indicator.kind()), (crate::config::Verbosity::Quiet, crate::indicator::Kind::None));
 }

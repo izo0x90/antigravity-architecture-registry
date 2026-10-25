@@ -288,4 +288,14 @@ mod tests {
     fn a_bad_user_file_is_reported() {
         assert!(UiConfig::with_overrides("[keymap.bind]\n\"x\" = { keys = [\"hyper+q\"] }").is_err());
     }
+
+    /// A setting's choice is read by its name; one there's no such is
+    /// refused, the names there are said.
+    #[test]
+    fn the_chats_choices_are_read_by_name() {
+        let config = UiConfig::with_overrides("[chat]\nshows = \"quiet\"").unwrap();
+        assert_eq!(config.chat.shows, Verbosity::Quiet);
+        let refused = UiConfig::with_overrides("[chat]\nindicator = \"lemmings\"").unwrap_err();
+        assert!(refused.contains("unknown indicator `lemmings` (there are: heartbeat, none)"), "{refused}");
+    }
 }

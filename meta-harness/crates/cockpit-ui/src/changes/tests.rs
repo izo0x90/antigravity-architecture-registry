@@ -268,13 +268,15 @@ fn as_a_destination_it_shows_touched_components_and_turns_it_saw() {
     // is in, in whichever group it's in.
     let linked = Target::Message { thread: None, turn: Some("u1".into()), index: 0, link: Some(("b.rs".into(), None)) };
     assert_eq!(fed.view.show_target(&linked), Ok(()));
-    assert_eq!(fed.view.restore, Some(super::Restore::File("b.rs".into())));
+    fed.listed(ChangeList { comparison: turn.clone(), files: vec![file(Group::Unstaged, "a.rs", FileStatus::Modified, 1, 1), file(Group::Unstaged, "b.rs", FileStatus::Modified, 2, 0)], offset: 0, total: 2 });
+    let on = fed.view.cursor_row().and_then(|r| fed.view.file_of(&r).map(|f| f.path.clone()));
+    assert_eq!(on.as_deref(), Some("b.rs"), "once the list is in: on it");
     let mut fed = view_with_changes();
     let now = Comparison::default();
     fed.timeline(Timeline { windows: vec![], turns: vec![harness_contracts::changes::TurnChanges { thread: "t".into(), turn: "u3".into(), comparison: now, files: 1, alongside: vec![] }] });
     assert_eq!(fed.view.show_target(&Target::Message { thread: None, turn: Some("u3".into()), index: 0, link: Some(("b.rs".into(), None)) }), Ok(()), "the comparison it shows: the list is in");
     let on = fed.view.cursor_row().and_then(|r| fed.view.file_of(&r).map(|f| f.path.clone()));
-    assert_eq!((on.as_deref(), fed.view.restore.as_ref()), (Some("b.rs"), None));
+    assert_eq!(on.as_deref(), Some("b.rs"));
 }
 
 /// Draws the view in a window `h` high; the text drawn.

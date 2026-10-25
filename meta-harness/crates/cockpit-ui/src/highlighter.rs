@@ -96,12 +96,6 @@ impl Highlighter {
             net.code_highlight(&blocks, ctx.clone(), move |result| reply.answered(result.ok()));
         });
     }
-
-    /// As if the server had said `fence`'s `text` is coloured so.
-    #[cfg(test)]
-    pub(crate) fn knows(&mut self, fence: &str, text: &str, colours: Highlights) {
-        self.asked.knows(crate::asked::key(&(fence, text)), Some(colours));
-    }
 }
 
 /// `text[span]` as a layout, coloured by `highlights` (byte runs over the

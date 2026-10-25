@@ -415,9 +415,12 @@ impl ChatStreamState {
     }
 
     /// The stream, row by row, each turn under its line. Only the rows in
-    /// sight or near it are drawn: one out of sight takes the room it took
-    /// when it was last drawn (as it was then, or before it changed: it's
-    /// drawn again as it comes near), or a line's when it never was.
+    /// sight or near it are drawn (following the latest, the last window's
+    /// too, wherever the scroll is yet): one out of sight takes the room it
+    /// took when it was last drawn (as it was then, or before it changed:
+    /// it's drawn again as it comes near), or a line's when it never was.
+    /// A row drawn at a new height asks for the next frame (what's in
+    /// sight moves with it).
     pub(super) fn render_stream(&mut self, ui: &mut egui::Ui) {
         let agents = self.agents.clone();
         let agents = agents.get();
@@ -428,10 +431,21 @@ impl ChatStreamState {
         let near = visible.expand2(Vec2::new(0.0, visible.height() / 4.0));
         let (width, text) = (ui.available_width(), crate::theme::look().text_body);
         let unknown = ui.spacing().interact_size.y;
+        let height_of = |row: &rows::Row| view.in_stream(row.first).and_then(|i| self.ui.heights.get(&i.id)).map_or(unknown, |(_, h)| *h);
+        // (Following the latest: the rows of the last window, from the end.)
+        let mut tail = shape.rows.len();
+        if self.ui.cursor.is_none() {
+            let mut room = visible.height() * 1.25;
+            while tail > 0 && room > 0.0 {
+                tail -= 1;
+                room -= height_of(&shape.rows[tail]);
+            }
+        }
+        let mut moved = false;
         // The running turn's: the agent at work, as of this frame.
         let mut live = view.running().map(|t| (t.id.clone(), self.activity(view, ui.input(|i| i.time))));
         let mut turn: Option<&harness_contracts::TurnId> = None;
-        for row in &shape.rows {
+        for (at, row) in shape.rows.iter().enumerate() {
             let Some(item) = view.in_stream(row.first) else { continue };
             // Each turn under its line (what it is, how it went).
             if turn != Some(&item.turn_id) {
@@ -455,13 +469,14 @@ impl ChatStreamState {
             let measure = Measure { span: row.last - row.first, folded: row.folded, open: opens && self.ui.folds.item_open(item), changed: (row.first..=row.last).map(|i| view.changed(i)).max().unwrap_or(0), asks, width, text };
             // (As tall as when it was last drawn, as it is now or not.)
             let (height, current) = self.ui.heights.get(&item.id).map_or((unknown, false), |(was, height)| (*height, *was == measure));
-            let far = !near.intersects(Rect::from_min_size(ui.cursor().min, Vec2::new(width, height)));
+            let far = at < tail && !near.intersects(Rect::from_min_size(ui.cursor().min, Vec2::new(width, height)));
             let rect = if far {
                 ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover()).0
             } else {
                 let on = self.ui.cursor.is_some_and(|c| row.holds(c));
                 let rect = self.item_frame(ui, on, row.depth, |chat, ui| if row.folded { chat.render_run(ui, view, row) } else { chat.render_item(ui, view, item, row) });
                 if !current || rect.height() != height {
+                    moved |= rect.height() != height;
                     self.ui.heights.insert(item.id.clone(), (measure, rect.height()));
                 }
                 rect
@@ -479,6 +494,9 @@ impl ChatStreamState {
                 live.turn_bottom = rect.bottom();
             }
             ui.add_space(crate::theme::look().space_xs);
+        }
+        if moved {
+            ui.ctx().request_repaint();
         }
         if turn.is_some() {
             ui.add(egui::Separator::default().spacing(crate::theme::look().space_m));

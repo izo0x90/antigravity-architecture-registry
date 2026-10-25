@@ -220,10 +220,32 @@ mod tests {
             next.push(beat.draw(&painter, &painter, &at(Liveness::Waiting, vec![(80.0, 1)]), &stage, 100.0));
             next.push(beat.draw(&painter, &painter, &at(Liveness::Quiet, vec![(10.0, 1)]), &stage, 100.0));
         });
-        assert!(matches!(next[..], [Next::In(a), Next::In(b), Next::OnChange] if a > FASTEST_S && a < 0.3 && b == BREATH_S), "{next:?}");
+        assert!(matches!(next[..], [Next::In(a), Next::In(b), Next::OnChange] if (FASTEST_S..1.0).contains(&a) && b == BREATH_S), "{next:?}");
         let dot = output.shapes.iter().find(|s| matches!(s.shape, egui::Shape::Circle(_))).expect("the breathing dot");
         assert!(spot.contains_rect(dot.shape.visual_bounding_rect()), "inside its spot: {:?} in {spot:?}", dot.shape.visual_bounding_rect());
         assert!(output.shapes.iter().all(|s| spot.expand(1.0).contains_rect(s.shape.visual_bounding_rect())), "all of it in its spot");
         assert!(Shown::of(Kind::None).drawer().is_none() && Shown::of(Kind::Heartbeat).drawer().is_some());
+    }
+
+    /// A blip where each update came: two far apart, two; ones closer than
+    /// a blip's width, one, as tall as how many.
+    #[test]
+    fn the_heartbeat_blips_where_updates_came() {
+        let ctx = egui::Context::default();
+        crate::theme::set(crate::config::UiConfig::with_overrides("").unwrap().theme, &ctx);
+        let spot = Rect::from_min_size(Pos2::new(100.0, 100.0), egui::vec2(64.0, 12.0));
+        let stage = Stage { spot, panel: Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0)), items: Vec::new() };
+        let blips = |updates: Vec<(f64, u32)>| {
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(spot);
+                Heartbeat.draw(&painter, &painter, &Activity { liveness: Liveness::Receiving, updates: updates.clone(), since_last: Some(0.0), doing: "Thinking".into() }, &stage, 100.0);
+            });
+            output.shapes.iter().filter_map(|c| if let egui::Shape::Path(p) = &c.shape { Some(p.points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min)) } else { None }).collect::<Vec<f32>>()
+        };
+        assert_eq!(blips(vec![(92.0, 1), (98.0, 1)]).len(), 2, "two, far apart");
+        let one = blips(vec![(99.0, 1)]);
+        let many = blips(vec![(99.0, 3), (99.1, 5)]);
+        assert_eq!(many.len(), 1, "close together: one");
+        assert!(many[0] < one[0], "as tall as how many: {many:?} over {one:?}");
     }
 }

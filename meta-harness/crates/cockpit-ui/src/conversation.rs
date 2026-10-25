@@ -146,7 +146,7 @@ fn markdown(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highli
                 CommonMarkViewer::new().show(ui, cache, words);
             }
             Part::Table(table) => {
-                egui::ScrollArea::horizontal().id_salt(id).auto_shrink([false, true]).show(ui, |ui| {
+                boxed(ui, id, colors().panel, |ui| {
                     CommonMarkViewer::new().show(ui, cache, table);
                 });
             }
@@ -171,15 +171,23 @@ fn code_block(ui: &mut egui::Ui, code: &crate::highlighter::Highlighter, wanted:
     let font = egui::FontId::monospace(look.text_body);
     let format = |color: Color32| egui::text::TextFormat { font_id: font.clone(), color, ..Default::default() };
     let job = crate::highlighter::coloured(text, 0..text.len(), colours.highlights(), |capture| code.colour(capture), colors().text, format);
+    boxed(ui, id, colors().surface, |ui| {
+        ui.add(egui::Label::new(job).extend());
+    })
+}
+
+/// What can't wrap (a code block's lines, a table's rows), in a box of the
+/// width it's given (`fill`ed), scrolling sideways in it. Where it was
+/// drawn.
+fn boxed(ui: &mut egui::Ui, id: egui::Id, fill: Color32, add: impl FnOnce(&mut egui::Ui)) -> Rect {
+    let look = crate::theme::look();
     egui::Frame::NONE
-        .fill(colors().surface)
+        .fill(fill)
         .corner_radius(look.radius_s)
         .inner_margin(crate::theme::margin(look.space_sm))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            egui::ScrollArea::horizontal().id_salt(id).auto_shrink([false, true]).show(ui, |ui| {
-                ui.add(egui::Label::new(job).extend());
-            });
+            egui::ScrollArea::horizontal().id_salt(id).auto_shrink([false, true]).show(ui, add);
         })
         .response
         .rect
