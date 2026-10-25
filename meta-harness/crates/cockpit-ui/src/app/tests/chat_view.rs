@@ -126,7 +126,7 @@ fn long_unbreakable_lines_stay_inside_a_narrow_panel() {
     let mut broke = Vec::new();
     for (case, events) in cases {
         let (ctx, mut app) = full_app();
-        *app.desk.net.ws_state.lock().unwrap() = crate::net::WsState::Open;
+        *app.home.ws_state.lock().unwrap() = crate::net::WsState::Open;
         focus(&ctx, &mut app, BufferKind::Chat);
         let shows = app.bound_actions().into_iter().find(|b| b.action.id == "chat.verbosity").expect("the setting");
         app.invoke(Invocation { action: shows.action, origin: shows.origin, value: Some("everything".into()) }, &ctx);
@@ -254,7 +254,7 @@ fn what_waits_is_bounded_and_answerable_before_its_item_comes() {
 fn a_running_turn_says_what_its_doing_and_how_live_it_is() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Chat);
-    *app.desk.net.ws_state.lock().unwrap() = crate::net::WsState::Open;
+    *app.home.ws_state.lock().unwrap() = crate::net::WsState::Open;
     let turn = |id: &str, ordinal, status| ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: harness_contracts::Turn { id: harness_contracts::TurnId::new(id), thread_id: ThreadId::new("t"), ordinal, status, failure: None, usage: None } } };
     let call = |status| {
         let mut call = item(200, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations: vec![FileLocation { path: "crates/cockpit-ui/src/render.rs".into(), line: None }] });
@@ -284,10 +284,10 @@ fn a_running_turn_says_what_its_doing_and_how_live_it_is() {
     assert!(words == "Reading render.rs… 15 s since anything" && again <= 1.0, "waiting, since the last update, of the turn running: {words:?}");
     let (words, again) = line(&ctx, &mut app, 95.0);
     assert!(words.starts_with("No word for 1 min") && again < 60.0, "quiet: {words:?}");
-    *app.desk.net.ws_state.lock().unwrap() = crate::net::WsState::Closed;
+    *app.home.ws_state.lock().unwrap() = crate::net::WsState::Closed;
     let (words, _) = line(&ctx, &mut app, 96.0);
     assert_eq!(words, "The connection to the server is down");
-    *app.desk.net.ws_state.lock().unwrap() = crate::net::WsState::Open;
+    *app.home.ws_state.lock().unwrap() = crate::net::WsState::Open;
     // Shown as nothing: the words stay, nothing beside them; quiet, they're
     // drawn again only when the minutes change; waiting, each second.
     let marks = |output: &egui::FullOutput| output.shapes.iter().filter(|c| matches!(c.shape, egui::Shape::Path(_) | egui::Shape::Circle(_) | egui::Shape::LineSegment { .. })).count();
@@ -388,7 +388,7 @@ fn a_jump_into_a_folded_run_shows_the_call_it_went_to() {
 #[test]
 fn the_live_line_stays_in_sight_through_a_long_turn() {
     let (ctx, mut app) = full_app();
-    *app.desk.net.ws_state.lock().unwrap() = crate::net::WsState::Open;
+    *app.home.ws_state.lock().unwrap() = crate::net::WsState::Open;
     focus(&ctx, &mut app, BufferKind::Chat);
     let long = "a line of the answer\n\n".repeat(6);
     let said: Vec<ClientEvent> = (100..120).map(|n| item(n, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: long.clone() }], streaming: false })).collect();

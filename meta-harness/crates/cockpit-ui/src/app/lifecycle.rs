@@ -117,7 +117,8 @@ impl CockpitApp {
         // (Kept only when they changed: readers take them again then.)
         let colours = self.desk.shared.tags.get().link_colours();
         self.desk.shared.link_colours.set(colours);
-        let socket = self.desk.net.ws_state.lock().map_or(crate::net::WsState::Closed, |s| *s);
+        // (Every server's events come over home's socket.)
+        let socket = self.home.ws_state.lock().map_or(crate::net::WsState::Closed, |s| *s);
         self.desk.shared.socket.set(socket);
         let events = self.desk.net.incoming.lock().map(|mut lock| lock.drain(..).collect::<Vec<_>>()).unwrap_or_default();
         for event in events {
