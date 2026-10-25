@@ -304,7 +304,9 @@ impl ChatStreamState {
 
     /// The stream item (its index) of the request waiting on you here.
     pub(crate) fn pending_item(&self) -> Option<usize> {
-        self.pending().iter().find_map(|(index, _)| *index)
+        let view = self.thread()?;
+        let agents = self.agents();
+        view.requests().iter().filter(|r| agents.waits(r)).find_map(|r| view.request_shown_at(&r.id))
     }
 
     /// What waits on you: each request pending with no answer on its way,

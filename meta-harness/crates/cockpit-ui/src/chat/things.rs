@@ -1,10 +1,10 @@
 //! What a note can be on in a chat: a message (what you said, or an
 //! answer) and the turn it's in, named as the server names them: the
 //! harness's id for the session, the turn's number in it, the message's
-//! number in its turn (`harness_contracts::message_number`). The chat says
+//! number in its turn (`harness_contracts::message_numbers`). The chat says
 //! what's at an item and where each is drawn; the shell does the noting.
 
-use harness_contracts::{NativeId, Subject, TurnItem, message_number};
+use harness_contracts::{NativeId, Subject, TurnItem, message_numbers};
 
 use super::ChatStreamState;
 use crate::nav::{Thing, Things};
@@ -33,8 +33,9 @@ impl ChatStreamState {
         let mut places = Vec::new();
         for turn in view.turns() {
             let of: Vec<&TurnItem> = view.items_of(&turn.id).collect();
+            let numbers = message_numbers(&of);
             for item in &of {
-                places.push(view.thread.native_id.clone().map(|session| (session, turn.ordinal, message_number(&of, &item.id))));
+                places.push(view.thread.native_id.clone().map(|session| (session, turn.ordinal, numbers.get(&item.id).copied())));
             }
         }
         let places = std::rc::Rc::new(places);

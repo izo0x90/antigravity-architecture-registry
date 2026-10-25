@@ -190,6 +190,8 @@ pub struct Searching {
     pub kind: BufferKind,
     pub query: String,
     pub before: Jump,
+    /// How many match the query as typed.
+    pub found: usize,
 }
 
 /// What typed keys mean while the shell captures them.

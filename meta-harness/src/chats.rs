@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use harness_contracts::{AdapterEvent, ClientEvent, ContentBlock, DETAIL, ItemBody, NativeId, Slot, Subject, ThreadId, Turn, TurnId, TurnItem, message_number};
+use harness_contracts::{AdapterEvent, ClientEvent, ContentBlock, DETAIL, ItemBody, NativeId, Slot, Subject, ThreadId, Turn, TurnId, TurnItem, message_numbers};
 use harness_core::{EventHub, SlotManager};
 
 /// The most of a whole session that's read (and kept, when it's noted).
@@ -258,7 +258,8 @@ impl nah_things::Resolve for Chats {
             Subject::ChatTurn { .. } => Some(turn_text(&items)),
             Subject::ChatMessage { message, .. } => {
                 let refs: Vec<&TurnItem> = items.iter().collect();
-                let item = items.iter().find(|i| message_number(&refs, &i.id) == Some(*message))?;
+                let numbers = message_numbers(&refs);
+                let item = items.iter().find(|i| numbers.get(&i.id) == Some(message))?;
                 message_text(&item.body)
             }
             _ => None,
@@ -413,6 +414,7 @@ mod tests {
         let says = [item(0, ItemBody::UserMessage { text: format!("see:\n{DETAIL}not detail"), typed: None })];
         assert!(!turn_text(&says).lines().any(|l| l.starts_with(DETAIL)), "{}", turn_text(&says));
         let refs: Vec<&TurnItem> = items.iter().collect();
-        assert_eq!([0, 1, 2].map(|n| message_number(&refs, &items[n].id)), [Some(1), None, Some(2)], "messages numbered in their turn");
+        let numbers = message_numbers(&refs);
+        assert_eq!([0, 1, 2].map(|n| numbers.get(&items[n].id).copied()), [Some(1), None, Some(2)], "messages numbered in their turn");
     }
 }

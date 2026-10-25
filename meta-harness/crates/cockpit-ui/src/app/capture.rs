@@ -78,12 +78,15 @@ impl CockpitApp {
                         '\n' | '\r' => {
                             self.desk.view_mut(kind).on_search(SearchEvent::Confirmed);
                             // Only a search that finds something stays for n/N.
-                            let found = !rank_matches(&self.desk.view(kind).items(), &search.query).is_empty();
-                            if found {
+                            let items = self.desk.view(kind).items();
+                            let found: Vec<String> = rank_matches(&items, &search.query).into_iter().map(|i| items[i].key.clone()).collect();
+                            if !found.is_empty() {
                                 self.desk.searches.insert(kind, search.query.clone());
+                                self.desk.found.insert(kind, found);
                                 self.desk.missed.remove(&kind);
                             } else {
                                 self.desk.searches.remove(&kind);
+                                self.desk.found.remove(&kind);
                                 if search.query.is_empty() {
                                     self.desk.missed.remove(&kind);
                                 } else {
@@ -103,7 +106,9 @@ impl CockpitApp {
                 // Incremental: the first match shows while typing.
                 self.desk.view_mut(kind).on_search(SearchEvent::Typing(&search.query));
                 let items = self.desk.view(kind).items();
-                match rank_matches(&items, &search.query).first() {
+                let ranked = rank_matches(&items, &search.query);
+                search.found = ranked.len();
+                match ranked.first() {
                     Some(&first) => self.desk.view_mut(kind).move_to(&items[first].key),
                     None => {
                         // No match (yet): back where it was, looking as it did.
@@ -152,6 +157,7 @@ impl CockpitApp {
         };
         let items = self.desk.view(kind).items();
         let found = rank_matches(&items, &query);
+        self.desk.found.insert(kind, found.iter().map(|i| items[*i].key.clone()).collect());
         if found.is_empty() {
             self.note = Some(format!("No match for {query}."));
             return;
@@ -171,15 +177,14 @@ impl CockpitApp {
     /// the cursor is among the view's last search's matches.
     pub(super) fn search_status(&self) -> Option<(String, bool)> {
         if let Some(Capture::Search(search)) = &self.capture {
-            let found = rank_matches(&self.desk.view(search.kind).items(), &search.query).len();
+            let found = search.found;
             return Some((format!("/{}| {found} {}", search.query, if found == 1 { "match" } else { "matches" }), true));
         }
         let kind = self.focused_kind();
         let query = self.desk.searches.get(&kind)?;
-        let items = self.desk.view(kind).items();
-        let found = rank_matches(&items, query);
+        let found = self.desk.found.get(&kind)?;
         let cursor = self.desk.view(kind).cursor_key()?;
-        let at = found.iter().position(|i| items[*i].key == cursor)?;
+        let at = found.iter().position(|key| *key == cursor)?;
         Some((format!("/{query} {}/{}", at + 1, found.len()), false))
     }
 

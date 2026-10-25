@@ -444,7 +444,7 @@ impl CockpitApp {
                 None => self.note = Some("Nothing to copy here.".into()),
             },
             ShellCommand::Search => {
-                self.capture = Some(Capture::Search(Searching { kind, query: String::new(), before: self.jump_here() }));
+                self.capture = Some(Capture::Search(Searching { kind, query: String::new(), before: self.jump_here(), found: 0 }));
                 self.input_mode = InputMode::Capture { at: self.here().at };
                 self.desk.view_mut(kind).save_view();
                 // An empty search is a search too (a filter typed into goes blank).

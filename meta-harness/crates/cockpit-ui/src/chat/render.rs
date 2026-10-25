@@ -46,14 +46,16 @@ pub(crate) struct LiveAt {
 }
 
 /// What a row was drawn as: how many items it covers, whether folded,
-/// whether its own fold is open, the latest change to its items, the
-/// width, the text's size. Drawn as the same, it's as tall as it was.
+/// whether its own fold is open, the latest change to its items, how its
+/// request stands (a request's row), the width, the text's size. Drawn as
+/// the same, it's as tall as it was.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Measure {
     span: usize,
     folded: bool,
     open: bool,
     changed: u64,
+    asks: Option<(harness_contracts::RequestStatus, bool)>,
     width: f32,
     text: f32,
 }
@@ -412,17 +414,20 @@ impl ChatStreamState {
             .show(ui, |ui| render_steps(ui, &steps));
     }
 
-    /// The stream, row by row, each turn under its line. A row out of
-    /// sight (more than a window away) drawn last frame as it is now takes
-    /// the room it took, without being drawn.
+    /// The stream, row by row, each turn under its line. Only the rows in
+    /// sight or near it are drawn: one out of sight takes the room it took
+    /// when it was last drawn (as it was then, or before it changed: it's
+    /// drawn again as it comes near), or a line's when it never was.
     pub(super) fn render_stream(&mut self, ui: &mut egui::Ui) {
         let agents = self.agents.clone();
         let agents = agents.get();
         // No session yet: its banner says so.
         let Some(view) = agents.thread_in(&self.ui.slot) else { return };
         let shape = self.shape();
-        let near = ui.clip_rect().expand2(Vec2::new(0.0, ui.clip_rect().height()));
+        let visible = ui.clip_rect();
+        let near = visible.expand2(Vec2::new(0.0, visible.height() / 4.0));
         let (width, text) = (ui.available_width(), crate::theme::look().text_body);
+        let unknown = ui.spacing().interact_size.y;
         // The running turn's: the agent at work, as of this frame.
         let mut live = view.running().map(|t| (t.id.clone(), self.activity(view, ui.input(|i| i.time))));
         let mut turn: Option<&harness_contracts::TurnId> = None;
@@ -443,23 +448,30 @@ impl ChatStreamState {
                 }
             }
             let opens = !row.folded && (rows::folds(item) || row.nested > 0);
-            let measure = Measure { span: row.last - row.first, folded: row.folded, open: opens && self.ui.folds.item_open(item), changed: (row.first..=row.last).map(|i| view.changed(i)).max().unwrap_or(0), width, text };
-            let asks = matches!(item.body, ItemBody::Request { .. });
-            let known = self.ui.heights.get(&item.id).filter(|(was, _)| *was == measure).map(|(_, height)| *height);
-            let rect = match known {
-                Some(height) if !asks && !near.intersects(Rect::from_min_size(ui.cursor().min, Vec2::new(width, height))) => ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover()).0,
-                _ => {
-                    let on = self.ui.cursor.is_some_and(|c| row.holds(c));
-                    let rect = self.item_frame(ui, on, row.depth, |chat, ui| if row.folded { chat.render_run(ui, view, row) } else { chat.render_item(ui, view, item, row) });
+            let asks = match &item.body {
+                ItemBody::Request { request_id } => view.request(request_id).map(|r| (r.status, self.agents().waits(r))),
+                _ => None,
+            };
+            let measure = Measure { span: row.last - row.first, folded: row.folded, open: opens && self.ui.folds.item_open(item), changed: (row.first..=row.last).map(|i| view.changed(i)).max().unwrap_or(0), asks, width, text };
+            // (As tall as when it was last drawn, as it is now or not.)
+            let (height, current) = self.ui.heights.get(&item.id).map_or((unknown, false), |(was, height)| (*height, *was == measure));
+            let far = !near.intersects(Rect::from_min_size(ui.cursor().min, Vec2::new(width, height)));
+            let rect = if far {
+                ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover()).0
+            } else {
+                let on = self.ui.cursor.is_some_and(|c| row.holds(c));
+                let rect = self.item_frame(ui, on, row.depth, |chat, ui| if row.folded { chat.render_run(ui, view, row) } else { chat.render_item(ui, view, item, row) });
+                if !current || rect.height() != height {
                     self.ui.heights.insert(item.id.clone(), (measure, rect.height()));
-                    rect
                 }
+                rect
             };
             self.ui.item_rects.push(rect);
             // A request waiting on you is a place where it's kept (its
-            // card); here, the line saying where it was asked.
-            let waiting = matches!(&item.body, ItemBody::Request { request_id } if self.waits_on_you(view, request_id));
-            if !waiting {
+            // card); here, the line saying where it was asked. (Places only
+            // for what's in sight: none else can be labelled.)
+            let waiting = asks.is_some_and(|(_, waits)| waits);
+            if !waiting && rect.intersects(visible) {
                 let key = if row.folded { format!("{}:{RUN}", row.first) } else { row.first.to_string() };
                 self.ui.drawing.push(Spot { key, rect });
             }

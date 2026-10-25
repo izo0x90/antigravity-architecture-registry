@@ -119,7 +119,7 @@ pub enum Subject {
         turn_id: String,
     },
     /// A message of a chat's turn (what you said, or an answer: numbered
-    /// from 1 in its turn, `message_number`), and its turn's id (as a
+    /// from 1 in its turn, `message_numbers`), and its turn's id (as a
     /// turn's).
     ChatMessage {
         session: NativeId,
@@ -213,12 +213,12 @@ pub fn is_message(body: &crate::ItemBody) -> bool {
     matches!(body, crate::ItemBody::UserMessage { .. } | crate::ItemBody::AssistantMessage { .. })
 }
 
-/// Item `item`'s number among the messages of its turn (`items`: the
-/// turn's, in any order), from 1; none when it isn't a message.
-pub fn message_number(items: &[&crate::TurnItem], item: &crate::ItemId) -> Option<u32> {
-    let mut messages: Vec<&&crate::TurnItem> = items.iter().filter(|i| is_message(&i.body)).collect();
+/// Each message's number among the messages of its turn (`items`: the
+/// turn's, in any order), from 1.
+pub fn message_numbers<'a>(items: &[&'a crate::TurnItem]) -> std::collections::HashMap<&'a crate::ItemId, u32> {
+    let mut messages: Vec<&crate::TurnItem> = items.iter().copied().filter(|i| is_message(&i.body)).collect();
     messages.sort_by_key(|i| i.ordinal);
-    messages.iter().position(|i| i.id == *item).map(|n| n as u32 + 1)
+    messages.into_iter().zip(1..).map(|(i, n)| (&i.id, n)).collect()
 }
 
 /// How many of a terminal's lines a tag is on at most, at once.

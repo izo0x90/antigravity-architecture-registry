@@ -54,6 +54,10 @@ pub struct Desk {
     /// and the last that found nothing (so `n` can say so).
     pub searches: BTreeMap<BufferKind, String>,
     pub missed: BTreeMap<BufferKind, String>,
+    /// What the last search in each kind of buffer found (its items' keys,
+    /// best first), as of it or its last step: the key bar says where the
+    /// cursor is among them.
+    pub found: BTreeMap<BufferKind, Vec<String>>,
     /// Go-tos: component details, and one under way or being picked.
     pub details: Details,
     pub pending_goto: Option<Pending>,
@@ -112,6 +116,7 @@ impl Desk {
             jumps: JumpList::default(),
             marks: BTreeMap::new(),
             searches: BTreeMap::new(),
+            found: BTreeMap::new(),
             missed: BTreeMap::new(),
             details: Details::default(),
             pending_goto: None,

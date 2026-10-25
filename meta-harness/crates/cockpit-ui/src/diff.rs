@@ -46,13 +46,24 @@ pub(crate) fn draw_gap(ui: &mut egui::Ui) {
 }
 
 /// A change in one column: its header (where it is, numbered), then its
-/// lines, interleaved.
+/// lines, interleaved: those out of sight take a line's room undrawn
+/// (each is one line high, cut short where it's too long).
 pub(crate) fn draw_hunk(ui: &mut egui::Ui, hunk: &Hunk, numbers: Numbers) {
     if numbers == Numbers::Shown {
         ui.label(RichText::new(format!("@@ −{},{} +{},{} @@", hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines)).monospace().size(crate::theme::look().text_small).color(colors().faint));
     }
+    let mut tall = None;
     for line in &hunk.lines {
+        let width = ui.available_width();
+        if let Some(height) = tall
+            && !ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, height)))
+        {
+            ui.allocate_space(egui::vec2(width, height));
+            continue;
+        }
+        let top = ui.cursor().top();
         draw_line(ui, line, numbers);
+        tall = Some(ui.cursor().top() - top - ui.spacing().item_spacing.y);
     }
 }
 
