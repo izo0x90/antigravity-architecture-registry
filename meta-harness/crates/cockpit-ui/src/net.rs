@@ -823,6 +823,12 @@ impl NetClient {
         self.call("GET", &format!("/api/code/analysis?path={}", urlencoding::encode(path)), None, ctx, on_done);
     }
 
+    /// A code block's colours, read as the language `fence` names (none: no
+    /// language pack knows it).
+    pub fn code_highlight(&self, fence: &str, text: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<Option<arch_graph::code::Highlights>>) + Send + 'static) {
+        self.call("POST", "/api/code/highlight", Some(serde_json::json!({ "language": fence, "text": text })), ctx, on_done);
+    }
+
     /// The views' settings: descriptions, depths and the sizes trees are laid out with.
     pub fn graph_config(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::tree::TreeConfig>) + Send + 'static) {
         self.call("GET", "/api/graph/config", None, ctx, on_done);

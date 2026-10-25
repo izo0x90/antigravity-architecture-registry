@@ -638,3 +638,21 @@ fn each_call_records_where_its_name_is_and_each_file_its_colours() {
         assert!(e.highlights.runs.windows(2).all(|w| w[0][1] <= w[1][0]));
     }
 }
+
+/// A code block is coloured by the pack its fence names (the language's
+/// name or an extension, any case), as a file of that language is; a fence
+/// no pack knows has none.
+#[test]
+fn a_code_block_is_coloured_by_the_pack_its_fence_names() {
+    let packs = common::shipped_packs();
+    let code = "fn run() { let x = \"hi\"; }\n";
+    let colour = |fence: &str, text: &str| -> Option<Vec<String>> {
+        let h = code_analyzer::highlight::of_text(packs.for_fence(fence)?, code)?;
+        let at = code.find(text).unwrap() as u32;
+        Some(h.runs.iter().filter(|r| r[0] <= at && at < r[1]).map(|r| h.names[r[2] as usize].clone()).collect())
+    };
+    assert_eq!(colour("rust", "fn"), Some(vec!["keyword".to_owned()]));
+    assert_eq!(colour(" RS ", "\"hi"), Some(vec!["string".to_owned()]));
+    assert!(packs.for_fence("tsx").is_some_and(|p| p.name() == "typescript"), "a dialect, by its extension");
+    assert!(packs.for_fence("cobol").is_none() && packs.for_fence("").is_none());
+}

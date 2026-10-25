@@ -152,6 +152,8 @@ pub struct Shared {
     pub discussions: Held<crate::discussions::Discussions>,
     /// The chats' unsent text, by slot (its own record on the server).
     pub drafts: Held<crate::drafts::Drafts>,
+    /// Code blocks' colours, as the server reads them.
+    pub highlighter: Held<crate::highlighter::Highlighter>,
     /// The desk's server (`here`: home's own).
     pub server: String,
     /// Every server's open notifications, in the order they're gone through.

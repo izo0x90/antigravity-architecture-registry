@@ -71,3 +71,11 @@ impl HighlightQuery {
         out
     }
 }
+
+/// `text`'s colours as `pack` says (none when it has no highlight query):
+/// a code block written in its language.
+pub fn of_text(pack: &crate::pack::Pack, text: &str) -> Option<Highlights> {
+    let query = pack.highlight_query.as_ref()?;
+    let root = ast_grep_language::LanguageExt::ast_grep(&pack.lang, text);
+    Some(query.runs(root.root().get_inner_node(), text))
+}

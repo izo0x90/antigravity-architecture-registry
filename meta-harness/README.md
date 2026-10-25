@@ -346,6 +346,19 @@ In a chat, `J`/`K` show the next and previous agent slot: the lead, then
 sub-slots, then queue workers, each by name (the slot picker, `Space w w`,
 lists them so).
 
+A chat's stream is rows. A run of calls (tool calls, commands, file
+changes in a row) is one folded line ("Read 3 files, searched twice"); a
+call's output, reasoning, and what a call's sub-agent did (where its
+harness says, as Claude Code does) fold too, with the fold keys every
+view has (`z o`, `z c`, `z a`, `z R`, `z M`; Enter unfolds a run). "Shows:"
+on its settings row says how much shows at first (quiet, normal,
+everything; `[chat] shows` in the UI config). The running turn's line
+says what the agent is doing and how live it is ("Reading render.rs… 12 s
+since anything"), with a heartbeat of its updates beside it ("At work:",
+`[chat] indicator`). A message's code blocks are coloured as the code view
+colours a file of the language their fence names (`POST
+/api/code/highlight`); `c` copies the one you're on (`f` picks one).
+
 Tool servers: every session gets ours (`/api/mcp/sse`) and the project's,
 kept in `.nah/mcp.toml` (`GET`/`PUT /api/mcp/servers`; `Space p a` adds
 one, `Space p r` removes one, and the open session restarts with them).

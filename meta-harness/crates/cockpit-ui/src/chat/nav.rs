@@ -139,6 +139,7 @@ impl Navigable for ChatStreamState {
         }
         self.agents.follow(&shared.agents);
         self.unsent.follow(&shared.drafts);
+        self.ui.messages.follow(shared);
         self.took();
         let (timeline, read) = shared.changes.timeline();
         if read != self.turn_files_read {
@@ -208,7 +209,7 @@ impl Navigable for ChatStreamState {
                 self.ui.slot = slot;
             }
             self.ui.cursor = message;
-            self.ui.link_pick = None;
+            self.ui.pick = None;
             if let Some(row) = message.and_then(|at| self.shape().row_of(at)) {
                 self.ui.scrolling.show(row, crate::viewport::Show::Middle);
             }
@@ -224,7 +225,11 @@ impl Navigable for ChatStreamState {
         let view = self.thread()?;
         let item = view.in_stream(index)?;
         let links = if folded { Vec::new() } else { links_of(item) };
-        let link = self.ui.link_pick.and_then(|n| links.get(n).cloned()).or_else(|| links.first().cloned());
+        let picked = match self.ui.pick {
+            Some(Pick::Link(n)) => links.get(n).cloned(),
+            _ => None,
+        };
+        let link = picked.or_else(|| links.first().cloned());
         Some(Target::Message { thread: Some(view.thread.id.to_string()), turn: Some(item.turn_id.to_string()), index, link })
     }
 
@@ -306,11 +311,11 @@ impl Navigable for ChatStreamState {
         self.ui.cursor.and_then(|c| shape.row_of(c)).map(|r| shape.rows[r].first.to_string())
     }
 
-    /// A message ("3") or one of its links ("3:1").
+    /// A message ("3"), one of its links ("3:1") or code blocks ("3:c0").
     fn move_to(&mut self, key: &str) {
-        let mut parts = key.split(':');
-        let Some(index) = parts.next().and_then(|i| i.parse::<usize>().ok()) else { return };
+        let (index, part) = key.split_once(':').map_or((key, None), |(i, p)| (i, Some(p)));
+        let Ok(index) = index.parse::<usize>() else { return };
         self.put_cursor(index, crate::viewport::Show::Middle);
-        self.ui.link_pick = parts.next().and_then(|n| n.parse().ok());
+        self.ui.pick = part.and_then(Pick::of);
     }
 }

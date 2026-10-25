@@ -46,6 +46,7 @@ enum ChatCommand {
     Answer { thread: ThreadId, request: harness_contracts::RequestId, option: String },
     Indicator,
     Verbosity,
+    CopyCode,
 }
 
 impl ActionProvider for ChatStreamState {
@@ -272,6 +273,13 @@ impl ActionProvider for ChatStreamState {
                 out.extend(crate::request_card::offer(request, at, C::OpenPage, answer));
             }
         }
+        // The code block you're on (picked by a hint, else the message's
+        // first), copied.
+        let codes = self.codes_here();
+        if !codes.is_empty() {
+            let which = if codes.len() == 1 { "Copy the code block" } else { "Copy the code block picked (f), else the first" };
+            out.push(Action::new("chat.copy", "Copy the code block", which, C::CopyCode).focused().on_item(Button, "Copy", Some(icon::COPY)).importance(crate::actions::SECONDARY));
+        }
         // Its settings: how much of what the agent does it shows (what's
         // folded at first), what shows the agent at work.
         let verbosity = rows::Verbosity::ALL.into_iter().map(|v| Choice::new(v.name(), v.name()).detail(Some(v.detail().into())).current(v == self.ui.folds.verbosity())).collect();
@@ -475,6 +483,18 @@ impl ActionProvider for ChatStreamState {
             ChatCommand::Verbosity => {
                 if let Some(verbosity) = value.as_deref().and_then(rows::Verbosity::from_name) {
                     self.ui.folds.set_verbosity(verbosity);
+                }
+            }
+            ChatCommand::CopyCode => {
+                let codes = self.codes_here();
+                let picked = match self.ui.pick {
+                    Some(super::Pick::Code(n)) => codes.get(n),
+                    _ => None,
+                };
+                if let Some(code) = picked.or(codes.first()) {
+                    let lines = code.lines().count();
+                    ctx.copy_text(code.clone());
+                    *cx.note = Some(if lines == 1 { "Copied the code block (1 line).".into() } else { format!("Copied the code block ({lines} lines).") });
                 }
             }
             ChatCommand::Indicator => {

@@ -8,7 +8,6 @@
 use std::cell::Ref;
 
 use egui::{Color32, Frame, Pos2, Rect, RichText, Stroke, Vec2};
-use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use harness_contracts::{
     ConfigKind, McpServer, McpTransport, NativeId, OptionValue, ContentBlock, InstanceId, ItemBody, ItemStatus, ModelSelection, NoticeLevel, PlanBody,
     PlanStep, ProviderSnapshot, ProviderStatus, RuntimeMode, RuntimePolicy, SessionKey, Slot, SlotId, SlotStatus,
@@ -84,7 +83,8 @@ pub struct ChatView {
     pub slot: SlotId,
     /// What's typed to the agent.
     pub input: crate::conversation::TypingBox,
-    pub markdown_cache: CommonMarkCache,
+    /// What its messages are drawn with (markdown, code blocks' colours).
+    pub(crate) messages: crate::conversation::Messages,
     /// The message the cursor is on (normal mode); None follows the latest.
     /// A folded run of calls is its first call's place.
     pub cursor: Option<usize>,
@@ -100,8 +100,8 @@ pub struct ChatView {
     /// How tall each row was last drawn (by its first item), and as what:
     /// a row out of sight takes that room without being drawn.
     pub(crate) heights: std::collections::HashMap<harness_contracts::ItemId, (render::Measure, f32)>,
-    /// Which of its links a hint picked.
-    pub(crate) link_pick: Option<usize>,
+    /// What in the item a hint picked: one of its links, or code blocks.
+    pub(crate) pick: Option<Pick>,
     /// Where it's looking (the shared rules move it, a message a stop);
     /// following the latest, the newest stays in view.
     pub(crate) scrolling: crate::viewport::Measured,
@@ -126,7 +126,7 @@ impl Default for ChatView {
         Self {
             slot: SlotId::new(LEAD),
             input: Default::default(),
-            markdown_cache: CommonMarkCache::default(),
+            messages: Default::default(),
             cursor: None,
             folds: rows::Folds::default(),
             folds_for: None,
@@ -134,7 +134,7 @@ impl Default for ChatView {
             indicator: Default::default(),
             live_at: None,
             heights: Default::default(),
-            link_pick: None,
+            pick: None,
             scrolling: Default::default(),
             spots: Vec::new(),
             item_rects: Vec::new(),
@@ -183,6 +183,23 @@ fn banner(ui: &mut egui::Ui, fill: Color32, stroke: Color32, add: impl FnOnce(&m
         .inner_margin(crate::theme::margin2(crate::theme::look().space_m, crate::theme::look().space_sm))
         .show(ui, |ui| ui.horizontal_wrapped(add));
     ui.add_space(crate::theme::look().space_s);
+}
+
+/// What in an item a hint picked (its place among them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Pick {
+    Link(usize),
+    Code(usize),
+}
+
+impl Pick {
+    /// From a place's key after its item's (`1`, `c0`).
+    fn of(part: &str) -> Option<Self> {
+        match part.strip_prefix('c') {
+            Some(code) => code.parse().ok().map(Self::Code),
+            None => part.parse().ok().map(Self::Link),
+        }
+    }
 }
 
 /// Where a chat is: its slot, and the message.
@@ -284,6 +301,22 @@ impl ChatStreamState {
         let view = self.thread()?;
         let run: Vec<&TurnItem> = row.run.map(|(a, b)| (a..=b).filter_map(|i| view.in_stream(i)).collect()).unwrap_or_default();
         Some(self.ui.folds.here(row, &run, view.in_stream(row.first)?))
+    }
+
+    /// The code blocks of the item you're on (a message's, a proposed
+    /// plan's), in order.
+    pub(crate) fn codes_here(&self) -> Vec<String> {
+        let Some(view) = self.thread() else { return Vec::new() };
+        let Some(item) = self.ui.cursor.and_then(|at| view.in_stream(at)) else { return Vec::new() };
+        let text = match &item.body {
+            ItemBody::AssistantMessage { .. } => item.body.said().unwrap_or_default(),
+            ItemBody::ProposedPlan { markdown, .. } => markdown.clone(),
+            _ => return Vec::new(),
+        };
+        crate::conversation::parts(&text).into_iter().filter_map(|p| match p {
+            crate::conversation::Part::Code { code, .. } => Some(code.to_owned()),
+            _ => None,
+        }).collect()
     }
 
     /// Whether request `id` (of `view`) waits on you.

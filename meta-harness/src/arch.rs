@@ -54,6 +54,7 @@ pub fn routes() -> Router<ProjectState> {
         .route("/api/arch/at", get(component_at))
         .route("/api/arch/file", get(file_view))
         .route("/api/code/analysis", get(code_analysis))
+        .route("/api/code/highlight", post(code_highlight))
         .route("/api/arch/ingest", post(ingest))
         .route("/api/arch/index", get(index_status))
         .route("/api/arch/refresh", post(refresh))
@@ -125,6 +126,27 @@ struct CodeQuery {
 /// refers to, from what's kept (nothing when the file changed since).
 async fn code_analysis(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Query(q): Query<CodeQuery>) -> ArchResult<arch_graph::code::CodeAnalysis> {
     Ok(Json(blocking(&state.arch, move |a| a.code_analysis(&q.path)).await?))
+}
+
+/// A code block to colour: the language its fence names, and its text.
+// An argument it doesn't know is refused, never ignored.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HighlightAsk {
+    language: String,
+    text: String,
+}
+
+/// The most of a code block coloured (bytes): more is refused.
+const HIGHLIGHT_MOST: usize = 256 * 1024;
+
+/// A code block's colours, as a file of its language is coloured (none: no
+/// language pack knows its fence).
+async fn code_highlight(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Json(ask): Json<HighlightAsk>) -> ArchResult<Option<arch_graph::code::Highlights>> {
+    if ask.text.len() > HIGHLIGHT_MOST {
+        return Err(ArchError(ServiceError::InvalidOp(format!("a code block of {} bytes is too long to colour (the most is {HIGHLIGHT_MOST})", ask.text.len()))));
+    }
+    Ok(Json(blocking(&state.arch, move |a| Ok(a.highlight(&ask.language, &ask.text))).await?))
 }
 
 /// What a read shows: `code` (the default) or `plan:<id>`.

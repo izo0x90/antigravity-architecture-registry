@@ -428,7 +428,7 @@ impl ChatStreamState {
         }
         let Some(row) = self.shape().row_of(index) else { return };
         self.ui.cursor = Some(index);
-        self.ui.link_pick = None;
+        self.ui.pick = None;
         self.ui.scrolling.show(row, show);
     }
 
@@ -439,7 +439,15 @@ impl ChatStreamState {
         let from = self.ui.cursor.and_then(|c| shape.row_of(c)).or(shape.rows.len().checked_sub(1));
         if let Some(at) = self.ui.scrolling.go(shape.rows.len(), from, go) {
             self.ui.cursor = Some(shape.rows[at].first);
-            self.ui.link_pick = None;
+            self.ui.pick = None;
+        }
+    }
+
+    /// Item `index`'s code blocks, where they were drawn: places of their
+    /// own (`3:c0`).
+    fn code_spots(&mut self, index: usize, drawn: &[Rect]) {
+        for (n, rect) in drawn.iter().enumerate() {
+            self.ui.drawing.push(Spot { key: format!("{index}:c{n}"), rect: *rect });
         }
     }
 
@@ -448,12 +456,17 @@ impl ChatStreamState {
         let index = row.first;
         match &item.body {
             // Your messages and the agent's: as every conversation draws them.
-            ItemBody::UserMessage { text } => crate::conversation::message(ui, &mut self.ui.markdown_cache, &crate::conversation::Message::new("user", text)),
+            ItemBody::UserMessage { text } => {
+                self.ui.messages.draw(ui, &crate::conversation::Message::new("user", text));
+            }
+            // Its code blocks are places of their own (a hint picks one; Copy
+            // copies it).
             ItemBody::AssistantMessage { content, .. } => {
                 let text = item.body.said().unwrap_or_default();
                 let by = self.slot().map(|s| s.name.clone()).unwrap_or_else(|| "the agent".into());
                 let under = content.iter().filter(|b| !matches!(b, ContentBlock::Text { .. })).map(block_summary).collect();
-                crate::conversation::message(ui, &mut self.ui.markdown_cache, &crate::conversation::Message { markdown: true, under, ..crate::conversation::Message::new(&by, &text) });
+                let drawn = self.ui.messages.draw(ui, &crate::conversation::Message { markdown: true, under, ..crate::conversation::Message::new(&by, &text) });
+                self.code_spots(index, &drawn);
             }
             // Reasoning, a call's output: folded unless opened (the fold
             // keys, or its control under it while you're on it).
@@ -517,7 +530,8 @@ impl ChatStreamState {
             ItemBody::ProposedPlan { markdown, .. } => {
                 Frame::NONE.fill(colors().surface).inner_margin(crate::theme::margin(crate::theme::look().space_sm)).show(ui, |ui| {
                     ui.label(RichText::new(format!("{} Proposed plan", icon::CLIPBOARD_TEXT)).strong().size(crate::theme::look().text_body));
-                    CommonMarkViewer::new().show(ui, &mut self.ui.markdown_cache, markdown);
+                    let drawn = self.ui.messages.markdown(ui, markdown);
+                    self.code_spots(index, &drawn);
                 });
             }
             ItemBody::TodoList { steps, .. } => render_steps(ui, steps),

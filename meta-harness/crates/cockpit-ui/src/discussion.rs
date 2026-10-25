@@ -71,7 +71,7 @@ pub struct DiscussionView {
     scrolling: Measured,
     spots: Vec<Spot>,
     typing: Option<egui::Rect>,
-    markdown: egui_commonmark::CommonMarkCache,
+    messages: crate::conversation::Messages,
     note: Option<String>,
     asks: Vec<Ask>,
     inbox: Arc<Mutex<Vec<Reply>>>,
@@ -186,7 +186,7 @@ impl crate::buffer::Buffer for DiscussionView {
         crate::conversation::heading(ui, &d);
         ui.add_space(look.space_xs);
         // The typing box, under what's said (drawn first: it keeps its place).
-        let mut markdown = std::mem::take(&mut self.markdown);
+        let mut messages = std::mem::take(&mut self.messages);
         let mut spots = Vec::new();
         let cursor = self.cursor;
         let box_height = look.text_body * 4.0 + look.space_l * 2.0;
@@ -203,7 +203,7 @@ impl crate::buffer::Buffer for DiscussionView {
             stop(ui, 0, &mut spots, &mut |ui| self.draw_on(ui, &d));
             ui.add_space(look.space_s);
             for (i, said) in d.said.iter().enumerate() {
-                stop(ui, i + 1, &mut spots, &mut |ui| crate::conversation::message(ui, &mut markdown, &crate::conversation::said(&d, said)));
+                stop(ui, i + 1, &mut spots, &mut |ui| { messages.draw(ui, &crate::conversation::said(&d, said)); });
             }
         });
         for s in &spots {
@@ -211,7 +211,7 @@ impl crate::buffer::Buffer for DiscussionView {
         }
         self.scrolling.drawn(&output);
         self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
-        self.markdown = markdown;
+        self.messages = messages;
         if d.status != DiscussionStatus::Settled || self.purpose == Writing::Reopen {
             ui.label(RichText::new(self.box_says(&d)).size(look.text_small).color(colors().muted));
             let typed = self.writing.draw(ui, egui::Id::new(("discussion_box", cx.at)), 2, "Write it here…", drawing.typing);
@@ -396,6 +396,7 @@ impl Navigable for DiscussionView {
 
     fn share(&mut self, shared: &Shared) {
         self.discussions.follow(&shared.discussions);
+        self.messages.follow(shared);
     }
 }
 

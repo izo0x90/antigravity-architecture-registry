@@ -126,7 +126,7 @@ pub struct SpecState {
     pub discussions: Vec<Discussion>,
     pub diff: PlanDiff,
     /// What's said in its discussions, drawn (an agent's as markdown).
-    markdown: egui_commonmark::CommonMarkCache,
+    messages: crate::conversation::Messages,
     /// The review point `] c` is on.
     pub point: Option<DiscussionId>,
     note: Option<String>,
@@ -171,7 +171,7 @@ impl Default for SpecState {
             author: String::new(),
             discussions: Vec::new(),
             diff: PlanDiff::default(),
-            markdown: Default::default(),
+            messages: Default::default(),
             point: None,
             note: None,
             out_of_date: false,
@@ -280,7 +280,7 @@ impl SpecState {
     /// it's under and those under it.
     fn draw_item(&mut self, ui: &mut egui::Ui) {
         // Its discussions, drawn as every conversation is.
-        let mut markdown = std::mem::take(&mut self.markdown);
+        let mut messages = std::mem::take(&mut self.messages);
         let on: Vec<Discussion> = match &self.item {
             Some(card) => {
                 let item = Subject::PlanItem { plan: card.plan.clone(), item: card.id.0.clone() };
@@ -288,11 +288,11 @@ impl SpecState {
             }
             None => Vec::new(),
         };
-        self.draw_item_with(ui, &on, &mut markdown);
-        self.markdown = markdown;
+        self.draw_item_with(ui, &on, &mut messages);
+        self.messages = messages;
     }
 
-    fn draw_item_with(&mut self, ui: &mut egui::Ui, on: &[Discussion], markdown: &mut egui_commonmark::CommonMarkCache) {
+    fn draw_item_with(&mut self, ui: &mut egui::Ui, on: &[Discussion], messages: &mut crate::conversation::Messages) {
         let Some(card) = &self.item else { return };
         let look = crate::theme::look();
         let key = card.key();
@@ -342,7 +342,7 @@ impl SpecState {
                         ui.set_width(ui.available_width());
                         crate::conversation::heading(ui, d);
                         for said in &d.said {
-                            crate::conversation::message(ui, markdown, &crate::conversation::said(d, said));
+                            messages.draw(ui, &crate::conversation::said(d, said));
                         }
                     });
                 }
@@ -813,7 +813,7 @@ impl SpecState {
                     let here: Vec<Discussion> = self.comments_in(Some(section)).into_iter().cloned().collect();
                     let point = self.point.clone();
                     for discussion in &here {
-                        render_thread(ui, discussion, point.as_ref(), section, &mut item, &mut self.markdown);
+                        render_thread(ui, discussion, point.as_ref(), section, &mut item, &mut self.messages);
                     }
                 });
             }
@@ -838,7 +838,7 @@ type ItemDrawer<'a> = dyn FnMut(&mut egui::Ui, Entry, &mut dyn FnMut(&mut egui::
 
 /// One discussion's thread, as every conversation draws one: what it asks
 /// and what's said after are cursor stops.
-fn render_thread(ui: &mut egui::Ui, c: &Discussion, point: Option<&DiscussionId>, section: Section, item: &mut ItemDrawer, markdown: &mut egui_commonmark::CommonMarkCache) {
+fn render_thread(ui: &mut egui::Ui, c: &Discussion, point: Option<&DiscussionId>, section: Section, item: &mut ItemDrawer, messages: &mut crate::conversation::Messages) {
     let stroke = if point == Some(&c.id) { colors().focus } else { colors().border };
     egui::Frame::NONE.fill(colors().surface).stroke(egui::Stroke::new(crate::theme::look().line_thin, stroke)).corner_radius(crate::theme::look().radius_m).inner_margin(crate::theme::margin(crate::theme::look().space_sm)).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -848,7 +848,7 @@ fn render_thread(ui: &mut egui::Ui, c: &Discussion, point: Option<&DiscussionId>
                 if i == 0 {
                     crate::conversation::heading(ui, c);
                 }
-                crate::conversation::message(ui, markdown, &crate::conversation::said(c, said));
+                messages.draw(ui, &crate::conversation::said(c, said));
             });
         }
     });
@@ -1047,6 +1047,7 @@ impl Navigable for SpecState {
     /// The types, the user, the review, the source (unless pinned), and
     /// whether its code changed since it was read.
     fn share(&mut self, shared: &crate::shared::Shared) {
+        self.messages.follow(shared);
         if let Some(types) = shared.types.since(&mut self.seen.types) {
             self.types.clone_from(types);
         }

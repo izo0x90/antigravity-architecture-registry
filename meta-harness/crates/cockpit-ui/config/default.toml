@@ -248,6 +248,8 @@ t = "Tags"
 "chat.clear" = { keys = ["x"] }
 "chat.next_slot" = { keys = ["J"], gestures = ["swipe_left"] }
 "chat.prev_slot" = { keys = ["K"], gestures = ["swipe_right"] }
+# Copy the code block you're on (picked with f, else the message's first).
+"chat.copy" = { keys = ["c"] }
 
 "session.new" = { leader = "s n" }
 "session.resume" = { leader = "s r" }

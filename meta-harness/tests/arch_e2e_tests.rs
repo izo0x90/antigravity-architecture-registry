@@ -62,6 +62,16 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     assert!(named.iter().any(|o| o["target"] == "rust:sample::run" && o["definition"] == true), "{body}");
     assert!(named.iter().any(|o| o["target"] == "rust:sample::store::Store::save" && o.get("definition").is_none()), "{body}");
     assert!(code["targets"].as_array().unwrap().iter().any(|t| t["id"] == "rust:sample::store::Store::save" && t["signature"].as_str().is_some_and(|s| s.contains("save("))), "{body}");
+    // A code block's colours, by the language its fence names; none for a
+    // fence no pack knows; too long, refused.
+    let (status, body) = http(addr, "POST", "/api/code/highlight", Some(r#"{"language":"rs","text":"fn main() {}"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(parse(&body)["names"].as_array().unwrap().iter().any(|n| n == "keyword"), "{body}");
+    let (status, body) = http(addr, "POST", "/api/code/highlight", Some(r#"{"language":"cobol","text":"MOVE A TO B."}"#)).await;
+    assert_eq!((status, body.as_str()), (200, "null"));
+    let long = json!({ "language": "rust", "text": "x".repeat(300 * 1024) }).to_string();
+    let (status, _) = http(addr, "POST", "/api/code/highlight", Some(&long)).await;
+    assert_eq!(status, 400);
     // Edited since it was read: nothing it says applies.
     let root = state.project.arch.root().to_path_buf();
     std::fs::write(root.join("src/util.rs"), std::fs::read_to_string(root.join("src/util.rs")).unwrap() + "\n// edited\n").unwrap();

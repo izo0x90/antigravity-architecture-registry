@@ -430,3 +430,43 @@ fn the_settings_row_keeps_to_its_panel() {
     }
     assert!(broke.is_empty(), "{broke:#?}");
 }
+
+/// A message's code blocks are coloured as the language each fence names
+/// (asked of the server once each), are places a hint picks, and `c`
+/// copies the one picked (else the first), said so.
+#[test]
+fn a_messages_code_blocks_are_coloured_picked_and_copied() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Chat);
+    let text = "Two ways:\n```rust\nfn main() {}\n```\nor\n```py\nprint(1)\nprint(2)\n```\n";
+    app.desk.shared.agents.get_mut().apply(item(40, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: text.into() }], streaming: false }));
+    for _ in 0..3 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    let asked: Vec<serde_json::Value> = bodies(&app, "POST /api/code/highlight");
+    assert_eq!(asked, [serde_json::json!({ "language": "rust", "text": "fn main() {}" }), serde_json::json!({ "language": "py", "text": "print(1)\nprint(2)" })], "each once");
+    app.desk.shared.highlighter.get_mut().knows("rust", "fn main() {}", arch_graph::code::Highlights { names: vec!["keyword".into()], runs: vec![[0, 2, 0]] });
+    let keyword = app.desk.shared.highlighter.get_mut().colour("keyword").expect("the keyword's colour");
+    let output = frame(&ctx, &mut app, vec![]);
+    fn coloured(shape: &egui::Shape, out: &mut Vec<(String, egui::Color32)>) {
+        match shape {
+            egui::Shape::Text(t) => out.extend(t.galley.job.sections.iter().map(|s| (t.galley.job.text[s.byte_range.clone()].to_owned(), s.format.color))),
+            egui::Shape::Vec(list) => list.iter().for_each(|s| coloured(s, out)),
+            _ => {}
+        }
+    }
+    let mut parts = Vec::new();
+    output.shapes.iter().for_each(|c| coloured(&c.shape, &mut parts));
+    assert!(parts.iter().any(|(t, c)| t == "fn" && *c == keyword) && parts.iter().any(|(t, _)| t == " main() {}"), "coloured as the code view colours rust");
+    let keys: Vec<String> = app.desk.chat().spots().into_iter().map(|s| s.key).collect();
+    assert!(keys.contains(&"40:c0".to_owned()) && keys.contains(&"40:c1".to_owned()), "places of their own: {keys:?}");
+    let copied = |output: &egui::FullOutput| output.platform_output.commands.iter().find_map(|c| match c { egui::OutputCommand::CopyText(t) => Some(t.clone()), _ => None });
+    app.desk.chat_mut().move_to("40");
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, key("c"));
+    assert_eq!((copied(&output).as_deref(), app.note.as_deref()), (Some("fn main() {}"), Some("Copied the code block (1 line).")));
+    app.desk.chat_mut().move_to("40:c1");
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, key("c"));
+    assert_eq!((copied(&output).as_deref(), app.note.as_deref()), (Some("print(1)\nprint(2)"), Some("Copied the code block (2 lines).")));
+}

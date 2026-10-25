@@ -434,36 +434,10 @@ impl CodeViewerState {
     /// A line drawn with its syntax colours (base color where nothing says).
     fn coloured(&self, idx: usize, base: egui::Color32, background: Option<egui::Color32>) -> egui::text::LayoutJob {
         let font = egui::FontId::monospace(crate::theme::look().text_body);
-        let line = &self.lines[idx];
-        let mut job = egui::text::LayoutJob::default();
         let format = |color: egui::Color32| egui::TextFormat { font_id: font.clone(), color, background: background.unwrap_or(egui::Color32::TRANSPARENT), ..Default::default() };
-        let Some(analysis) = self.analysis.as_ref().filter(|a| !a.stale) else {
-            job.append(line, 0.0, format(base));
-            return job;
-        };
-        let starts = line_starts(&self.content);
-        let line_start = starts.get(idx).copied().unwrap_or(0);
-        let line_end = line_start + line.len();
-        let first = analysis.highlights.runs.partition_point(|r| (r[1] as usize) <= line_start);
-        let mut at = line_start;
-        for run in &analysis.highlights.runs[first..] {
-            let (s, e) = ((run[0] as usize).max(line_start), (run[1] as usize).min(line_end));
-            if s >= line_end {
-                break;
-            }
-            if s > at {
-                job.append(&self.content[at..s], 0.0, format(base));
-            }
-            let color = analysis.highlights.names.get(run[2] as usize).and_then(|n| self.ui.token(n)).and_then(|t| colors().token(t)).unwrap_or(base);
-            if e > s.max(at) {
-                job.append(&self.content[s.max(at)..e], 0.0, format(color));
-                at = e;
-            }
-        }
-        if at < line_end {
-            job.append(&self.content[at..line_end], 0.0, format(base));
-        }
-        job
+        let start = line_starts(&self.content).get(idx).copied().unwrap_or(0);
+        let highlights = self.analysis.as_ref().filter(|a| !a.stale).map(|a| &a.highlights);
+        crate::highlighter::coloured(&self.content, start..start + self.lines[idx].len(), highlights, |n| self.ui.token(n).and_then(|t| colors().token(t)), base, format)
     }
 
     /// Takes what the index knows about the file: marks, definitions, calls.

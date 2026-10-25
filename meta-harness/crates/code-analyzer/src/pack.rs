@@ -933,6 +933,13 @@ impl Pack {
         if self.handles(path) { Some(self) } else { self.dialects.iter().find(|d| d.handles(path)) }
     }
 
+    /// The compiled pack (this one or a dialect) a code block's fence
+    /// names: by the language's name, or one of its extensions.
+    pub fn for_fence(&self, fence: &str) -> Option<&Pack> {
+        let names = |p: &Pack| p.name() == fence || p.spec.language.extensions.iter().any(|x| x == fence);
+        if names(self) { Some(self) } else { self.dialects.iter().find(|d| d.spec.language.extensions.iter().any(|x| x == fence)) }
+    }
+
     /// Every definition's type must be known to `types`, and so must the
     /// module type: a pack mapping onto a type that doesn't exist is broken.
     pub fn check_types(&self, types: &arch_graph::TypeSystem) -> Result<(), IndexError> {
@@ -999,6 +1006,12 @@ impl PackSet {
 
     pub fn by_name(&self, name: &str) -> Option<&Pack> {
         self.packs.iter().find(|p| p.name() == name)
+    }
+
+    /// The pack a code block's fence names (`rust`, `rs`, `tsx`; any case).
+    pub fn for_fence(&self, fence: &str) -> Option<&Pack> {
+        let fence = fence.trim().to_ascii_lowercase();
+        self.packs.iter().find_map(|p| p.for_fence(&fence))
     }
 }
 
