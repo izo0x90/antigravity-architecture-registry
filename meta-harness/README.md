@@ -357,7 +357,9 @@ says what the agent is doing and how live it is ("Reading render.rs… 12 s
 since anything"), with a heartbeat of its updates beside it ("At work:",
 `[chat] indicator`). A message's code blocks are coloured as the code view
 colours a file of the language their fence names (`POST
-/api/code/highlight`); `c` copies the one you're on (`f` picks one).
+/api/code/highlight`). `c` copies the message you're on, or the code
+block `f` picked; `] ]` and `[ [` go to the next and previous message,
+past the calls between; `/` finds what's said, opening a fold it's in.
 The files a message's words name (`src/a.rs:12`, a path with a folder or a
 line) are links under it, as a call's places are: Enter opens the one
 you're on in the code view, at its line.

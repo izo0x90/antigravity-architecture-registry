@@ -39,6 +39,8 @@ impl ChatStreamState {
     /// again.
     pub(super) fn moves(&self) -> Vec<Action> {
         let mut out = crate::nav::list_moves();
+        out.push(Move::Motion(Motion::NextSibling).offer("Next message"));
+        out.push(Move::Motion(Motion::PrevSibling).offer("Previous message"));
         // Enter: a folded run opens; else the file it points to does.
         let here = self.here().unwrap_or_default();
         out.push(match (here.unfolds(), self.chip_here(), self.target()) {
@@ -60,6 +62,26 @@ impl ChatStreamState {
 }
 
 impl ChatStreamState {
+    /// The `count`th message (yours or the agent's) after the cursor's row
+    /// (`forward`), or before it: the calls and the rest between passed
+    /// over (following the latest: from the newest).
+    fn step_message(&mut self, forward: bool, count: usize) {
+        let shape = self.shape();
+        let Some(view) = self.thread() else { return };
+        let is_message = |row: &rows::Row| !row.folded && view.in_stream(row.first).is_some_and(|i| matches!(i.body, ItemBody::UserMessage { .. } | ItemBody::AssistantMessage { .. }));
+        let from = self.ui.cursor.and_then(|c| shape.row_of(c));
+        let messages: Vec<usize> = match (forward, from) {
+            (true, Some(at)) => shape.rows.iter().enumerate().skip(at + 1).filter(|(_, r)| is_message(r)).map(|(n, _)| n).collect(),
+            (true, None) => Vec::new(),
+            (false, at) => shape.rows.iter().enumerate().take(at.unwrap_or(shape.rows.len())).filter(|(_, r)| is_message(r)).map(|(n, _)| n).rev().collect(),
+        };
+        drop(view);
+        let to = messages.get(count.max(1) - 1).or(messages.last()).map(|n| shape.rows[*n].first);
+        if let Some(to) = to {
+            self.put_cursor(to, crate::viewport::Show::InView);
+        }
+    }
+
     /// The chip picked (a hint), else your message's first: its words and
     /// where it goes.
     fn chip_here(&self) -> Option<(String, Target)> {
@@ -260,6 +282,7 @@ impl Navigable for ChatStreamState {
             Motion::Down | Motion::Up if fresh => self.put_cursor(last.first, Show::InView),
             // Message of that number (as a place says it).
             Motion::Line(i) => self.put_cursor(i.saturating_sub(1), Show::Middle),
+            Motion::NextSibling | Motion::PrevSibling => self.step_message(motion == Motion::NextSibling, count),
             _ => {
                 if let Some(go) = Go::of(motion, count) {
                     self.go(go);

@@ -318,6 +318,25 @@ impl ChatStreamState {
         Some(self.ui.folds.here(row, &run, view.in_stream(row.first)?))
     }
 
+    /// What `c` copies where you are: the code block picked (a hint), else
+    /// the message (yours as you typed it), else the proposed plan; in
+    /// words, and its text.
+    pub(crate) fn copy_here(&self) -> Option<(&'static str, String)> {
+        if let Some(Pick::Code(n)) = self.ui.pick
+            && let Some(code) = self.codes_here().into_iter().nth(n)
+        {
+            return Some(("the code block", code));
+        }
+        let view = self.thread()?;
+        let item = view.in_stream(self.ui.cursor?)?;
+        match &item.body {
+            ItemBody::UserMessage { text, typed } => Some(("your message", crate::conversation::as_typed(text, typed.as_ref()).0.to_owned())),
+            ItemBody::AssistantMessage { .. } => Some(("the message", item.body.said().unwrap_or_default())),
+            ItemBody::ProposedPlan { markdown, .. } => Some(("the plan", markdown.clone())),
+            _ => None,
+        }
+    }
+
     /// The code blocks of the item you're on (a message's, a proposed
     /// plan's), in order.
     pub(crate) fn codes_here(&self) -> Vec<String> {

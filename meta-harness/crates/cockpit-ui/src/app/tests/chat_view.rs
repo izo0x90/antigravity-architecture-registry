@@ -433,7 +433,7 @@ fn the_settings_row_keeps_to_its_panel() {
 
 /// A message's code blocks are coloured as the language each fence names
 /// (asked of the server once each), are places a hint picks, and `c`
-/// copies the one picked (else the first), said so.
+/// copies the one picked (else the message), said so.
 #[test]
 fn a_messages_code_blocks_are_coloured_picked_and_copied() {
     let (ctx, mut app) = full_app();
@@ -461,10 +461,14 @@ fn a_messages_code_blocks_are_coloured_picked_and_copied() {
     let keys: Vec<String> = app.desk.chat().spots().into_iter().map(|s| s.key).collect();
     assert!(keys.contains(&"40:c0".to_owned()) && keys.contains(&"40:c1".to_owned()), "places of their own: {keys:?}");
     let copied = |output: &egui::FullOutput| output.platform_output.commands.iter().find_map(|c| match c { egui::OutputCommand::CopyText(t) => Some(t.clone()), _ => None });
-    app.desk.chat_mut().move_to("40");
+    app.desk.chat_mut().move_to("40:c0");
     frame(&ctx, &mut app, vec![]);
     let output = frame(&ctx, &mut app, key("c"));
     assert_eq!((copied(&output).as_deref(), app.note.as_deref()), (Some("fn main() {}"), Some("Copied the code block (1 line).")));
+    app.desk.chat_mut().move_to("40");
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, key("c"));
+    assert_eq!((copied(&output).as_deref(), app.note.as_deref()), (Some(text), Some("Copied the message (9 lines).")), "none picked: the message");
     app.desk.chat_mut().move_to("40:c1");
     frame(&ctx, &mut app, vec![]);
     let output = frame(&ctx, &mut app, key("c"));
@@ -557,4 +561,40 @@ fn your_message_shows_as_typed_with_its_links_as_chips() {
     app.desk.chat_mut().fold(crate::nav::Fold::Open);
     frame(&ctx, &mut app, vec![]);
     assert!(texts(&frame(&ctx, &mut app, vec![])).contains("the attached words"));
+}
+
+/// `] ]` and `[ [` go to the next and previous message (yours or the
+/// agent's), past the calls between; `/` finds what's said, in a folded
+/// run too (opening it), `n` and `N` going on and back.
+#[test]
+fn messages_are_moved_through_and_searched() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Chat);
+    {
+        let mut agents = app.desk.shared.agents.get_mut();
+        for n in 40..43 {
+            agents.apply(item(n, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations: vec![FileLocation { path: format!("src/needle{n}.rs"), line: None }] }));
+        }
+        agents.apply(item(43, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "the needle is found".into() }], streaming: false }));
+    }
+    frame(&ctx, &mut app, vec![]);
+    app.desk.chat_mut().move_to("39");
+    keys(&ctx, &mut app, "]]");
+    assert_eq!(app.desk.chat().ui.cursor, Some(43), "past the run of calls: the next message");
+    keys(&ctx, &mut app, "[[");
+    assert_eq!(app.desk.chat().ui.cursor, Some(39), "back: the one before");
+    // Search: the first found is in the folded run (opened), then on.
+    keys(&ctx, &mut app, "/needle");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    let on = app.desk.chat().ui.cursor;
+    assert!(on.is_some_and(|c| (40..=43).contains(&c)), "found: {on:?}");
+    let first = on.unwrap();
+    frame(&ctx, &mut app, key("n"));
+    let next = app.desk.chat().ui.cursor.unwrap();
+    assert!(next != first && (40..=43).contains(&next), "n: the next found ({first} then {next})");
+    frame(&ctx, &mut app, key("N"));
+    assert_eq!(app.desk.chat().ui.cursor, Some(first), "N: back");
+    let rows = app.desk.chat().shape();
+    assert!(rows.rows.iter().all(|r| !r.folded || !r.holds(first)), "the run holding it, open");
 }
