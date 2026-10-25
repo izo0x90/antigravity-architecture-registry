@@ -160,7 +160,7 @@ impl CockpitApp {
                 return;
             }
             let what = self.desk.view(kind).target().map(|t| t.in_words());
-            egui::Area::new(egui::Id::new("item_controls")).order(egui::Order::Foreground).fixed_pos(bar.min).show(ctx, |ui| {
+            let shown = egui::Area::new(egui::Id::new("item_controls")).order(egui::Order::Foreground).fixed_pos(bar.min).show(ctx, |ui| {
                 ui.set_clip_rect(bar);
                 Frame::NONE.inner_margin(crate::theme::margin2(look.space_s, look.space_s)).show(ui, |ui| {
                     ui.set_width(bar.width() - look.space_s * 2.0);
@@ -174,22 +174,36 @@ impl CockpitApp {
                     });
                 });
             });
+            self.part_of_the_look(host, shown.response.rect);
             return;
         }
         // Floating: under what they're for (above it when there's no
         // room); it needs to be on screen.
+        let mut drawn = Vec::new();
         for (id, anchor, here) in groups {
             let id = egui::Id::new(id);
             let Some(anchor) = anchor.map(|r| r.intersect(bounds)).filter(|r| r.is_positive() && !here.is_empty()) else { continue };
             let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(anchor.width(), look.text_title * 2.0), |r| r.size());
             let below = anchor.bottom() + look.space_s;
             let y = if below + size.y <= bounds.bottom() { below } else { (anchor.top() - look.space_s - size.y).max(bounds.top()) };
-            egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(egui::pos2(anchor.left(), y)).show(ctx, |ui| {
+            let shown = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(egui::pos2(anchor.left(), y)).show(ctx, |ui| {
                 Frame::NONE.fill(colors().overlay_raised).stroke(Stroke::new(look.line_thin, colors().border)).corner_radius(look.radius_m).inner_margin(crate::theme::margin(look.space_s)).show(ui, |ui| {
                     ui.set_max_width(anchor.width().max(look.quick_look_width / 3.0).min(bounds.width()));
                     ui.horizontal_wrapped(|ui| crate::actions::controls(ui, &here, &mut cx));
                 });
             });
+            drawn.push(shown.response.rect);
+        }
+        for rect in drawn {
+            self.part_of_the_look(host, rect);
+        }
+    }
+
+    /// Controls drawn for the quick look are part of it (a tap on one isn't
+    /// outside it).
+    fn part_of_the_look(&mut self, host: Host, rect: egui::Rect) {
+        if host == Host::Look {
+            self.overlays.drawn_at(crate::overlay::Overlay::QuickLook, rect);
         }
     }
 

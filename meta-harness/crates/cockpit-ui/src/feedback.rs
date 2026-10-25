@@ -180,15 +180,16 @@ impl FeedbackInspectorState {
     }
 
     /// Draws the real-time targeting overlay (crosshair, highlight bounding box, label badge)
-    /// and listens for user click to lock onto the selected element.
-    pub fn render_inspection_overlay(&mut self, ctx: &egui::Context) {
+    /// and listens for user click to lock onto the selected element: whether
+    /// it's on.
+    pub fn render_inspection_overlay(&mut self, ctx: &egui::Context) -> bool {
         if !self.is_inspecting {
-            return;
+            return false;
         }
 
         if self.just_toggled {
             self.just_toggled = false;
-            return;
+            return true;
         }
 
         ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -220,18 +221,20 @@ impl FeedbackInspectorState {
                 self.target_element("general_cockpit");
             }
         }
+        self.is_inspecting
     }
 
-    /// Renders the enlarged Feedback Modal when an element is targeted.
-    pub fn render_modal(&mut self, ctx: &egui::Context, net: &NetClient, active_layout: usize, active_slots: &[String]) {
+    /// Renders the enlarged Feedback Modal when an element is targeted:
+    /// where it was drawn, while it's open.
+    pub fn render_modal(&mut self, ctx: &egui::Context, net: &NetClient, active_layout: usize, active_slots: &[String]) -> Option<egui::Rect> {
         if !self.is_modal_open {
-            return;
+            return None;
         }
 
         let mut is_open = self.is_modal_open;
         let mut close_modal = false;
 
-        egui::Window::new(RichText::new("🎯 Developer Feedback on Targeted Element").strong().color(colors().warn))
+        let shown = egui::Window::new(RichText::new("🎯 Developer Feedback on Targeted Element").strong().color(colors().warn))
             .open(&mut is_open)
             .collapsible(false)
             .resizable(true)
@@ -312,6 +315,7 @@ impl FeedbackInspectorState {
             });
 
         self.is_modal_open = is_open && !close_modal;
+        shown.map(|s| s.response.rect).filter(|_| self.is_modal_open)
     }
 
     /// Initiates loading of all issues from the backend server.
@@ -338,8 +342,9 @@ impl FeedbackInspectorState {
     }
 
     /// Renders the Issues Explorer window allowing developers to browse, filter,
-    /// view, and edit all submitted feedback issues.
-    pub fn render_issues_window(&mut self, ctx: &egui::Context, net: &NetClient) {
+    /// view, and edit all submitted feedback issues: where it was drawn,
+    /// while it's open.
+    pub fn render_issues_window(&mut self, ctx: &egui::Context, net: &NetClient) -> Option<egui::Rect> {
         // Drain pending loads
         if let Ok(mut lock) = self.pending_issues_load.lock()
             && let Some(res) = lock.take() {
@@ -368,11 +373,11 @@ impl FeedbackInspectorState {
         }
 
         if !self.is_issues_window_open {
-            return;
+            return None;
         }
 
         let mut is_open = self.is_issues_window_open;
-        egui::Window::new(RichText::new(format!("{} Issues & Feedback Explorer", egui_phosphor::regular::WARNING_CIRCLE)).strong().color(colors().accent))
+        let shown = egui::Window::new(RichText::new(format!("{} Issues & Feedback Explorer", egui_phosphor::regular::WARNING_CIRCLE)).strong().color(colors().accent))
             .open(&mut is_open)
             .collapsible(false)
             .resizable(true)
@@ -578,6 +583,7 @@ impl FeedbackInspectorState {
             });
 
         self.is_issues_window_open = is_open;
+        shown.map(|s| s.response.rect).filter(|_| self.is_issues_window_open)
     }
 
     pub fn render_toast(&mut self, ctx: &egui::Context) {

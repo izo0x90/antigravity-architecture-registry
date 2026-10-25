@@ -35,6 +35,7 @@ pub mod code_search;
 pub mod sheet;
 pub mod viewport;
 pub mod net;
+pub mod overlay;
 pub mod palette;
 pub mod hosted;
 pub mod highlighter;

@@ -302,7 +302,7 @@ fn at_a_phones_width_a_tap_on_the_mark_opens_it_and_nothing_is_drawn_over_anythi
     let mut t = 10.0;
     let mut at = |ctx: &egui::Context, app: &mut CockpitApp, events: Vec<egui::Event>| {
         t += 0.05;
-        ctx.run(egui::RawInput { events, time: Some(t), screen_rect: Some(phone), ..Default::default() }, |ctx| app.frame(ctx))
+        run(ctx, app, egui::RawInput { events, time: Some(t), screen_rect: Some(phone), ..Default::default() })
     };
     at(&ctx, &mut app, vec![]);
     let output = at(&ctx, &mut app, vec![]);

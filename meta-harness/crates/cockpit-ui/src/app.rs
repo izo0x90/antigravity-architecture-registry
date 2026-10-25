@@ -37,6 +37,7 @@ mod lifecycle;
 mod look;
 pub(crate) mod notes;
 mod outside;
+mod overlays;
 mod plan_items;
 mod starting;
 mod tagging;
@@ -284,6 +285,12 @@ pub struct CockpitApp {
     fingers: bool,
     /// The quick look, while it's open.
     pub quick_look: Option<QuickLook>,
+    /// What's over the panels, as last drawn: a tap outside the top one
+    /// closes it.
+    overlays: crate::overlay::Overlays,
+    /// The mode the menus were opened from: closed without running
+    /// anything, it's given back (typing, when they were opened from it).
+    menu_from: InputMode,
     /// The browser's notifications.
     pub alerts: crate::alerts::Alerts,
     /// What a call that finished later has to say (shown as the note).
@@ -383,6 +390,8 @@ impl CockpitApp {
             touch: Default::default(),
             fingers: false,
             quick_look: None,
+            overlays: Default::default(),
+            menu_from: InputMode::Normal,
             alerts,
             notes_later: Arc::default(),
             initialized: false,
@@ -542,6 +551,7 @@ impl eframe::App for CockpitApp {
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         self.desk.remote.feed(ctx, raw_input);
+        self.before_input(ctx, raw_input);
     }
 }
 
@@ -601,14 +611,20 @@ impl CockpitApp {
         self.say_seen(ctx);
 
         // Real-time Inspector targeting overlay
-        self.feedback.render_inspection_overlay(ctx);
+        if self.feedback.render_inspection_overlay(ctx) {
+            self.overlays.drawn_at(crate::overlay::Overlay::Inspector, ctx.content_rect());
+        }
 
         // Developer Feedback modal (automatically pops up when an element is targeted)
         let active_slots: Vec<String> = self.desk.panels.buffers().iter().map(|p| p.kind.title().to_lowercase()).collect();
-        self.feedback.render_modal(ctx, &self.desk.net, self.desk.panels.len(), &active_slots);
+        if let Some(rect) = self.feedback.render_modal(ctx, &self.desk.net, self.desk.panels.len(), &active_slots) {
+            self.overlays.drawn_at(crate::overlay::Overlay::Feedback, rect);
+        }
 
         // Issues & Feedback Explorer window
-        self.feedback.render_issues_window(ctx, &self.desk.net);
+        if let Some(rect) = self.feedback.render_issues_window(ctx, &self.desk.net) {
+            self.overlays.drawn_at(crate::overlay::Overlay::Issues, rect);
+        }
 
         // Feedback confirmation toast
         self.feedback.render_toast(ctx);
@@ -624,6 +640,7 @@ impl CockpitApp {
         self.render_prefix_popup(ctx);
         self.render_which_key_hud(ctx);
         self.render_palette(ctx);
+        self.overlays.frame_done();
         self.desk.frame_done();
     }
 }

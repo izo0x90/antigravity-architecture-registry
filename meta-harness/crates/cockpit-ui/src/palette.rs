@@ -104,7 +104,7 @@ impl Ranked {
 
 impl Palette {
     /// The area it's drawn in.
-    fn area() -> egui::Id {
+    pub(crate) fn area() -> egui::Id {
         egui::Id::new("command_palette")
     }
 

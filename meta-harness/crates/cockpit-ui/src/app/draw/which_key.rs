@@ -77,6 +77,7 @@ impl CockpitApp {
             self.on_capture(&[], true, ctx);
             self.capture = None;
         }
+        self.menus_from(self.input_mode);
         (self.leader_path, self.input_mode) = (Vec::new(), InputMode::Leader);
         for key in path {
             self.leader_key(*key, ctx);
@@ -100,7 +101,7 @@ impl CockpitApp {
         let path: Vec<(usize, String)> = self.menu_path().into_iter().enumerate().collect();
         let mut back_to: Option<usize> = None;
 
-        egui::Area::new(egui::Id::new("which_key_floating_hud")).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0)).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
+        let hud = egui::Area::new(egui::Id::new("which_key_floating_hud")).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0)).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
             // Its width from its first pass (its measuring one): anchored by
             // its middle, it's where it stays from the first frame shown.
             ui.set_width(hud_w);
@@ -171,13 +172,14 @@ impl CockpitApp {
                 }
             });
         });
+        self.overlays.drawn_at(crate::overlay::Overlay::Menu, hud.response.rect);
 
         if let Some(depth) = back_to {
             self.leader_path.truncate(depth);
         } else if let Some(key) = tapped {
             self.leader_key(key, ctx);
         } else if back && self.leader_path.pop().is_none() {
-            self.input_mode = InputMode::Normal;
+            self.leave_menu();
         }
     }
 }

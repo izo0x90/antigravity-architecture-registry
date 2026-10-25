@@ -17,6 +17,7 @@ mod menus;
 mod offers;
 mod moves;
 mod outside;
+mod overlays;
 mod plans;
 mod signing_in;
 mod split;
@@ -167,7 +168,7 @@ fn from_outside(ctx: &egui::Context, app: &mut CockpitApp, call: &str) -> crate:
     for _ in 0..10 {
         let mut raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)), ..Default::default() };
         app.desk.remote.feed(ctx, &mut raw);
-        let _ = ctx.run(raw, |ctx| app.frame(ctx));
+        let _ = run(ctx, app, raw);
         if let Some(answer) = answer.borrow_mut().take() {
             return answer;
         }
@@ -197,12 +198,19 @@ fn app_with_graph() -> (egui::Context, CockpitApp) {
 
 const SCREEN: egui::Vec2 = egui::vec2(1600.0, 1000.0);
 
+/// A frame of `raw`, as the browser runs one: what's over the panels takes
+/// its taps first.
+fn run(ctx: &egui::Context, app: &mut CockpitApp, mut raw: egui::RawInput) -> egui::FullOutput {
+    app.before_input(ctx, &mut raw);
+    ctx.run(raw, |ctx| app.frame(ctx))
+}
+
 fn frame(ctx: &egui::Context, app: &mut CockpitApp, events: Vec<egui::Event>) -> egui::FullOutput {
-    ctx.run(egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)), ..Default::default() }, |ctx| app.frame(ctx))
+    run(ctx, app, egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)), ..Default::default() })
 }
 
 fn frame_at(ctx: &egui::Context, app: &mut CockpitApp, events: Vec<egui::Event>, time: f64) -> egui::FullOutput {
-    ctx.run(egui::RawInput { events, time: Some(time), screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)), ..Default::default() }, |ctx| app.frame(ctx))
+    run(ctx, app, egui::RawInput { events, time: Some(time), screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)), ..Default::default() })
 }
 
 fn key(text: &str) -> Vec<egui::Event> {
@@ -225,7 +233,7 @@ fn press(key: egui::Key, ctrl: bool) -> Vec<egui::Event> {
 fn ctrl(ctx: &egui::Context, app: &mut CockpitApp, key: egui::Key) {
     let modifiers = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
     let raw = egui::RawInput { events: press(key, true), modifiers, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)), ..Default::default() };
-    let _ = ctx.run(raw, |ctx| app.frame(ctx));
+    let _ = run(ctx, app, raw);
 }
 
 /// The action list on everything, as the user opens it (`?`, from where

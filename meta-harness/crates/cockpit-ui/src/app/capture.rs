@@ -216,6 +216,10 @@ impl CockpitApp {
                 hit = Some(spot.key.clone());
             }
         }
+        // Over the panels: a tap on none of them ends them (and goes on).
+        for chip in taken {
+            self.overlays.drawn_at(crate::overlay::Overlay::Hints, chip);
+        }
         if let Some(key) = hit
             && let Some(Capture::Hint(hint)) = self.capture.take()
         {

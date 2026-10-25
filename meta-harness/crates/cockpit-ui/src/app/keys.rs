@@ -33,7 +33,7 @@ impl CockpitApp {
             }
             Some(LeaderEntry::Action { index, .. }) => {
                 self.leader_path.clear();
-                self.input_mode = InputMode::Normal;
+                (self.input_mode, self.menu_from) = (InputMode::Normal, InputMode::Normal);
                 self.run_bound(&bound[index], None, ctx);
                 typed_away(ctx);
                 true
@@ -43,6 +43,12 @@ impl CockpitApp {
     }
 
     pub(super) fn handle_keys(&mut self, ctx: &egui::Context) {
+        // What's over the panels first: the way back out closes it, and a
+        // modal one keeps the keys.
+        let back = ctx.input(|i| self.config.keymap.back.pressed(i));
+        if self.overlay_keys(back, ctx) {
+            return;
+        }
         let keymap = &self.config.keymap;
         let (leader_pressed, leader_released, dragged, back) = ctx.input(|i| {
             let dragged = i.pointer.primary_down() && (i.pointer.delta().length_sq() > 2.0 || i.pointer.is_decidedly_dragging());
@@ -55,7 +61,6 @@ impl CockpitApp {
             self.leader_tap.drag();
         }
         let leader_tapped = leader_released && self.leader_tap.release();
-
         match self.input_mode {
             // A setting's list of choices reads its own keys, and the way back
             // out closes it (as the key bar says); one gone without closing
@@ -126,13 +131,12 @@ impl CockpitApp {
 
             InputMode::Leader => {
                 if leader_tapped {
-                    self.leader_path.clear();
-                    self.input_mode = InputMode::Normal;
+                    self.leave_menu();
                     return;
                 }
                 if back {
                     if self.leader_path.pop().is_none() {
-                        self.input_mode = InputMode::Normal;
+                        self.leave_menu();
                     }
                     return;
                 }

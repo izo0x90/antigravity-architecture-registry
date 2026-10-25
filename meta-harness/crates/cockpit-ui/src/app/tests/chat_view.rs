@@ -475,7 +475,7 @@ fn the_settings_row_keeps_to_its_panel() {
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width as f32, 900.0));
             let mut shown = String::new();
             for _ in 0..4 {
-                shown = texts(&ctx.run(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ctx| app.frame(ctx)));
+                shown = texts(&run(&ctx, &mut app, egui::RawInput { screen_rect: Some(screen), ..Default::default() }));
             }
             assert!(app.bound_actions().iter().any(|b| b.action.id == "instance.select"), "the harness picked on the row: {shown}");
             let panels = &app.panel_rects;

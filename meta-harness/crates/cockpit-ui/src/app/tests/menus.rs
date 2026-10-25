@@ -12,7 +12,7 @@ fn on_a_phone_the_groups_wrap_inside_the_panel_and_a_tap_opens_one() {
     let mut t = 10.0;
     let mut at = |ctx: &egui::Context, app: &mut CockpitApp, events: Vec<egui::Event>| {
         t += 0.05;
-        ctx.run(egui::RawInput { events, time: Some(t), screen_rect: Some(phone), ..Default::default() }, |ctx| app.frame(ctx))
+        run(ctx, app, egui::RawInput { events, time: Some(t), screen_rect: Some(phone), ..Default::default() })
     };
     at(&ctx, &mut app, vec![]);
     let output = at(&ctx, &mut app, vec![]);
@@ -44,7 +44,7 @@ fn on_a_phone_the_groups_wrap_inside_the_panel_and_a_tap_opens_one() {
 fn a_menus_path_in_the_top_bar_moves_nothing() {
     let (ctx, mut app) = full_app();
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1300.0, 1000.0));
-    let at = |ctx: &egui::Context, app: &mut CockpitApp, events: Vec<egui::Event>| ctx.run(egui::RawInput { events, screen_rect: Some(screen), ..Default::default() }, |ctx| app.frame(ctx));
+    let at = |ctx: &egui::Context, app: &mut CockpitApp, events: Vec<egui::Event>| run(ctx, app, egui::RawInput { events, screen_rect: Some(screen), ..Default::default() });
     at(&ctx, &mut app, vec![]);
     let normal = at(&ctx, &mut app, vec![]);
     let first = |output: &egui::FullOutput, words: &str| *drawn_containing(output, words).first().unwrap_or_else(|| panic!("{words:?} isn't drawn"));

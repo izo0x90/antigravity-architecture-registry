@@ -151,7 +151,7 @@ impl CockpitApp {
             rows
         };
         let title = if waiting { self.pending_keys.iter().map(Chord::label).collect::<Vec<_>>().join(" ") + " …" } else { "marks".into() };
-        egui::Area::new(egui::Id::new("prefix_popup")).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0)).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
+        let popup = egui::Area::new(egui::Id::new("prefix_popup")).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0)).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
             Frame::NONE.fill(colors().overlay).stroke(Stroke::new(crate::theme::look().line_thin, colors().focus)).corner_radius(crate::theme::look().radius_xl).inner_margin(crate::theme::margin2(crate::theme::look().space_l, crate::theme::look().space_m)).show(ui, |ui| {
                 ui.label(RichText::new(title).monospace().strong().size(crate::theme::look().text_body).color(colors().info));
                 if rows.is_empty() {
@@ -166,6 +166,9 @@ impl CockpitApp {
                 ui.label(RichText::new(format!("{} to cancel", self.config.keymap.back.label())).size(crate::theme::look().text_small).color(colors().muted));
             });
         });
+        if waiting {
+            self.overlays.drawn_at(crate::overlay::Overlay::Keys, popup.response.rect);
+        }
     }
 
     /// What the action list lists (`bound`), each judged where you are
