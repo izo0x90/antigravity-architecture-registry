@@ -72,6 +72,7 @@
 /api/arch/file GET,HEAD
 /api/code/analysis GET,HEAD
 /api/code/highlight POST
+/api/changes/texts POST
 /api/arch/ingest POST
 /api/arch/index GET,HEAD
 /api/arch/refresh POST

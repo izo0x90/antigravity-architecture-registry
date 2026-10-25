@@ -497,10 +497,13 @@ fn the_files_a_message_names_open_in_the_code_view() {
     assert_eq!((app.focused_kind(), app.desk.code().current_file.as_str(), app.desk.code().target_line), (BufferKind::Code, "lib.rs", Some(7)));
 }
 
-/// A file a call changed is "+2 −1 src/a.rs" under it, folded; opened, its
-/// hunks as the Changes view draws them. A change item's the same.
+/// A file a call changed is "+2 −1 src/a.rs" under it, folded, as the
+/// server compares its two texts (asked for once, when it's drawn);
+/// opened, its hunks as the Changes view draws them, unnumbered (the texts
+/// may be a part of the file). One written whole (no old text) says so.
 #[test]
 fn a_change_is_folded_as_what_it_adds_and_removes_and_opens_as_its_hunks() {
+    use harness_contracts::changes::{DiffLine, Hunk, LineKind};
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Chat);
     let diff = harness_contracts::Diff { path: "src/a.rs".into(), old_text: Some("a\nb\nc\n".into()), new_text: "a\nB\nc\nd\n".into() };
@@ -511,21 +514,33 @@ fn a_change_is_folded_as_what_it_adds_and_removes_and_opens_as_its_hunks() {
         agents.apply(item(41, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "between".into() }], streaming: false }));
         agents.apply(item(42, ItemBody::FileChange { path: "src/b.rs".into(), diff: Some(harness_contracts::Diff { path: "src/b.rs".into(), old_text: None, new_text: "x\ny\n".into() }) }));
     }
+    sent(&app);
     let shown = |ctx: &egui::Context, app: &mut CockpitApp| {
         frame(ctx, app, vec![]);
         texts(&frame(ctx, app, vec![]))
     };
     let text = shown(&ctx, &mut app);
-    assert!(text.contains("+2 −1 src/a.rs") && text.contains("+2 −0") && !text.contains("@@"), "folded: {text}");
+    assert_eq!(sent(&app).iter().filter(|s| s.contains("/api/changes/texts")).count(), 1, "asked for once");
+    assert!(text.lines().any(|l| l == "src/a.rs changed") && text.contains("src/b.rs written whole (2 lines)"), "not compared yet; written whole: {text}");
+    // As git compares them.
+    let line = |kind, text: &str| DiffLine { kind, old: None, new: None, text: text.into() };
+    let hunk = Hunk { old_start: 1, old_lines: 3, new_start: 1, new_lines: 4, lines: vec![line(LineKind::Context, "a"), line(LineKind::Removed, "b"), line(LineKind::Added, "B"), line(LineKind::Context, "c"), line(LineKind::Added, "d")] };
+    let pair = crate::comparer::Pair { old: "a\nb\nc\n".into(), new: diff.new_text.clone(), context: 3 };
+    app.desk.shared.comparer.get_mut().knows(&pair, vec![hunk]);
+    let text = shown(&ctx, &mut app);
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(lines.windows(3).any(|w| w == ["+2", "−1", "src/a.rs"]), "folded, as the Changes view counts: {text}");
     app.desk.chat_mut().move_to("40");
     app.desk.chat_mut().fold(crate::nav::Fold::Open);
     let text = shown(&ctx, &mut app);
-    assert!(text.contains("@@ −1,3 +1,4 @@") && text.lines().any(|l| l == "B"), "its hunks: {text}");
+    assert!(text.lines().any(|l| l == "B") && !text.contains("@@"), "its hunks, unnumbered: {text}");
     app.desk.chat_mut().move_to("42");
     app.desk.chat_mut().fold(crate::nav::Fold::Open);
+    // (Opened at the stream's foot: shown whole once moved to again.)
+    frame(&ctx, &mut app, vec![]);
+    app.desk.chat_mut().move_to("42");
     let text = shown(&ctx, &mut app);
-    let open = format!("{} +2 −0", crate::nav::fold_mark(true));
-    assert!(text.contains(&open) && text.lines().any(|l| l == "src/b.rs"), "a change item's, opened: {text}");
+    assert!(text.contains("x\ny"), "written whole, opened: its text: {text}");
 }
 
 /// Your message shows as you typed it: what it links as chips (places of

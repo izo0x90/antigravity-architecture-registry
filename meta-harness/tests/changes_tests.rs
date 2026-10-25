@@ -46,12 +46,23 @@ async fn the_routes_list_a_comparisons_files_and_give_one_files_changes() {
     assert_eq!(status, 400, "a point that can't be read");
 }
 
+/// Outside git, a project says so; two texts (a call's change) still
+/// compare, as a file's sides do, and too much at once is refused.
 #[tokio::test]
-async fn a_project_outside_git_says_so() {
+async fn a_project_outside_git_says_so_and_still_compares_two_texts() {
     let (addr, _) = spawn_app_with(fixture_architecture()).await;
     let (status, body) = http(addr, "GET", "/api/changes", None).await;
     assert_eq!(status, 404, "{body}");
     assert!(body.contains("git repository"), "{body}");
+    let pairs = serde_json::json!({ "pairs": [{ "old": "a\nb\n", "new": "a\nB\n", "context": 1 }, { "old": "", "new": "x\n" }] }).to_string();
+    let (status, body) = http(addr, "POST", "/api/changes/texts", Some(&pairs)).await;
+    assert_eq!(status, 200, "{body}");
+    let compared: Vec<Vec<harness_contracts::changes::Hunk>> = serde_json::from_str(&body).unwrap();
+    let kinds: Vec<Vec<(LineKind, &str)>> = compared.iter().map(|hunks| hunks.iter().flat_map(|h| &h.lines).map(|l| (l.kind, l.text.as_str())).collect()).collect();
+    assert_eq!(kinds, [vec![(LineKind::Context, "a"), (LineKind::Removed, "b"), (LineKind::Added, "B")], vec![(LineKind::Added, "x")]]);
+    let big = serde_json::json!({ "pairs": [{ "old": "x".repeat(3 * 1024 * 1024), "new": "" }] }).to_string();
+    let (status, _) = http(addr, "POST", "/api/changes/texts", Some(&big)).await;
+    assert_eq!(status, 413);
 }
 
 #[tokio::test]

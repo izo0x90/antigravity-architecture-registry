@@ -23,7 +23,7 @@ use crate::nav::{Ask, Fold, GoTo, Item, Motion, Move, Navigable, Place, Refresh,
 use crate::viewport::{Go, Show, Stop, Viewport};
 use crate::net::{NetClient, NetResult};
 use crate::hosted::{Hosted, Status, Tone};
-use crate::diff::{draw_gap, draw_line, paired};
+use crate::diff::{Numbers, draw_counts, draw_gap, draw_line, paired};
 use crate::theme::colors;
 
 /// How a file's changes are laid out.
@@ -743,28 +743,27 @@ impl ChangesView {
                         return;
                     }
                     // Folded: where it is and how much changed.
-                    let count = |kind: LineKind| hunk.lines.iter().filter(|l| l.kind == kind).count();
+                    let (added, removed) = crate::diff::counts(&hunk.lines);
                     ui.label(RichText::new(format!("line {}", hunk.new_start.max(1))).monospace().size(look.text_small).color(colors().text));
-                    ui.label(RichText::new(format!("+{}", count(LineKind::Added))).monospace().size(look.text_small).color(colors().ok));
-                    ui.label(RichText::new(format!("−{}", count(LineKind::Removed))).monospace().size(look.text_small).color(colors().error));
+                    draw_counts(ui, added, removed);
                 });
             }
             Row::Line(i, h, n) => {
                 let Some(hunk) = self.file_changes(list.files[*i].group, &list.files[*i].path).and_then(|c| c.hunks.get(*h)) else { return };
                 if !self.side {
                     if let Some(line) = hunk.lines.get(*n) {
-                        draw_line(ui, line, true);
+                        draw_line(ui, line, Numbers::Shown);
                     }
                     return;
                 }
                 if let Some((left, right)) = paired(&hunk.lines).get(*n).copied() {
                     ui.columns(2, |cols| {
                         match left {
-                            Some(l) => draw_line(&mut cols[0], l, true),
+                            Some(l) => draw_line(&mut cols[0], l, Numbers::Shown),
                             None => draw_gap(&mut cols[0]),
                         }
                         match right {
-                            Some(r) => draw_line(&mut cols[1], r, true),
+                            Some(r) => draw_line(&mut cols[1], r, Numbers::Shown),
                             None => draw_gap(&mut cols[1]),
                         }
                     });
@@ -808,8 +807,7 @@ impl ChangesView {
             if file.binary {
                 ui.label(RichText::new("binary").size(look.text_small).color(colors().muted));
             } else {
-                ui.label(RichText::new(format!("+{}", file.added)).monospace().size(look.text_small).color(colors().ok));
-                ui.label(RichText::new(format!("−{}", file.removed)).monospace().size(look.text_small).color(colors().error));
+                draw_counts(ui, file.added as usize, file.removed as usize);
             }
             match opened {
                 Some(o) if o.loading && o.changes.is_none() => {

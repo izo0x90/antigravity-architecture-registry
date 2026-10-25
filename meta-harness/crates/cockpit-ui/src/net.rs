@@ -831,6 +831,12 @@ impl NetClient {
         self.call("POST", "/api/code/highlight", Some(serde_json::json!({ "blocks": blocks })), ctx, on_done);
     }
 
+    /// Pairs of texts (calls' changes), each compared as a file's sides are.
+    pub fn changes_texts(&self, pairs: &[crate::comparer::Pair], ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<Vec<harness_contracts::changes::Hunk>>>) + Send + 'static) {
+        let pairs: Vec<serde_json::Value> = pairs.iter().map(|p| serde_json::json!({ "old": p.old, "new": p.new, "context": p.context })).collect();
+        self.call("POST", "/api/changes/texts", Some(serde_json::json!({ "pairs": pairs })), ctx, on_done);
+    }
+
     /// The views' settings: descriptions, depths and the sizes trees are laid out with.
     pub fn graph_config(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::tree::TreeConfig>) + Send + 'static) {
         self.call("GET", "/api/graph/config", None, ctx, on_done);

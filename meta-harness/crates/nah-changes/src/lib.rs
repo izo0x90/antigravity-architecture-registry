@@ -30,6 +30,9 @@ pub enum ChangesError {
     NotARepo(String),
     #[error("{0}")]
     BadPoint(String),
+    /// More asked of at once than is taken.
+    #[error("{0}")]
+    TooBig(String),
     #[error("git: {0}")]
     Git(String),
 }
@@ -96,6 +99,13 @@ pub struct FileRuns {
 pub struct OnFiles {
     pub files: Vec<FileRuns>,
     pub moved: Vec<String>,
+}
+
+/// The changes from `old` to `new`, two texts (a call's change as its
+/// harness gave it), made as a file's changes are, with `context`
+/// unchanged lines around each.
+pub fn texts(old: &str, new: &str, context: u32) -> Result<Vec<harness_contracts::changes::Hunk>> {
+    compare::texts(old, new, context)
 }
 
 /// One file's changes, by what was asked and what its sides were then.

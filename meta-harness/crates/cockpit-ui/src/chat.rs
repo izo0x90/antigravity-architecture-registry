@@ -40,8 +40,11 @@ use render::mcp_label;
 
 #[derive(Default)]
 pub struct ChatStreamState {
-    /// The desk's agents, read.
+    /// The desk's agents, read; calls' changes, as the server compares
+    /// them, read, and those drawn not compared yet (asked for once drawn).
     agents: crate::shared::Reader<Agents>,
+    comparer: crate::shared::Reader<crate::comparer::Comparer>,
+    changes_wanted: Vec<crate::comparer::Pair>,
     /// This view's own state (each chat view has one; the one in use is here).
     pub ui: ChatView,
     /// What it asked of the rest of the cockpit, not taken yet.
@@ -109,9 +112,6 @@ pub struct ChatView {
     /// How tall each row was last drawn (by its first item), and as what:
     /// a row out of sight takes that room without being drawn.
     pub(crate) heights: std::collections::HashMap<harness_contracts::ItemId, (render::Measure, f32)>,
-    /// The changes calls made, compared (by item and block), and as of
-    /// which change of the item.
-    pub(crate) diffs: std::collections::HashMap<(harness_contracts::ItemId, usize), (u64, Hunks)>,
     /// What in the item a hint picked: one of its links, or code blocks.
     pub(crate) pick: Option<Pick>,
     /// Where it's looking (the shared rules move it, a message a stop);
@@ -170,7 +170,6 @@ impl Default for ChatView {
             picked: Picked::default(),
             live_at: None,
             heights: Default::default(),
-            diffs: Default::default(),
             pick: None,
             scrolling: Default::default(),
             spots: Vec::new(),
@@ -259,9 +258,6 @@ impl ChatView {
         Place::of(&ChatPlace { message: self.cursor, slot: Some(self.slot.clone()) })
     }
 }
-
-/// A change's hunks, compared once.
-pub(crate) type Hunks = std::rc::Rc<Vec<harness_contracts::changes::Hunk>>;
 
 /// What a stream's shape was worked out from: its thread, which view of it
 /// and as of which change of its shape, and which change of the folds.

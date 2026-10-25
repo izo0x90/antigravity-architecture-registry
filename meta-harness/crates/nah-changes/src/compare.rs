@@ -173,24 +173,41 @@ pub(crate) fn file(repo: &Repository, comparison: &Comparison, path: &str, group
                 continue;
             };
             out.binary |= delta.flags().is_binary();
-            for h in 0..patch.num_hunks() {
-                let (hunk, count) = patch.hunk(h)?;
-                let mut lines = Vec::with_capacity(count);
-                for l in 0..count {
-                    let line = patch.line_in_hunk(h, l)?;
-                    let kind = match line.origin() {
-                        '+' => LineKind::Added,
-                        '-' => LineKind::Removed,
-                        ' ' => LineKind::Context,
-                        // "No newline at end of file" and the like.
-                        _ => continue,
-                    };
-                    let text = String::from_utf8_lossy(line.content()).trim_end_matches(['\n', '\r']).to_owned();
-                    lines.push(DiffLine { kind, old: line.old_lineno(), new: line.new_lineno(), text });
-                }
-                out.hunks.push(Hunk { old_start: hunk.old_start(), old_lines: hunk.old_lines(), new_start: hunk.new_start(), new_lines: hunk.new_lines(), lines });
-            }
+            out.hunks.extend(hunks(&patch)?);
         }
+    }
+    Ok(out)
+}
+
+/// The changes from `old` to `new` (two texts, not files: a call's change
+/// as its harness gave it), as a file's changes are made, with `context`
+/// unchanged lines around each.
+pub(crate) fn texts(old: &str, new: &str, context: u32) -> Result<Vec<Hunk>> {
+    let mut options = DiffOptions::new();
+    options.context_lines(context);
+    let patch = Patch::from_buffers(old.as_bytes(), None, new.as_bytes(), None, Some(&mut options))?;
+    hunks(&patch)
+}
+
+/// A patch's hunks, each line with its numbers on each side.
+fn hunks(patch: &Patch) -> Result<Vec<Hunk>> {
+    let mut out = Vec::with_capacity(patch.num_hunks());
+    for h in 0..patch.num_hunks() {
+        let (hunk, count) = patch.hunk(h)?;
+        let mut lines = Vec::with_capacity(count);
+        for l in 0..count {
+            let line = patch.line_in_hunk(h, l)?;
+            let kind = match line.origin() {
+                '+' => LineKind::Added,
+                '-' => LineKind::Removed,
+                ' ' => LineKind::Context,
+                // "No newline at end of file" and the like.
+                _ => continue,
+            };
+            let text = String::from_utf8_lossy(line.content()).trim_end_matches(['\n', '\r']).to_owned();
+            lines.push(DiffLine { kind, old: line.old_lineno(), new: line.new_lineno(), text });
+        }
+        out.push(Hunk { old_start: hunk.old_start(), old_lines: hunk.old_lines(), new_start: hunk.new_start(), new_lines: hunk.new_lines(), lines });
     }
     Ok(out)
 }

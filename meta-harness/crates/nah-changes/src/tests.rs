@@ -295,3 +295,16 @@ fn snapshots_taken_in_the_same_millisecond_keep_the_order_they_were_taken_in() {
     let listed: Vec<String> = changes.snapshots().unwrap().into_iter().map(|s| s.id).collect();
     assert_eq!(listed, taken.iter().map(|s| s.id.clone()).collect::<Vec<_>>());
 }
+
+/// Two texts compare as a file's sides do: each change with its context
+/// around it, numbered on each side.
+#[test]
+fn two_texts_compare_as_a_files_sides_do() {
+    let hunks = texts("a\nb\nc\nd\ne\nf\ng\n", "a\nB\nc\nd\ne\nf\ng\nh\n", 1).unwrap();
+    type Said<'a> = (LineKind, Option<u32>, Option<u32>, &'a str);
+    let said: Vec<Vec<Said>> = hunks.iter().map(|h| h.lines.iter().map(|l| (l.kind, l.old, l.new, l.text.as_str())).collect()).collect();
+    assert_eq!(said, [
+        vec![(LineKind::Context, Some(1), Some(1), "a"), (LineKind::Removed, Some(2), None, "b"), (LineKind::Added, None, Some(2), "B"), (LineKind::Context, Some(3), Some(3), "c")],
+        vec![(LineKind::Context, Some(7), Some(7), "g"), (LineKind::Added, None, Some(8), "h")],
+    ]);
+}

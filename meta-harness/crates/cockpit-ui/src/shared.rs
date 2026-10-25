@@ -172,6 +172,8 @@ pub struct Shared {
     pub drafts: Held<crate::drafts::Drafts>,
     /// Code blocks' colours, as the server reads them.
     pub highlighter: Held<crate::highlighter::Highlighter>,
+    /// Calls' changes, as the server compares them.
+    pub comparer: Held<crate::comparer::Comparer>,
     /// Each link's colour (a tag's own), as the shell says from the tags.
     pub link_colours: Kept<LinkColours>,
     /// The desk's server (`here`: home's own).

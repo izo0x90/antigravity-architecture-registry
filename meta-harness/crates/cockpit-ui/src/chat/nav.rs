@@ -214,6 +214,7 @@ impl Navigable for ChatStreamState {
         }
         self.settle();
         self.agents.follow(&shared.agents);
+        self.comparer.follow(&shared.comparer);
         self.unsent.follow(&shared.drafts);
         self.ui.messages.follow(shared);
         self.tend();

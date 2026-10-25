@@ -162,18 +162,15 @@ fn markdown(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highli
 /// width it's given. Where it was drawn.
 fn code_block(ui: &mut egui::Ui, code: &crate::highlighter::Highlighter, wanted: &mut Vec<(String, String)>, id: egui::Id, fence: &str, text: &str, closed: bool) -> Rect {
     let look = crate::theme::look();
-    let colours = match code.colours(fence, text) {
-        crate::highlighter::Colours::Known(colours) => colours,
-        crate::highlighter::Colours::Unknown { asked } => {
-            if closed && !asked {
-                wanted.push((fence.to_owned(), text.to_owned()));
-            }
-            None
-        }
-    };
+    let colours = code.colours(fence, text);
+    if let crate::highlighter::Colours::Unknown { asked: false } = colours
+        && closed
+    {
+        wanted.push((fence.to_owned(), text.to_owned()));
+    }
     let font = egui::FontId::monospace(look.text_body);
     let format = |color: Color32| egui::text::TextFormat { font_id: font.clone(), color, ..Default::default() };
-    let job = crate::highlighter::coloured(text, 0..text.len(), colours.as_deref(), |capture| code.colour(capture), colors().text, format);
+    let job = crate::highlighter::coloured(text, 0..text.len(), colours.highlights(), |capture| code.colour(capture), colors().text, format);
     egui::Frame::NONE
         .fill(colors().surface)
         .corner_radius(look.radius_s)

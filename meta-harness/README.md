@@ -365,8 +365,11 @@ past the calls between; `/` finds what's said, opening a fold it's in.
 The files a message's words name (`src/a.rs:12`, a path with a folder or a
 line) are links under it, as a call's places are: Enter opens the one
 you're on in the code view, at its line.
-A file a call changed is "+12 −3 src/a.rs" under it, folded; opened, its
-hunks as the Changes view draws them; `g x` shows the turn's changes in
+A file a call changed is "+12 −3 src/a.rs" under it, folded, its two
+texts compared on the server as the Changes view's files are (`POST
+/api/changes/texts`, git's diff); opened, its hunks as the Changes view
+draws them, unnumbered (a call's texts may be a part of the file); one
+written whole (no old text came with it) says so; `g x` shows the turn's changes in
 the Changes view, on that file. Your messages show as you typed them,
 what they link as chips (Enter goes to what one links) and what was handed
 on with them folded under them: the server keeps what was typed by the

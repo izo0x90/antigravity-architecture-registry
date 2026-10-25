@@ -21,6 +21,7 @@ use crate::modules::ProjectState;
 
 pub(crate) fn routes() -> Router<ProjectState> {
     Router::new().route("/api/changes", get(list)).route("/api/changes/file", get(file)).route("/api/changes/components", get(components)).route("/api/changes/timeline", get(timeline))
+        .route("/api/changes/texts", post(texts))
         .route("/api/changes/stage", post(stage))
         .route("/api/changes/unstage", post(unstage))
 }
@@ -33,6 +34,7 @@ impl IntoResponse for ChangesFailed {
         let status = match self.0 {
             ChangesError::NotARepo(_) => StatusCode::NOT_FOUND,
             ChangesError::BadPoint(_) => StatusCode::BAD_REQUEST,
+            ChangesError::TooBig(_) => StatusCode::PAYLOAD_TOO_LARGE,
             ChangesError::Git(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, Json(serde_json::json!({ "error": self.0.to_string() }))).into_response()
@@ -101,6 +103,38 @@ async fn file(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Query(
     let comparison = q.compared.comparison();
     let context = q.context.unwrap_or(nah_changes::CONTEXT);
     Ok(Json(blocking(changes_of(&state)?, move |c| c.file(&comparison, &q.path, q.group, context)).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TextsAsk {
+    pairs: Vec<TextPair>,
+}
+
+/// Two texts, and the unchanged lines to show around each change.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TextPair {
+    old: String,
+    new: String,
+    #[serde(default)]
+    context: Option<u32>,
+}
+
+/// The most text compared in one ask (bytes, both sides of every pair):
+/// more is refused.
+const TEXTS_MOST: usize = 2 * 1024 * 1024;
+
+/// Pairs of texts (a call's changes, as its harness gave them), each
+/// compared as a file's sides are, in the order asked. No repository
+/// needed: nothing is read.
+async fn texts(_: Needs<can::ViewRead>, Json(ask): Json<TextsAsk>) -> ChangesResult<Json<Vec<Vec<harness_contracts::changes::Hunk>>>> {
+    let size: usize = ask.pairs.iter().map(|p| p.old.len() + p.new.len()).sum();
+    if size > TEXTS_MOST {
+        return Err(ChangesFailed(ChangesError::TooBig(format!("{size} bytes of text is too much to compare at once (the most is {TEXTS_MOST})"))));
+    }
+    let compared = tokio::task::spawn_blocking(move || ask.pairs.iter().map(|p| nah_changes::texts(&p.old, &p.new, p.context.unwrap_or(nah_changes::CONTEXT))).collect::<Result<Vec<_>, _>>()).await.map_err(|e| ChangesFailed(ChangesError::Git(e.to_string())))?;
+    Ok(Json(compared.map_err(ChangesFailed)?))
 }
 
 /// What `comparison` changed in the components the index knows: each

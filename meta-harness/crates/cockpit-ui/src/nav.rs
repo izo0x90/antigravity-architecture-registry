@@ -107,6 +107,8 @@ pub enum Ask {
     Tags(crate::tags::TagAct),
     /// Code blocks' colours wanted (each its fence and text).
     Colour(Vec<(String, String)>),
+    /// Calls' changes wanted, compared (each its two texts).
+    Changes(Vec<crate::comparer::Pair>),
 }
 
 /// What's read again on a buffer's word.

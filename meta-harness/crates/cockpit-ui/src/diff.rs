@@ -1,15 +1,24 @@
 //! Drawing a file's changes: a change's lines, one column (interleaved)
-//! or side by side (removed lines beside the added ones). The changes view
-//! and a card's changes section draw them the same way.
+//! or side by side (removed lines beside the added ones), and what they
+//! add and remove. The Changes view, a card's changes section and the
+//! chat draw them the same way.
 
 use egui::RichText;
 use harness_contracts::changes::{DiffLine, Hunk, LineKind};
 
 use crate::theme::colors;
 
+/// Whether a change's lines show their numbers (a file's change: yes; a
+/// call's, compared from texts that may be a part of the file: no).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Numbers {
+    Shown,
+    Left,
+}
+
 /// One line of a change: its numbers, its mark and its text, tinted by
 /// what happened to it.
-pub(crate) fn draw_line(ui: &mut egui::Ui, line: &DiffLine, numbers: bool) {
+pub(crate) fn draw_line(ui: &mut egui::Ui, line: &DiffLine, numbers: Numbers) {
     let look = crate::theme::look();
     let c = colors();
     let (mark, color, fill) = match line.kind {
@@ -21,7 +30,7 @@ pub(crate) fn draw_line(ui: &mut egui::Ui, line: &DiffLine, numbers: bool) {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = look.space_xs;
-            if numbers {
+            if numbers == Numbers::Shown {
                 let n = |n: Option<u32>| n.map_or_else(|| "    ".to_owned(), |n| format!("{n:>4}"));
                 ui.label(RichText::new(format!("{} {}", n(line.old), n(line.new))).monospace().size(look.text_small).color(c.faint));
             }
@@ -36,67 +45,32 @@ pub(crate) fn draw_gap(ui: &mut egui::Ui) {
     ui.label(RichText::new(" ").monospace().size(crate::theme::look().text_body));
 }
 
-/// A change: its header, then its lines (interleaved, or removed lines on
-/// the left and added on the right, paired in runs).
-pub(crate) fn draw_hunk(ui: &mut egui::Ui, hunk: &Hunk, side_by_side: bool) {
+/// A change in one column: its header (where it is, numbered), then its
+/// lines, interleaved.
+pub(crate) fn draw_hunk(ui: &mut egui::Ui, hunk: &Hunk, numbers: Numbers) {
+    if numbers == Numbers::Shown {
+        ui.label(RichText::new(format!("@@ −{},{} +{},{} @@", hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines)).monospace().size(crate::theme::look().text_small).color(colors().faint));
+    }
+    for line in &hunk.lines {
+        draw_line(ui, line, numbers);
+    }
+}
+
+/// How many of `lines` are added and removed.
+pub(crate) fn counts<'a>(lines: impl IntoIterator<Item = &'a DiffLine>) -> (usize, usize) {
+    lines.into_iter().fold((0, 0), |(added, removed), l| match l.kind {
+        LineKind::Added => (added + 1, removed),
+        LineKind::Removed => (added, removed + 1),
+        LineKind::Context => (added, removed),
+    })
+}
+
+/// What a change adds and removes, as the Changes view says it: "+N" and
+/// "−N", each in its colour.
+pub(crate) fn draw_counts(ui: &mut egui::Ui, added: usize, removed: usize) {
     let look = crate::theme::look();
-    ui.label(RichText::new(format!("@@ −{},{} +{},{} @@", hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines)).monospace().size(look.text_small).color(colors().faint));
-    if !side_by_side {
-        for line in &hunk.lines {
-            draw_line(ui, line, true);
-        }
-        return;
-    }
-    for (left, right) in paired(&hunk.lines) {
-        ui.columns(2, |cols| {
-            match left {
-                Some(l) => draw_line(&mut cols[0], l, true),
-                None => draw_gap(&mut cols[0]),
-            }
-            match right {
-                Some(r) => draw_line(&mut cols[1], r, true),
-                None => draw_gap(&mut cols[1]),
-            }
-        });
-    }
-}
-
-/// The changes from `old` to `new`, line by line, as the Changes view's
-/// hunks: each with `context` unchanged lines around it.
-pub(crate) fn hunks(old: &str, new: &str, context: usize) -> Vec<Hunk> {
-    let diff = similar::TextDiff::from_lines(old, new);
-    let number = |at: Option<usize>| at.map(|n| n as u32 + 1);
-    diff.grouped_ops(context)
-        .iter()
-        .map(|group| {
-            let lines: Vec<DiffLine> = group
-                .iter()
-                .flat_map(|op| diff.iter_changes(op))
-                .map(|change| DiffLine {
-                    kind: match change.tag() {
-                        similar::ChangeTag::Equal => LineKind::Context,
-                        similar::ChangeTag::Delete => LineKind::Removed,
-                        similar::ChangeTag::Insert => LineKind::Added,
-                    },
-                    old: number(change.old_index()),
-                    new: number(change.new_index()),
-                    text: change.value().trim_end_matches(['\n', '\r']).to_owned(),
-                })
-                .collect();
-            let (first, last) = (group.first(), group.last());
-            let span = |range: fn(&similar::DiffOp) -> std::ops::Range<usize>| first.zip(last).map_or(0..0, |(f, l)| range(f).start..range(l).end);
-            // (Numbered from 1; a side with no lines at the one before, as git says.)
-            let start = |span: &std::ops::Range<usize>| span.start as u32 + u32::from(!span.is_empty());
-            let (old_span, new_span) = (span(similar::DiffOp::old_range), span(similar::DiffOp::new_range));
-            Hunk { old_start: start(&old_span), old_lines: old_span.len() as u32, new_start: start(&new_span), new_lines: new_span.len() as u32, lines }
-        })
-        .collect()
-}
-
-/// How many lines `hunks` add and remove.
-pub(crate) fn counted(hunks: &[Hunk]) -> (usize, usize) {
-    let lines = || hunks.iter().flat_map(|h| &h.lines);
-    (lines().filter(|l| l.kind == LineKind::Added).count(), lines().filter(|l| l.kind == LineKind::Removed).count())
+    ui.label(RichText::new(format!("+{added}")).monospace().size(look.text_small).color(colors().ok));
+    ui.label(RichText::new(format!("−{removed}")).monospace().size(look.text_small).color(colors().error));
 }
 
 /// Lines as side-by-side rows: unchanged ones on both sides; a run of
@@ -125,22 +99,10 @@ pub(crate) fn paired(lines: &[DiffLine]) -> Vec<(Option<&DiffLine>, Option<&Diff
 mod tests {
     use super::*;
 
-    /// A file before and after, as hunks: each change with its context
-    /// lines around it, numbered on each side; what they add and remove.
+    /// What lines add and remove, counted.
     #[test]
-    fn a_files_text_before_and_after_is_its_hunks() {
-        let old = "a\nb\nc\nd\ne\nf\ng\n";
-        let new = "a\nB\nc\nd\ne\nf\ng\nh\n";
-        let hunks = hunks(old, new, 1);
-        type Said<'a> = (LineKind, Option<u32>, Option<u32>, &'a str);
-        let said: Vec<Vec<Said>> = hunks.iter().map(|h| h.lines.iter().map(|l| (l.kind, l.old, l.new, l.text.as_str())).collect()).collect();
-        assert_eq!(said, [
-            vec![(LineKind::Context, Some(1), Some(1), "a"), (LineKind::Removed, Some(2), None, "b"), (LineKind::Added, None, Some(2), "B"), (LineKind::Context, Some(3), Some(3), "c")],
-            vec![(LineKind::Context, Some(7), Some(7), "g"), (LineKind::Added, None, Some(8), "h")],
-        ]);
-        assert_eq!((hunks[0].old_start, hunks[0].old_lines, hunks[0].new_start, hunks[0].new_lines), (1, 3, 1, 3));
-        assert_eq!(counted(&hunks), (2, 1));
-        let new_file = super::hunks("", "new\nfile\n", 3);
-        assert_eq!((counted(&new_file), new_file[0].old_start, new_file[0].new_start), ((2, 0), 0, 1), "a new file: all added");
+    fn a_changes_lines_are_counted() {
+        let line = |kind| DiffLine { kind, old: None, new: None, text: String::new() };
+        assert_eq!(counts(&[line(LineKind::Added), line(LineKind::Context), line(LineKind::Removed), line(LineKind::Added)]), (2, 1));
     }
 }

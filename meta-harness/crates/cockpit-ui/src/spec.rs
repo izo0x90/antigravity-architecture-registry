@@ -769,7 +769,7 @@ impl SpecState {
                             }
                             for (i, hunk) in self.changes.iter().enumerate() {
                                 item(ui, Entry { section, item: SpecItem::Hunk(i) }, &mut |ui| {
-                                    crate::diff::draw_hunk(ui, hunk, false);
+                                    crate::diff::draw_hunk(ui, hunk, crate::diff::Numbers::Shown);
                                 });
                             }
                         }

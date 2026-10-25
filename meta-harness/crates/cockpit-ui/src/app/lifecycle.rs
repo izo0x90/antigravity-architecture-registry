@@ -111,6 +111,7 @@ impl CockpitApp {
     pub(super) fn take_events(&mut self, ctx: &egui::Context) {
         self.desk.shared.agents.get_mut().tick(&self.desk.net, ctx);
         self.desk.shared.highlighter.get_mut().tick(&self.desk.net, ctx, &self.desk.shared.settings);
+        self.desk.shared.comparer.get_mut().tick(&self.desk.net, ctx);
         self.desk.shared.terminals.get_mut().tick(&self.desk.net, ctx);
         self.desk.shared.tags.get_mut().tick();
         // (Kept only when they changed: readers take them again then.)

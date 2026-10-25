@@ -122,6 +122,7 @@ const ROUTES: &[&str] = &[
     "/api/arch/file",
     "/api/code/analysis",
     "/api/code/highlight",
+    "/api/changes/texts",
     "/api/arch/ingest",
     "/api/arch/index",
     "/api/arch/refresh",
