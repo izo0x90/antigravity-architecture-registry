@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use harness_contracts::{AdapterEvent, ClientEvent, InstanceId, NotificationId, NotificationState, SlotId, TagId, TerminalId, ThreadId};
+use harness_contracts::{AdapterEvent, ClientEvent, InstanceId, NotificationId, NotificationState, SlotId, Stamped, TagId, TerminalId, ThreadId};
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -31,7 +31,8 @@ enum Key {
 struct Entry {
     seq: u64,
     thread: Option<ThreadId>,
-    event: ClientEvent,
+    /// The latest event of it, and when that happened.
+    event: Stamped,
 }
 
 #[derive(Default)]
@@ -41,7 +42,7 @@ struct Cache {
 }
 
 impl Cache {
-    fn apply(&mut self, event: &ClientEvent) {
+    fn apply(&mut self, event: &ClientEvent, at_ms: u64) {
         let (key, thread) = match event {
             ClientEvent::InstanceUpdated { snapshot } => (Key::Instance(snapshot.instance_id.clone()), None),
             // Said to one client by its stream, never kept.
@@ -108,10 +109,10 @@ impl Cache {
                 self.next_seq
             }
         };
-        self.entries.insert(key, Entry { seq, thread, event: event.clone() });
+        self.entries.insert(key, Entry { seq, thread, event: Stamped { at_ms, event: event.clone() } });
     }
 
-    fn replay(&self) -> Vec<ClientEvent> {
+    fn replay(&self) -> Vec<Stamped> {
         let mut entries: Vec<&Entry> = self.entries.values().collect();
         entries.sort_by_key(|e| e.seq);
         entries.into_iter().map(|e| e.event.clone()).collect()
@@ -119,7 +120,7 @@ impl Cache {
 }
 
 pub struct EventHub {
-    tx: broadcast::Sender<ClientEvent>,
+    tx: broadcast::Sender<Stamped>,
     cache: Mutex<Cache>,
 }
 
@@ -141,10 +142,16 @@ impl EventHub {
         self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// `event`, as it happens now.
     pub fn publish(&self, event: ClientEvent) {
+        self.publish_at(event, crate::now_ms());
+    }
+
+    /// `event`, as it happened at `at_ms` (another server's, passed on).
+    pub fn publish_at(&self, event: ClientEvent, at_ms: u64) {
         let mut cache = self.cache();
-        cache.apply(&event);
-        let _ = self.tx.send(event);
+        cache.apply(&event, at_ms);
+        let _ = self.tx.send(Stamped { at_ms, event });
     }
 
     /// Forgets everything (another server's state, about to be replayed
@@ -152,7 +159,7 @@ impl EventHub {
     pub fn reset(&self) {
         let mut cache = self.cache();
         cache.entries.clear();
-        let _ = self.tx.send(ClientEvent::Resync);
+        let _ = self.tx.send(Stamped { at_ms: crate::now_ms(), event: ClientEvent::Resync });
     }
 
     /// The latest state of one thread's entities (its turns, items,
@@ -161,11 +168,12 @@ impl EventHub {
         let cache = self.cache();
         let mut entries: Vec<&Entry> = cache.entries.values().filter(|e| e.thread.as_ref() == Some(thread)).collect();
         entries.sort_by_key(|e| e.seq);
-        entries.into_iter().map(|e| e.event.clone()).collect()
+        entries.into_iter().map(|e| e.event.event.clone()).collect()
     }
 
-    /// Current state of everything, plus a receiver for what happens next.
-    pub fn subscribe(&self) -> (Vec<ClientEvent>, broadcast::Receiver<ClientEvent>) {
+    /// Current state of everything (each event of it with when it
+    /// happened), plus a receiver for what happens next.
+    pub fn subscribe(&self) -> (Vec<Stamped>, broadcast::Receiver<Stamped>) {
         let cache = self.cache();
         (cache.replay(), self.tx.subscribe())
     }
@@ -200,12 +208,11 @@ mod tests {
         hub.publish(thread("a", ThreadStatus::Starting));
         hub.publish(thread("b", ThreadStatus::Starting));
         hub.publish(thread("a", ThreadStatus::Idle));
-        let (replay, _) = hub.subscribe();
-        assert_eq!(replay, vec![thread("a", ThreadStatus::Idle), thread("b", ThreadStatus::Starting)]);
+        let replay = || hub.subscribe().0.into_iter().map(|s| s.event).collect::<Vec<_>>();
+        assert_eq!(replay(), vec![thread("a", ThreadStatus::Idle), thread("b", ThreadStatus::Starting)]);
 
         hub.publish(ClientEvent::ThreadClosed { thread_id: ThreadId::new("a") });
-        let (replay, _) = hub.subscribe();
-        assert_eq!(replay, vec![thread("b", ThreadStatus::Starting)]);
+        assert_eq!(replay(), vec![thread("b", ThreadStatus::Starting)]);
     }
 
     #[test]
@@ -220,6 +227,24 @@ mod tests {
         hub.publish(note("req:2", NotificationState::Open));
         hub.publish(note("req:1", NotificationState::Done));
         let (replay, _) = hub.subscribe();
-        assert_eq!(replay, vec![note("req:2", NotificationState::Open)]);
+        assert_eq!(replay.into_iter().map(|s| s.event).collect::<Vec<_>>(), vec![note("req:2", NotificationState::Open)]);
+    }
+
+    /// Each event says when it happened, on the wire too; one passed on
+    /// keeps its own time; a replayed one, when it last changed.
+    #[test]
+    fn each_event_says_when_it_happened() {
+        let hub = EventHub::default();
+        let (_, mut live) = hub.subscribe();
+        hub.publish_at(thread("a", ThreadStatus::Idle), 1_000);
+        let stamped = live.try_recv().unwrap();
+        assert_eq!(stamped.at_ms, 1_000);
+        let wire = serde_json::to_value(&stamped).unwrap();
+        assert_eq!((wire["atMs"].as_u64(), wire["type"].as_str()), (Some(1_000), Some("session")));
+        assert_eq!(serde_json::from_value::<Stamped>(wire).unwrap(), stamped, "read back");
+        hub.publish(thread("b", ThreadStatus::Idle));
+        let (replay, _) = hub.subscribe();
+        assert_eq!(replay[0].at_ms, 1_000);
+        assert!(replay[1].at_ms > 1_000);
     }
 }

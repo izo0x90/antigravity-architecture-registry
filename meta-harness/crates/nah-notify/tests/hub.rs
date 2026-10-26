@@ -89,7 +89,7 @@ async fn an_approval_waits_until_answered_and_every_step_is_kept_published_and_h
     let open = r.hub.open();
     assert_eq!((ids(&open), open[0].kind, open[0].slot.as_ref().map(|s| s.as_str())), (vec!["req:r1"], NotificationKind::Approval, Some("sub-1")));
     let (replay, _) = r.events.subscribe();
-    assert!(replay.iter().any(|e| matches!(e, ClientEvent::NotificationUpdated { notification } if notification.id.as_str() == "req:r1")), "a late client gets it");
+    assert!(replay.iter().any(|e| matches!(&e.event, ClientEvent::NotificationUpdated { notification } if notification.id.as_str() == "req:r1")), "a late client gets it");
     // The same event again changes nothing.
     r.events.publish(request("r1", RequestStatus::Pending));
     r.events.publish(request("r1", RequestStatus::Resolved));
@@ -99,7 +99,7 @@ async fn an_approval_waits_until_answered_and_every_step_is_kept_published_and_h
     let delivered: Vec<(String, NotificationState)> = r.recorder.0.lock().unwrap().iter().map(|n| (n.id.to_string(), n.state)).collect();
     assert_eq!(delivered, [("req:r1".into(), NotificationState::Open), ("req:r1".into(), NotificationState::Done)]);
     let (replay, _) = r.events.subscribe();
-    assert!(!replay.iter().any(|e| matches!(e, ClientEvent::NotificationUpdated { .. })), "ended: no longer replayed");
+    assert!(!replay.iter().any(|e| matches!(&e.event, ClientEvent::NotificationUpdated { .. })), "ended: no longer replayed");
 }
 
 #[tokio::test]

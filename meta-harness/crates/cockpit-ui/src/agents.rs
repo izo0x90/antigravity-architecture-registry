@@ -159,8 +159,17 @@ impl Agents {
         &self.store
     }
 
-    /// Takes a server event (the shell, for every one).
+    /// Takes a server event, as it happens now.
     pub fn apply(&mut self, event: ClientEvent) {
+        self.apply_stamped(harness_contracts::Stamped { at_ms: crate::attention::now_ms(), event });
+    }
+
+    /// Takes a server event (the shell, for every one), as of when it
+    /// happened: on this clock, that long before now (never after).
+    pub fn apply_stamped(&mut self, stamped: harness_contracts::Stamped) {
+        let harness_contracts::Stamped { at_ms, event } = stamped;
+        let ago = crate::attention::now_ms().saturating_sub(at_ms) as f64 / 1000.0;
+        let at = self.now - ago;
         // Answered (as the server says): its answer arrived.
         if let ClientEvent::Session { event: harness_contracts::AdapterEvent::RequestUpdated { request } } = &event
             && request.status != harness_contracts::RequestStatus::Pending
@@ -173,7 +182,7 @@ impl Agents {
         {
             self.stopping.remove(&subagent.id);
         }
-        self.store.apply(event, self.now);
+        self.store.apply(event, at);
     }
 
     /// Whether sub-agent `id` was asked to stop, and hasn't yet.

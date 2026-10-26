@@ -35,11 +35,13 @@ pub struct ThreadView {
     pub activity: u64,
     /// Which view of the thread this is (a new one after a resync).
     epoch: u64,
-    /// When it was last heard of, besides the agent's updates: when what
-    /// it was became known (the replay done, or it began after), when a
-    /// request of its was last settled.
+    /// When it was last heard of, besides the agent's updates: what it was
+    /// known as of (the replay done: its agent's latest news then; or when
+    /// it began, after), when a request of its was last settled.
     known_at: Option<f64>,
     settled_at: Option<f64>,
+    /// When its agent's latest news was, of what's been replayed.
+    replayed_news: Option<f64>,
     /// How many updates came from the agent (its news): the AGENT light.
     pub news: u64,
     /// The items in the order shown (by their turn's place, then as they
@@ -79,7 +81,7 @@ pub struct Seen {
 impl ThreadView {
     fn new(thread: Thread) -> Self {
         let epoch = EPOCHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Self { thread, turns: Vec::new(), rank: Vec::new(), items: Vec::new(), requests: Vec::new(), request_at: HashMap::new(), plan: None, usage: None, activity: 0, epoch, known_at: None, settled_at: None, news: 0, changed: Vec::new(), stream: Vec::new(), item_at: HashMap::new(), turn_at: HashMap::new(), shown_at: Vec::new(), request_items: HashMap::new(), arrivals: VecDeque::new(), subagents: Vec::new(), subagent_at: HashMap::new(), subagent_items: HashMap::new(), working: 0 }
+        Self { thread, turns: Vec::new(), rank: Vec::new(), items: Vec::new(), requests: Vec::new(), request_at: HashMap::new(), plan: None, usage: None, activity: 0, epoch, known_at: None, settled_at: None, replayed_news: None, news: 0, changed: Vec::new(), stream: Vec::new(), item_at: HashMap::new(), turn_at: HashMap::new(), shown_at: Vec::new(), request_items: HashMap::new(), arrivals: VecDeque::new(), subagents: Vec::new(), subagent_at: HashMap::new(), subagent_items: HashMap::new(), working: 0 }
     }
 
     /// Its sub-agents, in the order they started.
@@ -237,6 +239,15 @@ impl ThreadView {
     /// once, with how many).
     pub fn arrivals(&self) -> &VecDeque<(f64, u32)> {
         &self.arrivals
+    }
+
+    /// News from its agent, of `at` (when it happened): live, an update
+    /// that came; replayed, what it's known as of, once all of it's here.
+    fn news(&mut self, at: f64, live: bool) {
+        match live {
+            true => self.arrived(at),
+            false => self.replayed_news = Some(self.replayed_news.map_or(at, |t| t.max(at))),
+        }
     }
 
     /// An update from the agent came at `now`.
@@ -428,11 +439,13 @@ impl Store {
                 self.arrived_before = arrived;
             }
             // What follows is news.
+            // (Each thread known as of its agent's latest news, when it
+            // had any: a silence counts from it, not from now.)
             ClientEvent::Replayed => {
                 self.live = true;
                 self.arrived_before.clear();
                 for view in self.threads.values_mut() {
-                    view.known_at = Some(now);
+                    view.known_at = Some(view.replayed_news.take().unwrap_or(now));
                 }
             }
             ClientEvent::SlotUpdated { slot } => {
@@ -482,22 +495,24 @@ impl Store {
                     self.threads.insert(view.thread.id.clone(), view);
                 }
             },
+            // Whose each is, as the event says: a turn begins with your
+            // prompt (queued, or started by it), your message is yours;
+            // the rest is the agent's news.
             AdapterEvent::TurnUpdated { turn } => {
-                // (Queued is your prompt waiting, not the agent's news.)
-                let news = live && turn.status != TurnStatus::Queued;
-                if let Some(view) = self.view(&turn.thread_id.clone())
-                    && view.put_turn(turn)
-                    && news
-                {
-                    view.arrived(now);
+                if let Some(view) = self.view(&turn.thread_id.clone()) {
+                    let news = view.turn(&turn.id).is_some() && turn.status != TurnStatus::Queued;
+                    if view.put_turn(turn) && news {
+                        view.news(now, live);
+                    }
                 }
             }
             AdapterEvent::ItemUpdated { item } => {
+                let news = !matches!(item.body, harness_contracts::ItemBody::UserMessage { .. });
                 if let Some(view) = self.view(&item.thread_id.clone())
                     && view.put_item(item)
-                    && live
+                    && news
                 {
-                    view.arrived(now);
+                    view.news(now, live);
                 }
             }
             AdapterEvent::RequestUpdated { request } => {
@@ -506,30 +521,29 @@ impl Store {
                 let asked = request.status == RequestStatus::Pending;
                 if let Some(view) = self.view(&request.thread_id.clone())
                     && view.put_request(request)
-                    && live
                 {
                     if asked {
-                        view.arrived(now);
-                    } else {
+                        view.news(now, live);
+                    } else if live {
                         view.settled_at = Some(now);
                     }
                 }
             }
             AdapterEvent::PlanUpdated { plan } => {
                 if let Some(view) = self.view(&plan.thread_id.clone()) {
-                    let news = live && view.plan.as_ref() != Some(&plan);
+                    let news = view.plan.as_ref() != Some(&plan);
                     view.plan = Some(plan);
                     if news {
-                        view.arrived(now);
+                        view.news(now, live);
                     }
                 }
             }
             AdapterEvent::UsageUpdated { thread_id, usage, .. } => {
                 if let Some(view) = self.view(&thread_id) {
-                    let news = live && view.usage.as_ref() != Some(&usage);
+                    let news = view.usage.as_ref() != Some(&usage);
                     view.usage = Some(usage);
                     if news {
-                        view.arrived(now);
+                        view.news(now, live);
                     }
                 }
             }
@@ -538,9 +552,8 @@ impl Store {
             AdapterEvent::SubagentUpdated { subagent } => {
                 if let Some(view) = self.threads.get_mut(&subagent.thread_id)
                     && view.subagent_now(subagent, live, now)
-                    && live
                 {
-                    view.arrived(now);
+                    view.news(now, live);
                 }
             }
             // Catalogs arrive via instance snapshots.
@@ -605,6 +618,24 @@ mod tests {
 
         store.apply(ClientEvent::ThreadClosed { thread_id: ThreadId::new("t") }, 0.0);
         assert!(store.threads.is_empty());
+    }
+
+    /// Your prompt (its turn starting, your message) isn't the agent's
+    /// news; its answer and its turn's end are.
+    #[test]
+    fn your_prompt_isnt_the_agents_news() {
+        let mut store = Store::default();
+        store.apply(thread(ThreadStatus::Idle), 0.0);
+        store.apply(ClientEvent::Replayed, 0.0);
+        let news = |store: &Store| store.threads[&ThreadId::new("t")].news;
+        store.apply(turn("two", 2, TurnStatus::Running), 1.0);
+        let ClientEvent::Session { event: AdapterEvent::ItemUpdated { mut item } } = in_turn("yours", "two") else { unreachable!() };
+        item.body = ItemBody::UserMessage { text: "do it".into(), pieces: Vec::new() };
+        store.apply(ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } }, 1.0);
+        assert_eq!(news(&store), 0, "yours");
+        store.apply(in_turn("its", "two"), 2.0);
+        store.apply(turn("two", 2, TurnStatus::Completed), 3.0);
+        assert_eq!(news(&store), 2, "its answer, its turn's end");
     }
 
     fn request(id: &str, status: RequestStatus) -> ClientEvent {
@@ -728,18 +759,23 @@ mod tests {
         assert_eq!(view.shown_at(&ItemId::new("q")), Some(4), "where each is, as shown");
     }
 
-    /// A thread is heard of when the replay's done (nothing came from its
-    /// agent since: it's been quiet since then) and when your answer to its
-    /// request is taken; its agent's updates after.
+    /// A thread is heard of as of its agent's latest news when the replay's
+    /// done (none: then), and when your answer to its request is taken; its
+    /// agent's updates after.
     #[test]
     fn a_thread_is_heard_of_from_when_it_is_known() {
         let mut store = Store::default();
         store.apply(thread(ThreadStatus::Running), 1.0);
         store.apply(turn("one", 1, TurnStatus::Running), 1.0);
+        store.apply(in_turn("a", "one"), 1.5);
         let heard = |store: &Store| store.threads[&ThreadId::new("t")].last_heard();
         assert_eq!(heard(&store), None, "replaying: not known yet");
         store.apply(ClientEvent::Replayed, 2.0);
-        assert_eq!(heard(&store), Some(2.0));
+        assert_eq!(heard(&store), Some(1.5), "as of its latest news");
+        let mut quiet = Store::default();
+        quiet.apply(thread(ThreadStatus::Idle), 1.0);
+        quiet.apply(ClientEvent::Replayed, 2.0);
+        assert_eq!(heard(&quiet), Some(2.0), "no news: as of then");
         let mut asked = request("r", RequestStatus::Pending);
         store.apply(asked.clone(), 5.0);
         assert_eq!(heard(&store), Some(5.0), "asked: news");

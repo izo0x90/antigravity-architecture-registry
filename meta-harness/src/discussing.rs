@@ -98,7 +98,7 @@ pub fn tell_the_asked(hub: &Arc<EventHub>, slots: &Arc<SlotManager>, discussions
     let (slots, discussions) = (slots.clone(), Arc::downgrade(discussions));
     tokio::spawn(async move {
         loop {
-            match events.recv().await {
+            match events.recv().await.map(|s| s.event) {
                 Ok(ClientEvent::DiscussionUpdated { discussion: d }) => {
                     let from = seen.insert(d.id.clone(), d.said.len()).unwrap_or(0);
                     tell(&slots, &d, from).await;

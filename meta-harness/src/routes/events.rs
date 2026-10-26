@@ -12,7 +12,7 @@ use axum::{
     routing::get,
 };
 use futures::{SinkExt, StreamExt};
-use harness_contracts::ClientEvent;
+use harness_contracts::{ClientEvent, Stamped};
 use harness_core::EventHub;
 
 use crate::modules::HarnessState;
@@ -26,12 +26,14 @@ async fn ws_events_handler(_: crate::cockpit::Ticketed, ws: WebSocketUpgrade, St
 }
 
 /// Replays current state (`Replayed` after it), then streams `ClientEvent`s
-/// as JSON text frames. A client that falls behind gets `Resync`, then the
-/// whole state again: never a stream with events missing.
+/// as JSON text frames, each with when it happened (`Stamped`). A client
+/// that falls behind gets `Resync`, then the whole state again: never a
+/// stream with events missing.
 async fn stream_events(socket: WebSocket, hub: Arc<EventHub>) {
     let (mut sink, mut incoming) = socket.split();
     let (replay, mut live) = hub.subscribe();
-    if send_all(&mut sink, replay.into_iter().chain([ClientEvent::Replayed])).await.is_err() {
+    let now = |event| Stamped { at_ms: harness_core::now_ms(), event };
+    if send_all(&mut sink, replay.into_iter().chain([now(ClientEvent::Replayed)])).await.is_err() {
         return;
     }
     loop {
@@ -46,7 +48,7 @@ async fn stream_events(socket: WebSocket, hub: Arc<EventHub>) {
                     tracing::info!("an event client fell {missed} events behind: sending it everything again");
                     let (replay, fresh) = hub.subscribe();
                     live = fresh;
-                    if send_all(&mut sink, std::iter::once(ClientEvent::Resync).chain(replay).chain([ClientEvent::Replayed])).await.is_err() {
+                    if send_all(&mut sink, std::iter::once(now(ClientEvent::Resync)).chain(replay).chain([now(ClientEvent::Replayed)])).await.is_err() {
                         return;
                     }
                 }
@@ -59,7 +61,7 @@ async fn stream_events(socket: WebSocket, hub: Arc<EventHub>) {
     }
 }
 
-async fn send_all(sink: &mut futures::stream::SplitSink<WebSocket, Message>, events: impl IntoIterator<Item = ClientEvent>) -> Result<(), axum::Error> {
+async fn send_all(sink: &mut futures::stream::SplitSink<WebSocket, Message>, events: impl IntoIterator<Item = Stamped>) -> Result<(), axum::Error> {
     for event in events {
         let Ok(text) = serde_json::to_string(&event) else { continue };
         sink.send(Message::Text(text.into())).await?;

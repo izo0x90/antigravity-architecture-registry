@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::StreamExt;
-use harness_contracts::{ClientEvent, LinkState, ServerView};
+use harness_contracts::{ClientEvent, LinkState, ServerView, Stamped};
 use harness_core::EventHub;
 use nah_state::ServerEntry;
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
@@ -181,7 +181,7 @@ async fn stream(entry: &ServerEntry, hub: &Arc<EventHub>, state: &Arc<Mutex<Link
             Message::Close(_) => return Ok(()),
             _ => continue,
         };
-        let mut event: ClientEvent = serde_json::from_str(&text).map_err(|e| format!("an event home can't read ({e})"))?;
+        let Stamped { at_ms, mut event } = serde_json::from_str(&text).map_err(|e| format!("an event home can't read ({e})"))?;
         match &mut event {
             // It fell behind on its side: its whole state follows.
             ClientEvent::Resync => {
@@ -196,7 +196,8 @@ async fn stream(entry: &ServerEntry, hub: &Arc<EventHub>, state: &Arc<Mutex<Link
             }
             _ => {}
         }
-        hub.publish(event);
+        // (As of when it happened there.)
+        hub.publish_at(event, at_ms);
     }
     Ok(())
 }

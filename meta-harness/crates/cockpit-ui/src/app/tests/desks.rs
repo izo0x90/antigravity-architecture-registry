@@ -14,7 +14,7 @@ fn from_home(app: &CockpitApp, events: Vec<HomeEvent>) {
 }
 
 fn event(server: &str, event: ClientEvent) -> HomeEvent {
-    HomeEvent::Event { server: server.into(), event: Box::new(event) }
+    HomeEvent::Event { server: server.into(), event: Box::new(harness_contracts::Stamped { at_ms: crate::attention::now_ms(), event }) }
 }
 
 fn note(id: &str, kind: NotificationKind, at_ms: u64) -> ClientEvent {

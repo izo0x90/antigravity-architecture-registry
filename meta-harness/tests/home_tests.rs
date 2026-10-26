@@ -64,18 +64,18 @@ async fn home_follows_each_server_and_says_whose_events_are_whose() {
     until(&mut socket, |e| {
         match e {
             HomeEvent::Servers { servers } => linked |= servers.iter().any(|s| s.name == "w1" && s.link == LinkState::Connected),
-            HomeEvent::Event { server, event } if matches!(*event, ClientEvent::InstanceUpdated { .. }) => state |= server == "w1",
+            HomeEvent::Event { server, event } if matches!(event.event, ClientEvent::InstanceUpdated { .. }) => state |= server == "w1",
             _ => {}
         }
         (linked && state).then_some(())
     })
     .await;
     let sub = worker_state.harness.slots.create("sub", Some("reviewer".into()), harness_core::SlotSettings { instance: Some(harness_contracts::InstanceId::new(common::FAKE)), ..Default::default() }, harness_contracts::Starter::User).await.unwrap();
-    until(&mut socket, |e| matches!(&e, HomeEvent::Event { server, event } if server == "w1" && matches!(&**event, ClientEvent::SlotUpdated { slot } if slot.id == sub)).then_some(())).await;
+    until(&mut socket, |e| matches!(&e, HomeEvent::Event { server, event } if server == "w1" && matches!(&event.event, ClientEvent::SlotUpdated { slot } if slot.id == sub)).then_some(())).await;
     // Its notifications come said as its.
     worker_state.notify.notify.message(Some(&sub), "from the worker").unwrap();
     let told = until(&mut socket, |e| match e {
-        HomeEvent::Event { server, event } if server == "w1" => match *event {
+        HomeEvent::Event { server, event } if server == "w1" => match event.event {
             ClientEvent::NotificationUpdated { notification } => Some(notification),
             _ => None,
         },

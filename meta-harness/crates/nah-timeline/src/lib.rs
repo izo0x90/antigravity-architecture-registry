@@ -117,10 +117,6 @@ fn stored<T>(r: std::result::Result<T, String>) -> Result<T> {
     r.map_err(TimelineError::Store)
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
-}
-
 #[derive(Default)]
 struct Inner {
     /// Each session's slot name, as the stream last said.
@@ -164,9 +160,10 @@ impl Timeline {
         tokio::spawn(async move {
             let (mut pending, mut live) = events.subscribe();
             loop {
-                for event in std::mem::take(&mut pending).into_iter().filter(Self::matters) {
+                // (Each as of when it happened.)
+                for stamped in std::mem::take(&mut pending).into_iter().filter(|s| Self::matters(&s.event)) {
                     let Some(t) = timeline.upgrade() else { return };
-                    if let Err(e) = tokio::task::spawn_blocking(move || t.handle(&event, now_ms())).await {
+                    if let Err(e) = tokio::task::spawn_blocking(move || t.handle(&stamped.event, stamped.at_ms)).await {
                         tracing::warn!("the timeline couldn't take an event: {e}");
                     }
                 }

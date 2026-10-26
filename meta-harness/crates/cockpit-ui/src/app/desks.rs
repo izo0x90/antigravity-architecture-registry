@@ -50,7 +50,7 @@ impl CockpitApp {
                 HomeEvent::Servers { servers } => self.servers_now(servers, ctx),
                 HomeEvent::Event { server, event } => match self.desk_mut(&server) {
                     Some(desk) => {
-                        if *event == ClientEvent::Resync {
+                        if event.event == ClientEvent::Resync {
                             desk.net.reconnected = true;
                         }
                         if let Ok(mut incoming) = desk.net.incoming.lock() {

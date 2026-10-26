@@ -38,6 +38,16 @@ pub struct CatalogUpdate {
     pub sign_in: Option<SignIn>,
 }
 
+/// An event, and when it happened on its server (milliseconds since the
+/// epoch, its clock): what the server streams, each event so.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Stamped {
+    #[serde(rename = "atMs")]
+    pub at_ms: u64,
+    #[serde(flatten)]
+    pub event: ClientEvent,
+}
+
 /// What the server streams to clients: instance snapshots plus session events.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]

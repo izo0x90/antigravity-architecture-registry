@@ -529,6 +529,36 @@ fn an_agent_silent_since_it_became_known_reads_quiet() {
     assert!(chat.live_words(&activity).0.ends_with("1 sub-agent working"), "{:?}", chat.live_words(&activity).0);
 }
 
+/// An update is as of when it happened (the server's stamp): opened on a
+/// silent agent, its silence counts from its last real update; one that
+/// came while the tab was hidden isn't news now.
+#[test]
+fn an_update_is_as_of_when_it_happened() {
+    let mut chat = Fed::default();
+    chat.shared.socket.set(crate::net::WsState::Open);
+    let now = crate::attention::now_ms();
+    let mut take = |event: ClientEvent, ago_s: u64| chat.shared.agents.get_mut().apply_stamped(harness_contracts::Stamped { at_ms: now - ago_s * 1000, event });
+    for event in conversation_events() {
+        let ago = if event == ClientEvent::Replayed { 0 } else { 300 };
+        take(event, ago);
+    }
+    take(item(9, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "while hidden".into() }], streaming: false }), 90);
+    chat.read();
+    let view = chat.thread().unwrap().clone();
+    // (The agents' clock reads 0 here: what happened is that long before.)
+    let activity = chat.activity(&view, 0.0);
+    assert_eq!((activity.liveness, activity.since_last.map(|s| s.round())), (crate::indicator::Liveness::Quiet, Some(90.0)));
+    assert!(chat.live_words(&activity).0.starts_with("No word for 1 min"), "{:?}", chat.live_words(&activity).0);
+    let mut replayed = Fed::default();
+    for event in conversation_events() {
+        let ago = if event == ClientEvent::Replayed { 0 } else { 300 };
+        replayed.shared.agents.get_mut().apply_stamped(harness_contracts::Stamped { at_ms: now - ago * 1000, event });
+    }
+    replayed.read();
+    let view = replayed.thread().unwrap().clone();
+    assert_eq!(replayed.activity(&view, 0.0).since_last.map(|s| s.round()), Some(300.0), "from its last real update, not from opening");
+}
+
 /// What's picked is each chat's: another slot's chat shows as the config
 /// says till picked for, and back on the first it's as picked.
 #[test]

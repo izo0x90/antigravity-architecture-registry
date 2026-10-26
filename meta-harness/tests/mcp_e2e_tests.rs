@@ -49,7 +49,7 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     let (mut events, _) = (state.harness.hub.subscribe().1, ());
     let (err, _) = mcp.tool("navigate", json!({ "view": "calls", "select": "rust:sample::run" })).await;
     assert!(!err);
-    let event = events.recv().await.unwrap();
+    let event = events.recv().await.unwrap().event;
     assert!(matches!(event, harness_contracts::ClientEvent::Architecture { event: arch_graph::ArchEvent::ViewRequested { by: arch_graph::Requester::Agent, .. } }));
     let (err, _) = mcp.tool("navigate", json!({ "select": "rust:ghost" })).await;
     assert!(err);
@@ -194,9 +194,9 @@ async fn inspect_opens_any_card_a_view_shows_and_says_how_links_are_known() {
 }
 
 /// The next view request the server sends the user.
-async fn next_view(events: &mut tokio::sync::broadcast::Receiver<harness_contracts::ClientEvent>) -> arch_graph::ArchEvent {
+async fn next_view(events: &mut tokio::sync::broadcast::Receiver<harness_contracts::Stamped>) -> arch_graph::ArchEvent {
     loop {
-        if let harness_contracts::ClientEvent::Architecture { event: event @ arch_graph::ArchEvent::ViewRequested { .. } } = events.recv().await.unwrap() {
+        if let harness_contracts::ClientEvent::Architecture { event: event @ arch_graph::ArchEvent::ViewRequested { .. } } = events.recv().await.unwrap().event {
             return event;
         }
     }

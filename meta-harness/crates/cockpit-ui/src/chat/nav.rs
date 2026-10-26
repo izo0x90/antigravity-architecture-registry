@@ -4,13 +4,19 @@ use super::*;
 
 /// The files an item points at, in the order they're drawn: a call's
 /// places, a change's file, the files a message's words name.
-pub(super) fn links_of(item: &TurnItem) -> Vec<(String, Option<usize>)> {
+pub(super) fn links_of(item: &TurnItem, folder: &str) -> Vec<(String, Option<usize>)> {
+    let named = |path: &str| crate::places::in_folder(path, folder).unwrap_or_else(|| path.to_owned());
     match &item.body {
-        ItemBody::ToolCall { locations, .. } => locations.iter().map(|l| (l.path.clone(), l.line.map(|l| l as usize))).collect(),
-        ItemBody::FileChange { path, .. } => vec![(path.clone(), None)],
-        ItemBody::AssistantMessage { .. } => crate::conversation::places(&item.body.said().unwrap_or_default()),
+        ItemBody::ToolCall { locations, .. } => locations.iter().map(|l| (named(&l.path), l.line.map(|l| l as usize))).collect(),
+        ItemBody::FileChange { path, .. } => vec![(named(path), None)],
+        ItemBody::AssistantMessage { .. } => crate::conversation::places(&item.body.said().unwrap_or_default(), folder),
         _ => Vec::new(),
     }
+}
+
+/// Where a thread's session works: what its absolute paths are read from.
+pub(super) fn folder_of(view: &ThreadView) -> &str {
+    view.thread.policy.cwd.as_deref().unwrap_or_default()
 }
 
 /// What search looks through in an item.
@@ -345,7 +351,7 @@ impl Navigable for ChatStreamState {
         let folded = shape.row_of(index).is_some_and(|r| shape.rows[r].folded);
         let view = self.thread()?;
         let item = view.in_stream(index)?;
-        let links = if folded { Vec::new() } else { links_of(item) };
+        let links = if folded { Vec::new() } else { links_of(item, folder_of(&view)) };
         let picked = match self.ui.pick {
             Some(Pick::Link(n)) => links.get(n).cloned(),
             _ => None,

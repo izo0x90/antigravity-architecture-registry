@@ -81,14 +81,23 @@ fn link(word: &str, folder: &str, names: Names) -> Option<To> {
             Names::Bare => path.contains('/') || has_extension(path),
             Names::Placed => has_extension(path) && (path.contains('/') || line.is_some()),
         };
-    if !plausible || (folder.is_empty() && path.starts_with('/')) {
+    if !plausible {
         return None;
     }
-    let path = match path.strip_prefix(folder.trim_end_matches('/')).and_then(|p| p.strip_prefix('/')).filter(|_| !folder.is_empty()) {
+    Some(To::File { path: in_folder(path, folder)?, line })
+}
+
+/// `path` as the desk names files: from `folder` (where it was written:
+/// a shell's, a session's), when it's in it; none: an absolute one, with
+/// no folder to read it from.
+pub fn in_folder(path: &str, folder: &str) -> Option<String> {
+    if folder.is_empty() && path.starts_with('/') {
+        return None;
+    }
+    Some(match path.strip_prefix(folder.trim_end_matches('/')).and_then(|p| p.strip_prefix('/')).filter(|_| !folder.is_empty()) {
         Some(inside) => inside.to_owned(),
         None => path.trim_start_matches("./").to_owned(),
-    };
-    Some(To::File { path, line })
+    })
 }
 
 /// The notation of a file's place, read one way wherever it's written: a

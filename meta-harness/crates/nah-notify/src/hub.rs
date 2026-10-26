@@ -133,7 +133,7 @@ impl NotifyHub {
         let open = store.open().map_err(NotifyError::Store)?;
         let hub = Arc::new(Self { events, store, live, adapters, inner: Mutex::new(Inner { open: open.into_iter().map(|n| (n.id.clone(), n)).collect(), ..Default::default() }) });
         let (replay, live) = hub.events.subscribe();
-        hub.rebuild(replay);
+        hub.rebuild(replay.into_iter().map(|s| s.event).collect());
         Self::follow(Arc::downgrade(&hub), live);
         Ok(hub)
     }
@@ -142,18 +142,18 @@ impl NotifyHub {
         self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn follow(hub: Weak<Self>, mut live: tokio::sync::broadcast::Receiver<ClientEvent>) {
+    fn follow(hub: Weak<Self>, mut live: tokio::sync::broadcast::Receiver<harness_contracts::Stamped>) {
         tokio::spawn(async move {
             loop {
                 let event = match live.recv().await {
-                    Ok(event) => event,
+                    Ok(stamped) => stamped.event,
                     // Fell behind: rebuilt from the stream's current state (never skipped).
                     Err(RecvError::Lagged(missed)) => {
                         let Some(hub) = hub.upgrade() else { return };
                         tracing::warn!("notifications fell {missed} events behind: rebuilding from the current state");
                         let (replay, next) = hub.events.subscribe();
                         live = next;
-                        hub.rebuild(replay);
+                        hub.rebuild(replay.into_iter().map(|s| s.event).collect());
                         continue;
                     }
                     Err(RecvError::Closed) => return,

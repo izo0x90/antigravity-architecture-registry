@@ -219,10 +219,6 @@ fn store_error(reason: String) -> HarnessError {
     HarnessError::Store { reason }
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
-}
-
 impl SlotManager {
     /// The slots as kept, the lead made on first run, worker slots from an
     /// earlier run removed (the queue starts its jobs afresh); then follows
@@ -651,7 +647,7 @@ impl SlotManager {
                 Ok(Reported::Delivered)
             }
             None => {
-                self.store.hold_report(&HeldReport { to: to.clone(), from: from.to_owned(), message: message.valid(), at_ms: now_ms() }).map_err(store_error)?;
+                self.store.hold_report(&HeldReport { to: to.clone(), from: from.to_owned(), message: message.valid(), at_ms: crate::now_ms() }).map_err(store_error)?;
                 Ok(Reported::Held)
             }
         }
@@ -755,7 +751,7 @@ impl SlotManager {
                     Err(_) => return,
                 };
                 let Some(me) = me.upgrade() else { return };
-                me.apply(&event);
+                me.apply(&event.event);
             }
         });
     }

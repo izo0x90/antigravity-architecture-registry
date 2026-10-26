@@ -19,6 +19,12 @@ pub mod slots;
 pub mod tool_config;
 
 pub use error::HarnessError;
+
+/// Now, as the server's clock has it (milliseconds since the epoch).
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
 pub use hub::EventHub;
 pub use registry::{InstanceConfig, InstanceRegistry};
 pub use sessions::{OpenThread, SessionManager};

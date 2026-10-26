@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::events::ClientEvent;
+use crate::events::Stamped;
 
 /// Home's own project (when it has one).
 pub const HERE: &str = "here";
@@ -43,7 +43,7 @@ fn yes() -> bool {
 pub enum HomeEvent {
     /// The servers and their links, whenever that changes.
     Servers { servers: Vec<ServerView> },
-    /// One of a server's events (`Resync`: drop what's held for it; its
-    /// whole state follows).
-    Event { server: String, event: Box<ClientEvent> },
+    /// One of a server's events, and when it happened there (`Resync`:
+    /// drop what's held for it; its whole state follows).
+    Event { server: String, event: Box<Stamped> },
 }

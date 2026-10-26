@@ -579,8 +579,8 @@ mod tests {
         tags.delete("deploy", "lead").unwrap();
         assert_eq!(tags.find("deploy"), Err(TagError::NotFound("deploy".into())));
         let mut told = Vec::new();
-        while let Ok(event) = events.try_recv() {
-            told.push(event);
+        while let Ok(stamped) = events.try_recv() {
+            told.push(stamped.event);
         }
         assert!(matches!(told.last(), Some(ClientEvent::TagRemoved { tag_id }) if *tag_id == tag.id), "{told:?}");
         assert_eq!(told.iter().filter(|e| matches!(e, ClientEvent::TagUpdated { .. })).count(), 5);
@@ -605,7 +605,7 @@ mod tests {
         // it says so, and they're kept where they are now, named so.
         owner.relay();
         tags.refresh();
-        let Ok(ClientEvent::TagUpdated { tag }) = events.try_recv() else { panic!("the move is told") };
+        let Ok(ClientEvent::TagUpdated { tag }) = events.try_recv().map(|s| s.event) else { panic!("the move is told") };
         assert_eq!(tag.on.iter().map(|t| (t.subject.clone(), t.what.as_str())).collect::<Vec<_>>(), [(lines(1, 2), "lines 1 to 2"), (lines(1100, 1101), "lines 1100 to 1101")]);
         let read = tags.read("t").unwrap();
         assert_eq!(read.on.iter().map(|t| t.text.as_deref()).collect::<Vec<_>>(), [Some("text of lines 1 to 2\n"), Some("text of lines 100 to 101\n")], "what they said, kept when tagged");

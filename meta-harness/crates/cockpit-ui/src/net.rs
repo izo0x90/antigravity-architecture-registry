@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use ewebsock::{WsEvent, WsMessage, WsSender};
 use harness_contracts::{
-    ClientEvent, HomeEvent, InstanceId, ModelSelection, NativeId, NotificationId, RequestId, RequestResponse, RuntimePolicy, SavedSessionPage, SessionKey,
+    HomeEvent, InstanceId, ModelSelection, NativeId, NotificationId, RequestId, RequestResponse, RuntimePolicy, SavedSessionPage, SessionKey,
     SlotId, SteerInput, ThreadId,
 };
 use harness_contracts::home::HERE;
@@ -109,7 +109,7 @@ pub struct NetClient {
     /// runs (a hidden browser tab).
     on_arrival: Option<Arrival>,
     /// This server's events, as home's socket brought them, since the last drain.
-    pub incoming: Arc<Mutex<Vec<ClientEvent>>>,
+    pub incoming: Arc<Mutex<Vec<harness_contracts::Stamped>>>,
     /// What home's socket said (every server's events, and the servers),
     /// since the last drain: only the client that holds the socket.
     pub from_home: Arc<Mutex<Vec<HomeEvent>>>,
@@ -1063,16 +1063,16 @@ mod tests {
     fn home_says_whose_events_and_another_servers_calls_go_through_it() {
         let mut net = NetClient::new("http://127.0.0.1:9");
         net.on_ws_event(WsEvent::Opened, 0.0);
-        net.on_ws_event(WsEvent::Message(WsMessage::Text(r#"{"type":"event","server":"cloud","event":{"type":"resync"}}"#.into())), 1.0);
+        net.on_ws_event(WsEvent::Message(WsMessage::Text(r#"{"type":"event","server":"cloud","event":{"atMs":5,"type":"resync"}}"#.into())), 1.0);
         let events = std::mem::take(&mut *net.from_home.lock().unwrap());
-        assert_eq!(events, [HomeEvent::Event { server: "cloud".into(), event: Box::new(ClientEvent::Resync) }]);
+        assert_eq!(events, [HomeEvent::Event { server: "cloud".into(), event: Box::new(harness_contracts::Stamped { at_ms: 5, event: harness_contracts::ClientEvent::Resync }) }]);
         let cloud = NetClient::for_server("http://127.0.0.1:9", "cloud");
         cloud.notifications_seen(&SlotId::new("lead"), egui::Context::default(), |_| {});
         assert_eq!(*cloud.sent.lock().unwrap(), ["POST /s/cloud/api/notifications/seen"]);
         let mut agents = crate::agents::Agents::default();
         crate::chat::tests::conversation_events().into_iter().for_each(|e| agents.apply(e));
         assert!(!agents.store().threads.is_empty());
-        agents.apply(ClientEvent::Resync);
+        agents.apply(harness_contracts::ClientEvent::Resync);
         assert!(agents.store().instances.is_empty() && agents.store().threads.is_empty(), "start from nothing; the whole state follows");
     }
 }

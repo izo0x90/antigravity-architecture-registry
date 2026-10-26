@@ -195,12 +195,12 @@ fn indexing_shows_its_state_everywhere_and_can_be_run_from_the_cockpit() {
     assert_eq!((leader("index.changed"), leader("index.rebuild"), leader("index.file")), (Some("Ir".into()), Some("IR".into()), Some("If".into())));
     assert!(bound.iter().any(|b| b.action.id == "index.file" && b.action.label.contains("src/a.rs")), "names the open file");
     // The light: indexing with progress.
-    app.desk.net.incoming.lock().unwrap().push(index_event(arch_graph::IndexStatus { state: arch_graph::IndexState::Indexing, done: 3, total: 10, ..Default::default() }));
+    told(&app, index_event(arch_graph::IndexStatus { state: arch_graph::IndexState::Indexing, done: 3, total: 10, ..Default::default() }));
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("INDEX") && text.contains("indexing 3 of 10"), "{text}");
     // Done, but two files changed since: one word for it everywhere.
     let stale = arch_graph::IndexStatus { stale: vec!["src/a.rs".into(), "src/b.rs".into()], last: Some(arch_graph::IndexSummary { millis: 40, files: 10, parsed: 2, components: 30, relations: 50, unresolved: 1, at: "now".into() }), ..Default::default() };
-    app.desk.net.incoming.lock().unwrap().push(index_event(stale));
+    told(&app, index_event(stale));
     focus(&ctx, &mut app, BufferKind::Code);
     let text = texts(&frame(&ctx, &mut app, vec![]));
     let (_, word, _) = crate::status::look("stale");
@@ -224,7 +224,7 @@ fn indexing_shows_its_state_everywhere_and_can_be_run_from_the_cockpit() {
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("2 out of date"), "the graph's cards: {text}");
     // A failed run says so.
-    app.desk.net.incoming.lock().unwrap().push(index_event(arch_graph::IndexStatus { state: arch_graph::IndexState::Failed, error: Some("disk".into()), ..Default::default() }));
+    told(&app, index_event(arch_graph::IndexStatus { state: arch_graph::IndexState::Failed, error: Some("disk".into()), ..Default::default() }));
     assert!(texts(&frame(&ctx, &mut app, vec![])).contains("indexing failed"));
     // Every state names a real icon and colour (config is checked).
     assert!(UiConfig::with_overrides("[status.stale]\nword = \"old\"\nicon = \"nope\"\ncolor = \"warn\"\n").unwrap_err().contains("unknown icon"));

@@ -60,10 +60,10 @@ impl Chats {
         let (replay, mut events) = self.hub.subscribe();
         let numbers = self.numbers.clone();
         // Each turn's number as it is now, then as it changes.
-        let number = |numbers: &Mutex<HashMap<TurnId, (ThreadId, u32)>>, events: &[ClientEvent]| {
+        let number = |numbers: &Mutex<HashMap<TurnId, (ThreadId, u32)>>, events: &[harness_contracts::Stamped]| {
             let mut numbers = numbers.lock().unwrap_or_else(PoisonError::into_inner);
-            for event in events {
-                if let ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } } = event {
+            for stamped in events {
+                if let ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } } = &stamped.event {
                     numbers.insert(turn.id.clone(), (turn.thread_id.clone(), turn.ordinal));
                 }
             }
@@ -79,7 +79,7 @@ impl Chats {
         };
         std::thread::spawn(move || {
             loop {
-                match events.blocking_recv() {
+                match events.blocking_recv().map(|s| s.event) {
                     Ok(ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } }) => {
                         let was = numbers.lock().unwrap_or_else(PoisonError::into_inner).insert(turn.id.clone(), (turn.thread_id.clone(), turn.ordinal));
                         if was.is_some_and(|(_, n)| n != turn.ordinal) && !tell() {
@@ -363,7 +363,7 @@ impl nah_things::Resolve for Chats {
         let chats = Chats { slots: self.slots.clone(), hub: self.hub.clone(), named: Mutex::default(), moved: OnceLock::new(), numbers: self.numbers.clone() };
         std::thread::spawn(move || {
             loop {
-                match events.blocking_recv() {
+                match events.blocking_recv().map(|s| s.event) {
                     Ok(ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: t } }) if t.id == running.id && t.status.is_terminal() => {
                         let end = chats.now(&subject).unwrap_or_default();
                         let rest = match end.strip_prefix(&so_far) {

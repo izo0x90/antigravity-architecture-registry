@@ -69,7 +69,7 @@ fn turn(id: &str, thread: &str, status: TurnStatus) -> ClientEvent {
 #[test]
 fn turns_take_snapshots_and_windows_say_who_was_working() {
     let (dir, changes, memory, timeline) = timeline();
-    let t0 = now_ms();
+    let t0 = harness_core::now_ms();
     timeline.handle(&turn("t1", "a", TurnStatus::Running), t0);
     timeline.handle(&turn("t1", "a", TurnStatus::Running), t0 + 1);
     assert_eq!(memory.snapshots.lock().unwrap().len(), 1, "seen running again: not started again");
@@ -101,7 +101,7 @@ fn turns_take_snapshots_and_windows_say_who_was_working() {
 #[test]
 fn a_closed_sessions_turns_and_old_snapshots_are_let_go() {
     let (dir, changes, memory, timeline) = timeline();
-    let t0 = now_ms();
+    let t0 = harness_core::now_ms();
     timeline.handle(&turn("t1", "a", TurnStatus::Running), t0);
     write(dir.path(), "a.txt", "two\n");
     timeline.handle(&turn("t1", "a", TurnStatus::Completed), t0 + 1);
@@ -127,11 +127,11 @@ fn a_closed_sessions_turns_and_old_snapshots_are_let_go() {
 #[test]
 fn turns_left_running_by_a_server_that_stopped_are_let_go_and_the_policy_reads_from_toml() {
     let (_dir, changes, memory, timeline) = timeline();
-    timeline.handle(&turn("t1", "a", TurnStatus::Running), now_ms());
+    timeline.handle(&turn("t1", "a", TurnStatus::Running), harness_core::now_ms());
     drop(timeline);
     let again = Timeline::new(changes, memory.clone(), Policy::default()).unwrap();
     assert!(memory.turns.lock().unwrap().is_empty(), "its end was never seen");
-    assert!(again.read(now_ms()).unwrap().turns.is_empty());
+    assert!(again.read(harness_core::now_ms()).unwrap().turns.is_empty());
     assert_eq!(Policy::from_toml("[timeline]\nkeep_days = 3\n").unwrap(), Policy { keep_days: 3, closed_session_days: 1 });
     assert_eq!(Policy::from_toml("").unwrap(), Policy::default());
     assert!(Policy::from_toml("[timeline]\nkeep = 3\n").is_err());

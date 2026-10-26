@@ -117,7 +117,7 @@ fn bodies(app: &CockpitApp, call: &str) -> Vec<serde_json::Value> {
 
 /// The server says `event` on the event stream.
 fn told(app: &CockpitApp, event: harness_contracts::ClientEvent) {
-    app.desk.net.incoming.lock().unwrap().push(event);
+    app.desk.net.incoming.lock().unwrap().push(harness_contracts::Stamped { at_ms: crate::attention::now_ms(), event });
 }
 
 /// Double-clicks the drawn text `label`.
@@ -332,7 +332,7 @@ fn peek_key(ctx: &egui::Context, app: &mut CockpitApp, pressed: bool, time: f64)
 fn agent_moves(app: &mut CockpitApp, select: &str, panel: Option<u32>) {
     let request = arch_graph::ViewRequest { select: Some(select.into()), panel, ..Default::default() };
     let event = arch_graph::ArchEvent::ViewRequested { request: Box::new(request), by: arch_graph::Requester::Agent };
-    app.desk.net.incoming.lock().unwrap().push(harness_contracts::ClientEvent::Architecture { event });
+    told(app, harness_contracts::ClientEvent::Architecture { event });
 }
 
 /// Where the kept keys live (moves when they're given out again).

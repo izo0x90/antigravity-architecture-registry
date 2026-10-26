@@ -389,10 +389,10 @@ const PLACES_MOST: usize = 12;
 
 /// The files a message's words name, in order, each once, as a terminal's
 /// lines are read (`crate::places`): `src/a.rs`, `lib.rs:12`, `a.rs:12:5`
-/// is line 12.
-pub fn places(text: &str) -> Vec<(String, Option<usize>)> {
+/// is line 12; an absolute path, from `folder` (where it was written).
+pub fn places(text: &str, folder: &str) -> Vec<(String, Option<usize>)> {
     let mut out: Vec<(String, Option<usize>)> = Vec::new();
-    for link in text.lines().flat_map(|line| crate::places::links(line, "", crate::places::Names::Placed)) {
+    for link in text.lines().flat_map(|line| crate::places::links(line, folder, crate::places::Names::Placed)) {
         if let crate::places::To::File { path, line } = link.to {
             let place = (path, line.map(|l| l as usize));
             if !out.contains(&place) {
@@ -650,8 +650,12 @@ mod tests {
     fn the_files_a_message_names_are_read_from_its_words() {
         let text = "See src/chat/render.rs:42, and `lib.rs:7` (and lib.rs:7 again); ./crates/a.rs too.\n\
                     Not https://x.io/a.rs:3, v1.2.3, render.rs, e.g. this, note: that, or a.rs:x.";
-        assert_eq!(places(text), [("src/chat/render.rs".to_owned(), Some(42)), ("lib.rs".to_owned(), Some(7)), ("crates/a.rs".to_owned(), None)]);
-        assert_eq!(places("Cargo.toml:5:3 and [the file](src/x.ts)"), [("Cargo.toml".to_owned(), Some(5)), ("src/x.ts".to_owned(), None)]);
+        assert_eq!(places(text, ""), [("src/chat/render.rs".to_owned(), Some(42)), ("lib.rs".to_owned(), Some(7)), ("crates/a.rs".to_owned(), None)]);
+        assert_eq!(places("Cargo.toml:5:3 and [the file](src/x.ts)", ""), [("Cargo.toml".to_owned(), Some(5)), ("src/x.ts".to_owned(), None)]);
+        // An absolute path: from where the session works, when it's there.
+        let said = "Fixed /work/proj/src/a.rs:12 (see /etc/hosts.txt).";
+        assert_eq!(places(said, ""), [], "no folder: not a place");
+        assert_eq!(places(said, "/work/proj"), [("src/a.rs".to_owned(), Some(12)), ("/etc/hosts.txt".to_owned(), None)]);
     }
 
     #[test]

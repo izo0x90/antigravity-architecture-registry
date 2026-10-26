@@ -111,7 +111,7 @@ impl Alerts {
                 return;
             }
             let Ok(HomeEvent::Event { server, event }) = serde_json::from_str::<HomeEvent>(text) else { return };
-            if let ClientEvent::NotificationUpdated { notification } = *event
+            if let ClientEvent::NotificationUpdated { notification } = event.event
                 && notification.level == Level::Waiting
                 && notification.state == NotificationState::Open
             {
@@ -151,7 +151,7 @@ pub(crate) mod tests {
     }
 
     fn waiting(state: &str) -> String {
-        format!(r#"{{"type":"event","server":"cloud","event":{{"type":"notification_updated","notification":{{"id":"req:1","level":"waiting","kind":"approval","slot":null,"thread":null,"request":null,"title":"Run it","detail":null,"atMs":1,"state":"{state}"}}}}}}"#)
+        format!(r#"{{"type":"event","server":"cloud","event":{{"atMs":5,"type":"notification_updated","notification":{{"id":"req:1","level":"waiting","kind":"approval","slot":null,"thread":null,"request":null,"title":"Run it","detail":null,"atMs":1,"state":"{state}"}}}}}}"#)
     }
 
     #[test]

@@ -773,7 +773,7 @@ mod tests {
         let started = d.start(&lines(10, 12), DiscussionKind::Question, "  why does this fail?  ", USER, None).unwrap();
         assert_eq!((started.id.as_str(), started.on.what.as_str(), started.asked.as_str(), started.asking()), ("d1", "lines 10 to 12", LEAD, "why does this fail?"));
         assert_eq!(started.whose_move(), Move::Agent(LEAD.into()), "open: the agent asked");
-        assert!(matches!(events.try_recv(), Ok(ClientEvent::DiscussionUpdated { discussion }) if discussion == started), "told whole");
+        assert!(matches!(events.try_recv().map(|s| s.event), Ok(ClientEvent::DiscussionUpdated { discussion }) if discussion == started), "told whole");
         d.reply(&started.id, "which run?", "lead").unwrap();
         d.reply(&started.id, "the second", USER).unwrap();
         assert_eq!(d.get(&started.id).unwrap().status, DiscussionStatus::Open, "a reply leaves it where it stands");
@@ -872,7 +872,7 @@ mod tests {
         assert!(d.unsettled(&other).is_empty(), "another plan's don't");
         let (_, mut events) = hub.subscribe();
         d.delete(&whole.id, USER).unwrap();
-        assert!(matches!(events.try_recv(), Ok(ClientEvent::DiscussionRemoved { discussion_id }) if discussion_id == whole.id), "a deleted one is told");
+        assert!(matches!(events.try_recv().map(|s| s.event), Ok(ClientEvent::DiscussionRemoved { discussion_id }) if discussion_id == whole.id), "a deleted one is told");
         d.delete(&on_relation.id, USER).unwrap();
     }
 
@@ -888,7 +888,7 @@ mod tests {
         let moved = d.get(&moving.id).unwrap();
         assert_eq!((moved.on.subject.clone(), moved.on.what.as_str()), (lines(1100, 1102), "lines 1100 to 1102"), "where they are now");
         assert_eq!(store.kept.lock().unwrap()[&moving.id].on, moved.on, "kept where they are now");
-        assert!(matches!(events.try_recv(), Ok(ClientEvent::DiscussionUpdated { discussion }) if discussion.on == moved.on), "told");
+        assert!(matches!(events.try_recv().map(|s| s.event), Ok(ClientEvent::DiscussionUpdated { discussion }) if discussion.on == moved.on), "told");
         let gone = d.start(&lines(10, 12), DiscussionKind::Question, "and this?", USER, None).unwrap();
         owner.scroll_away();
         let (held, said) = things.said(&gone.on.subject, gone.kept.as_ref());

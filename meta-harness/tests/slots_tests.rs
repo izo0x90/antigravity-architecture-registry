@@ -133,7 +133,7 @@ async fn a_report_reaches_a_running_lead_or_waits_for_one() {
     assert_eq!(opened.delivered_reports, 2, "delivered as it opened");
     let delivered = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            if let Ok(ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } }) = events.recv().await
+            if let Ok(ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } }) = events.recv().await.map(|s| s.event)
                 && let ItemBody::UserMessage { text, pieces } = item.body
                 && text.contains("Why?")
             {

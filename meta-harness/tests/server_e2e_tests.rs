@@ -48,10 +48,10 @@ async fn a_slots_session_routes_through_the_instance_adapter() {
     // The hub replays the session's events and the catalog folded into the snapshot.
     tokio::time::sleep(Duration::from_millis(100)).await;
     let (replay, _) = state.harness.hub.subscribe();
-    assert!(replay.iter().any(|e| matches!(e, ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } }
+    assert!(replay.iter().any(|e| matches!(&e.event, ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } }
         if matches!(&item.body, ItemBody::AssistantMessage { content, .. }
             if content == &vec![ContentBlock::Text { text: "echo: hi".into() }]))));
-    assert!(replay.iter().any(|e| matches!(e, ClientEvent::InstanceUpdated { snapshot }
+    assert!(replay.iter().any(|e| matches!(&e.event, ClientEvent::InstanceUpdated { snapshot }
         if snapshot.commands.iter().any(|c| c.name == "plan"))));
 
     let (status, _) = http(addr, "DELETE", &format!("/api/slots/lead/sessions/{session}"), None).await;

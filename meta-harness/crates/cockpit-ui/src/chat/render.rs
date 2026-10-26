@@ -696,7 +696,7 @@ impl ChatStreamState {
                 let drawn = self.ui.messages.draw(ui, egui::Id::new(&item.id), &crate::conversation::Message { markdown: true, under, ..crate::conversation::Message::new(&by, &text) });
                 self.code_spots(index, &drawn.codes);
                 // The files its words name, as a call's places are.
-                let places = nav::links_of(item);
+                let places = nav::links_of(item, nav::folder_of(view));
                 if !places.is_empty() {
                     ui.horizontal_wrapped(|ui| self.places(ui, index, &places));
                 }
@@ -717,7 +717,7 @@ impl ChatStreamState {
                 let icon = words::of(&item.body).map_or("", |s| s.icon);
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(format!("{tag} {icon} {title}")).monospace().size(crate::theme::look().text_body).color(color));
-                    self.places(ui, index, &nav::links_of(item));
+                    self.places(ui, index, &nav::links_of(item, nav::folder_of(view)));
                 });
                 // Its output (a file it changed, as "+12 −3"), or what its
                 // sub-agent did (its items follow, open): folded unless
@@ -746,7 +746,7 @@ impl ChatStreamState {
             ItemBody::FileChange { diff, .. } => {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(icon::PENCIL_SIMPLE).size(crate::theme::look().text_body).color(colors().info));
-                    self.places(ui, index, &nav::links_of(item));
+                    self.places(ui, index, &nav::links_of(item, nav::folder_of(view)));
                 });
                 if let Some(diff) = diff {
                     let change = self.change_of(diff);
