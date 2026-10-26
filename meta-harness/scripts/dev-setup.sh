@@ -79,7 +79,8 @@ if command -v rustup >/dev/null; then
   echo "rustup: clippy, rustfmt, rust-analyzer, wasm32 target"
 fi
 
-# The repository's hooks: a secret check on each commit, the lints on each push.
+# The repository's hooks: secrets and formatting on each commit, the checks
+# that build nothing (`make lint-light`) on each push.
 git config core.hooksPath .githooks
 echo "git hooks: on (.githooks)"
 

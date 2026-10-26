@@ -1,4 +1,4 @@
-.PHONY: start stop status clean restart log lint check ui sandbox-dev sandbox-clean dev-setup
+.PHONY: start stop status clean restart log lint check ui sandbox-dev sandbox-clean dev-setup lint-light
 
 # The tools `make dev-setup` installs (in ~/.local/bin, unless on PATH).
 TOOLS ?= $(HOME)/.local/bin
@@ -12,23 +12,28 @@ PID_FILE = mcp_server.pid
 LOG_FILE = mcp_server.log
 
 # The development tools at CI's versions, and the git hooks (a secret
-# check on each commit, `make lint` on each push). Once per machine.
+# check on each commit, `make lint-light` on each push). Once per machine.
 dev-setup:
 	meta-harness/scripts/dev-setup.sh
 
-lint:
+# The checks that build nothing (seconds; each push runs them): formatting,
+# the structural rules, secrets, the dependencies.
+lint-light:
 	@echo "==> rustfmt: every Rust file formatted (rustfmt.toml)"
 	cd meta-harness && cargo fmt --all --check
-	@echo "==> Clippy: the server and every crate"
-	cd meta-harness && cargo clippy --workspace --all-targets -- -D warnings
-	@echo "==> Clippy: the cockpit's browser build"
-	cd meta-harness && cargo clippy -p cockpit-ui --target wasm32-unknown-unknown -- -D warnings
 	@echo "==> ast-grep: the structural rules"
 	$(AST_GREP) scan
 	@echo "==> gitleaks: no secrets in anything committed"
 	$(GITLEAKS) git --redact --no-banner
 	@echo "==> cargo-deny: the dependencies (security, licences, sources)"
 	cd meta-harness && $(CARGO_DENY) check
+
+# All of them, and clippy (it builds: run where the builds are, and in CI).
+lint: lint-light
+	@echo "==> Clippy: the server and every crate"
+	cd meta-harness && cargo clippy --workspace --all-targets -- -D warnings
+	@echo "==> Clippy: the cockpit's browser build"
+	cd meta-harness && cargo clippy -p cockpit-ui --target wasm32-unknown-unknown -- -D warnings
 
 check: lint
 	@echo "==> Running Cargo Test in meta-harness..."

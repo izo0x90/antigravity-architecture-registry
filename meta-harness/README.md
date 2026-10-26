@@ -82,7 +82,9 @@ cleanup's build part on their own when the disk runs low.
 `make dev-setup`, once per machine, installs the development tools at
 CI's versions (gitleaks, cargo-deny, ast-grep, and Rust's clippy, rustfmt
 and browser target) and turns on the repository's git hooks: each commit
-is checked for secrets and formatting, and each push runs `make lint`.
+is checked for secrets and formatting, and each push runs `make lint-light`
+(the checks that build nothing; clippy and the tests build, so they run
+where you build, and in CI).
 `make lint` runs rustfmt's check (`rustfmt.toml`), clippy (the server and the cockpit's browser build), the structural rules
 in `rules/ast-grep`, gitleaks over the whole history (`.gitleaks.toml`
 says what's known not to be a secret) and cargo-deny over the

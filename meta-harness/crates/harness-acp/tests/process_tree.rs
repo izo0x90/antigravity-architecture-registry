@@ -1,5 +1,7 @@
 //! An agent's process and what it starts stop together when the session
-//! lets go (an emulated server's own harness included).
+//! lets go (an emulated server's own harness included). Linux only: it
+//! looks for the processes in `/proc`.
+#![cfg(target_os = "linux")]
 
 use std::time::{Duration, Instant};
 
@@ -11,7 +13,6 @@ fn alive(pid: &str) -> bool {
         && !std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default().contains(") Z ")
 }
 
-#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn what_the_agent_started_stops_with_it() {
     let dir = tempfile::tempdir().unwrap();
