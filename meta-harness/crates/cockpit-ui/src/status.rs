@@ -129,7 +129,8 @@ pub fn pill(ui: &mut egui::Ui, text: &str, color: Color32, fill: Option<Color32>
             .inner_margin(margin)
             .show(ui, |ui| {
                 ui.set_max_width(size.x - pad.x);
-                let label = ui.add(egui::Label::new(RichText::new(text).size(look.text_body).color(color)).truncate());
+                // (A chip, tapped as one: its words aren't picked out.)
+                let label = ui.add(egui::Label::new(RichText::new(text).size(look.text_body).color(color)).truncate().selectable(false));
                 if galley.size().x + pad.x > widest {
                     label.on_hover_text(text);
                 }
