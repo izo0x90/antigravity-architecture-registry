@@ -83,5 +83,8 @@ record it under "Decide" for the end summary.
   report problems as they are.
 - Own mistakes directly, fix them properly, and record the lesson.
 - Don't make changes when the user is only asking a question.
-- Don't commit TODO.md, dev_docs, or `.nah/plans`. Don't touch the user's
-  chat draft. Drive only the user's own Chrome tab.
+- Commit TODO.md and `dev_docs/` as they change (since 2026-10-26); not
+  `.nah/plans`. A plan that's fully built is deleted from `dev_docs/`
+  (git keeps it): the code is its truth. Only what still has something
+  open stays: unticked steps, open decisions or questions.
+- Don't touch the user's chat draft. Drive only the user's own Chrome tab.
