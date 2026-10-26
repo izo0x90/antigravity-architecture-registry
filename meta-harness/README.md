@@ -72,6 +72,13 @@ scripts/bootstrap.sh antigravity-acp claude-code rust-analyzer
 over a project (this repository by default), restarting it if it runs, and
 prints the cockpit's link; its output is in `~/.cache/nah/serve.log`.
 
+In the development sandbox (a 20 GB disk), `make sandbox-dev` builds and
+serves the cockpit, and `make sandbox-clean` frees the disk: download
+caches, build leftovers, old temp and scratch files, never the packs or
+the toolchain. It's safe to run any time; `DEEP=1` also wipes the whole
+build cache (the next build takes about 10 minutes). Builds run the same
+cleanup's build part on their own when the disk runs low.
+
 `make check` runs the lints and every test. The tests need `git` and
 `python3` (stand-in language servers). A test that needs something more
 (the network, `ast-grep`, Chrome, an installed harness) ends its name with

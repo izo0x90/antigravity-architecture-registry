@@ -1,4 +1,4 @@
-.PHONY: start stop status clean restart log lint check ui sandbox-dev
+.PHONY: start stop status clean restart log lint check ui sandbox-dev sandbox-clean
 
 AST_GREP ?= $(shell which ast-grep 2>/dev/null || echo "$$HOME/.local/share/cargo/bin/ast-grep")
 # Relative to meta-harness/ (cargo's default); overridden by sandbox-dev.
@@ -80,6 +80,12 @@ log:
 	else \
 		echo "No log file found."; \
 	fi
+
+# Frees the sandbox's disk: only what's throwaway (download caches, build
+# leftovers, old temp and scratch files). Safe to run any time.
+# DEEP=1 also wipes the whole build cache (the next build takes ~10 min).
+sandbox-clean:
+	SANDBOX_TARGET_DIR=$(SANDBOX_TARGET_DIR) bash meta-harness/scripts/sandbox-clean.sh $(if $(filter 1,$(DEEP)),--deep,)
 
 clean: stop
 	rm -f $(LOG_FILE)

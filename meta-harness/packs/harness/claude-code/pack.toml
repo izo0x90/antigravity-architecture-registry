@@ -14,10 +14,15 @@ supports = ">=0.95.0, <0.96.0"
 acp = { timeout_s = 60 }
 
 # Node 22 or later. npm brings the Claude Code build for the platform.
+# Its downloads are kept in the pack's folder while it installs, then
+# removed: nothing is left in the user's npm cache (each version's copy is
+# hundreds of MB, and never read again).
 [[install]]
 platforms = ["linux-x86_64", "linux-arm64", "linux-arm64-16k", "macos-arm64", "macos-x86_64"]
 [[install.steps]]
-run = { command = "npm", args = ["install", "--prefix", ".", "--no-save", "--no-audit", "--no-fund", "@agentclientprotocol/claude-agent-acp@{tool_version}"], timeout_s = 600 }
+run = { command = "npm", args = ["install", "--prefix", ".", "--cache", ".npm-cache", "--no-save", "--no-audit", "--no-fund", "@agentclientprotocol/claude-agent-acp@{tool_version}"], timeout_s = 600 }
+[[install.steps]]
+run = { command = "rm", args = ["-rf", ".npm-cache"] }
 
 # An API key in the server's environment would win over the account it's
 # signed in with; the remote-shell variables would make it offer only a
