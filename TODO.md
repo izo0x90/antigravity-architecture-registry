@@ -49,6 +49,10 @@
     - Wanted: one selection mechanism for the whole cockpit, Vim-style keys and the mouse, with cut, copy and paste
     - Copying is done in a few lines each by the code view and the terminal (twice), and the sign-in's Copy link will do the same: one copy mechanism to decide with the rest
 
+- Claude sign-in links keep opening in new tabs (seen 2026-10-26)
+    - Every time the cockpit reloads (or something like it), Anthropic's sign-in link opens again in a new browser tab, unasked
+    - Look at: what opens a sign-in's link (the sign-in card, a waiting request replayed on reload, the alerts), and whether a sign-in that's already done or abandoned is still told as waiting after a resync
+
 - Harness logins and homes (discussed 2026-10-23; to plan before building)
     - Decided: a harness's login belongs to the project server running it (credentials stay there; the UI server only relays the login steps to the browser)
     - Decided: first, make the browser logins solid for every harness (Claude Code: paste a code; Antigravity: browser callback, its failed last page pasted back and replayed on the server; Antigravity also needs a way to say signed in/out, it shows "unknown")
@@ -176,6 +180,21 @@ it impossible to write or modify the  location  field in the registry using the 
     - Hand it to every session the harness drives (its prompt or a tool to ask), especially for unattended plan runs; have reviewers check open decisions against it; flag decisions made against it for the end summary
     - Keep it current: new answers update it; a decision the user overturns updates it
 
+- Rework the work queue and validation (later; needs a design discussion)
+    - The queue was designed for earlier, smaller models; what it does per component may not fit now
+    - Validation component by component with a sub-agent each: narrow agents miss the forest for the trees, and token use gets extreme
+    - Maybe one reviewing agent (or none beyond the driving agent) per change set, at a plan's stopping points, instead of per component; when to fork a session and what to hand it
+    - Validation as part of the system: reviewers that run on a set of changes at a plan's checkpoints; a plan's steps and checkpoints as something a harness drives
+    - Reuse what this build used by hand: the reviewer briefs (in `.nah/reviewers.toml`'s shape) and the build-and-validate process (`dev_docs/process/build-and-validate.md`)
+
+
+## Development (how it's built and checked, not what it does)
+
+- Lint rules live in the lint step, not in the tests (raised 2026-10-26)
+    - Rules that read the source are tests today: the cockpit's own linter (`cockpit-ui/src/lint.rs`: keys only from the keymap, key text only from bound actions, the levels), the shell's file-size cap (`app/tests/split.rs`, 1,500 lines), and `tests/lint_test.rs`, which runs ast-grep inside `cargo test` (`make lint` already runs it)
+    - Move them into one lint program `make lint-light` runs (it builds only itself, not the workspace), beside ast-grep, gitleaks and cargo-deny; a rule fails the lint, not a test
+    - Then the tests are only about what the system does
+
 - Tests: cut them back to what earns its keep (getting urgent)
     - About 25,000 lines of tests against about 66,000 of code (rough count, 2026-10-17), and every agent build adds more
     - Many likely test themselves (tautological), check wording instead of behaviour, or pin internals that the shell tests reach into (~300 assertions)
@@ -184,18 +203,11 @@ it impossible to write or modify the  location  field in the registry using the 
     - Evidence (chat cleanup's end review, 2026-10-26): tests that pass without the fix they claim to protect, tests that only test themselves. When the same agent writes the code and its test, the test tends to confirm what was built: have someone other than the builder write them, and enforce rules with types and lints instead of new tests
     - The sandbox's 20 GB disk: `make sandbox-clean` frees it (2026-10-26)
 
-- Rework the work queue and validation (later; needs a design discussion)
-    - The queue was designed for earlier, smaller models; what it does per component may not fit now
-    - Validation component by component with a sub-agent each: narrow agents miss the forest for the trees, and token use gets extreme
-    - Maybe one reviewing agent (or none beyond the driving agent) per change set, at a plan's stopping points, instead of per component; when to fork a session and what to hand it
-    - Validation as part of the system: reviewers that run on a set of changes at a plan's checkpoints; a plan's steps and checkpoints as something a harness drives
-    - Reuse what this build used by hand: the reviewer briefs (in `.nah/reviewers.toml`'s shape) and the build-and-validate process (`dev_docs/process/build-and-validate.md`)
-
-- Replace `ttf-parser` in `arch-graph` (its text measuring, `tree/measure.rs`): unmaintained (RUSTSEC-2026-0192), accepted in `meta-harness/deny.toml` until then (2026-10-26)
-
 - A flaky test: `arch-service` `gates.rs` (a content-identical touch) failed once under the whole suite's parallel load (2026-10-24, its trigger setup at line 69: likely the database locked by another test) and passed three runs out of three alone
 - Another: `nah-terminal`'s library tests failed once under the whole suite while the cockpit's tests built and ran beside them (2026-10-24, which test wasn't kept: the suite prints only the last lines), then passed six runs out of six alone. Rerun the suite with the full output kept to name it
     - Find what it shares with the tests beside it (a database file, a folder) and give it its own
+
+- Replace `ttf-parser` in `arch-graph` (its text measuring, `tree/measure.rs`): unmaintained (RUSTSEC-2026-0192), accepted in `meta-harness/deny.toml` until then (2026-10-26)
 
 # Finished
 
