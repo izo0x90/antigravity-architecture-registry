@@ -33,7 +33,7 @@ impl ChatStreamState {
         // it became known here or your answer was taken.)
         let since_last = view.last_heard().map(|t| (now - t).max(0.0));
         // (Asking till your answer's taken: answered here, it's on its way.)
-        let asking = view.requests().iter().any(|r| r.status == harness_contracts::RequestStatus::Pending);
+        let asking = view.pending_requests().next().is_some();
         // (A sub-agent of its at work: it waits on it, not gone quiet.)
         let delegating = view.subagents_working() > 0;
         let liveness = match since_last {

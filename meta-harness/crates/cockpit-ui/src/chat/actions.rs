@@ -293,10 +293,10 @@ impl ActionProvider for ChatStreamState {
         // one's you're on, else the first's, so several at once are each
         // answered and no key is two's.
         if let Some(view) = view {
-            let pending = self.pending();
+            let pending = self.pending_in(view, &agents);
             let on = self.on_item();
             let on_request = pending.iter().find(|(index, _)| index.is_some() && *index == on).map(|(_, r)| r.id.clone());
-            let keyed = crate::request_card::keyed(pending.iter().map(|(_, r)| r), on_request.as_ref());
+            let keyed = crate::request_card::keyed(pending.iter().map(|(_, r)| *r), on_request.as_ref());
             for (index, request) in &pending {
                 let under = index.map(|i| i.to_string());
                 let under = under.as_deref().map_or(crate::request_card::Under::Nowhere, crate::request_card::Under::Place);

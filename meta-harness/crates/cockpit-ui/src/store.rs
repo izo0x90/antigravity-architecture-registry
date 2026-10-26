@@ -29,6 +29,8 @@ pub struct ThreadView {
     changed: Vec<u64>,
     requests: Vec<RuntimeRequest>,
     request_at: HashMap<RequestId, usize>,
+    /// Those still pending (places in `requests`), as they were asked.
+    pending: Vec<usize>,
     pub plan: Option<PlanArtifact>,
     pub usage: Option<Usage>,
     /// Events applied to this thread (each changes what's shown).
@@ -81,7 +83,7 @@ pub struct Seen {
 impl ThreadView {
     fn new(thread: Thread) -> Self {
         let epoch = EPOCHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Self { thread, turns: Vec::new(), rank: Vec::new(), items: Vec::new(), requests: Vec::new(), request_at: HashMap::new(), plan: None, usage: None, activity: 0, epoch, known_at: None, settled_at: None, replayed_news: None, news: 0, changed: Vec::new(), stream: Vec::new(), item_at: HashMap::new(), turn_at: HashMap::new(), shown_at: Vec::new(), request_items: HashMap::new(), arrivals: VecDeque::new(), subagents: Vec::new(), subagent_at: HashMap::new(), subagent_items: HashMap::new(), working: 0 }
+        Self { thread, turns: Vec::new(), rank: Vec::new(), items: Vec::new(), requests: Vec::new(), request_at: HashMap::new(), pending: Vec::new(), plan: None, usage: None, activity: 0, epoch, known_at: None, settled_at: None, replayed_news: None, news: 0, changed: Vec::new(), stream: Vec::new(), item_at: HashMap::new(), turn_at: HashMap::new(), shown_at: Vec::new(), request_items: HashMap::new(), arrivals: VecDeque::new(), subagents: Vec::new(), subagent_at: HashMap::new(), subagent_items: HashMap::new(), working: 0 }
     }
 
     /// Its sub-agents, in the order they started.
@@ -305,14 +307,26 @@ impl ThreadView {
 
     /// `request` put in (replacing the one with its id): whether it changed.
     fn put_request(&mut self, request: RuntimeRequest) -> bool {
-        match self.request_at.get(&request.id) {
-            Some(&at) => std::mem::replace(&mut self.requests[at], request) != self.requests[at],
+        let pending = request.status == RequestStatus::Pending;
+        let (at, changed) = match self.request_at.get(&request.id) {
+            Some(&at) => (at, std::mem::replace(&mut self.requests[at], request) != self.requests[at]),
             None => {
                 self.request_at.insert(request.id.clone(), self.requests.len());
                 self.requests.push(request);
-                true
+                (self.requests.len() - 1, true)
             }
+        };
+        match (pending, self.pending.contains(&at)) {
+            (true, false) => self.pending.push(at),
+            (false, true) => self.pending.retain(|p| *p != at),
+            _ => {}
         }
+        changed
+    }
+
+    /// Its requests still pending, as they were asked.
+    pub fn pending_requests(&self) -> impl Iterator<Item = &RuntimeRequest> {
+        self.pending.iter().map(|at| &self.requests[*at])
     }
 
     /// `turn` put in (replacing the one with its id): whether it changed.
@@ -636,6 +650,22 @@ mod tests {
         store.apply(in_turn("its", "two"), 2.0);
         store.apply(turn("two", 2, TurnStatus::Completed), 3.0);
         assert_eq!(news(&store), 2, "its answer, its turn's end");
+    }
+
+    /// The requests still pending are kept as such (read without going
+    /// through all asked): asked, they're there; answered, gone.
+    #[test]
+    fn the_pending_requests_are_kept() {
+        let mut store = Store::default();
+        store.apply(thread(ThreadStatus::Idle), 0.0);
+        for id in ["r1", "r2", "r3"] {
+            store.apply(request(id, RequestStatus::Pending), 0.0);
+        }
+        store.apply(request("r2", RequestStatus::Resolved), 0.0);
+        let pending = |store: &Store| store.threads[&ThreadId::new("t")].pending_requests().map(|r| r.id.to_string()).collect::<Vec<_>>();
+        assert_eq!(pending(&store), ["r1", "r3"]);
+        store.apply(request("r1", RequestStatus::Cancelled), 0.0);
+        assert_eq!(pending(&store), ["r3"]);
     }
 
     fn request(id: &str, status: RequestStatus) -> ClientEvent {

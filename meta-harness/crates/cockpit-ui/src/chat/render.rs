@@ -230,7 +230,9 @@ impl ChatStreamState {
             // history marks where it was asked): each its card, a place of
             // the chat's; at most a share of the chat's height, scrolling
             // past that.
-            let pending = self.pending();
+            let agents = self.agents.clone();
+            let agents = agents.get();
+            let pending = agents.thread_in(&self.ui.slot).map(|view| self.pending_in(view, &agents)).unwrap_or_default();
             if !pending.is_empty() {
                 // (At least a card's title and its row of answers.)
                 let most = (whole * WAITING_SHARE).max(4.0 * ui.spacing().interact_size.y);

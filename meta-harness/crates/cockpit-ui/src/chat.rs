@@ -319,25 +319,19 @@ impl ChatStreamState {
     /// The stream item (its index) of the request waiting on you here.
     pub(crate) fn pending_item(&self) -> Option<usize> {
         let view = self.thread()?;
-        let agents = self.agents();
-        let here = self.shown();
-        view.requests().iter().filter(|r| agents.waits(r)).filter_map(|r| view.request_shown_at(&r.id)).find(|at| here.as_ref().is_none_or(|h| h.contains(at)))
+        self.pending_in(&view, &self.agents()).into_iter().find_map(|(at, _)| at)
     }
 
-    /// What waits on you: each request pending with no answer on its way,
-    /// as it was asked (the first asked first), with its item's place in
-    /// the stream (none: its item isn't there yet). Alone, a sub-agent's:
-    /// what waits in its work.
-    pub(crate) fn pending(&self) -> Vec<(Option<usize>, harness_contracts::RuntimeRequest)> {
-        let Some(view) = self.thread() else { return Vec::new() };
-        let agents = self.agents();
+    /// What waits on you in `view`: each request pending with no answer on
+    /// its way, as it was asked (the first asked first), with its item's
+    /// place in the stream (none: its item isn't there yet). Alone, a
+    /// sub-agent's: what waits in its work. (Read where they're kept.)
+    pub(crate) fn pending_in<'a>(&self, view: &'a ThreadView, agents: &Agents) -> Vec<(Option<usize>, &'a harness_contracts::RuntimeRequest)> {
         let here = self.shown();
-        view.requests()
-            .iter()
+        view.pending_requests()
             .filter(|r| agents.waits(r))
             .map(|r| (view.request_shown_at(&r.id), r))
             .filter(|(at, _)| here.as_ref().is_none_or(|h| at.is_some_and(|at| h.contains(&at))))
-            .map(|(at, r)| (at, r.clone()))
             .collect()
     }
 
