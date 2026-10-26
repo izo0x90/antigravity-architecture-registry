@@ -23,7 +23,7 @@
     - An agent that writes the project's files can edit `.nah/harnesses.toml` (how each harness launches, where its login lives); one with a shell can read any harness's saved login, since it runs as the server's user
     - The same exposure as running a harness natively with access outside the project folder. Options when it's taken up: move per-machine settings out of the project; run agents as a separate, restricted user
 
-- An agent's messages and a piece's label (left as is, 2026-10-26; from the chat cleanup's end review, `dev_docs/chat-cleanup-reviews/end-permissions.md` 3 and 4)
+- An agent's messages and a piece's label (left as is, 2026-10-26; from the chat cleanup's end review, its permissions report, items 3 and 4; in git history, commit 22ac268)
     - An agent's message to another agent arrives as a prompt. If it ends in a well-formed piece in the receiver's format, a replay shows it as chips with "content" laid out like what the server attached. Options: read pieces back only from messages the user sent, or check them against something an agent can't write
     - A piece's label carries the thing's raw subject (a terminal command's every line, another slot's session id) even when the reader can't read the thing. When it can't, the label could carry an opaque id
 
@@ -120,7 +120,7 @@ it impossible to write or modify the  location  field in the registry using the 
     - Likely the positions worked out when the screen is resized or scaled are wrong
     - Check tap positions against what's drawn at phone sizes, and after resizing
     - A first touch that drags on the code view's text selects it rather than moving the code: egui gives a press to what was drawn there the frame before, and the view only learns the pointer is a finger from that touch (after any earlier touch it moves it: `CockpitApp::fingers`)
-- Cockpit: make the buffer boundary a compiler rule, not a lint (step 5 of `dev_docs/buffers-one-protocol-plan.md`, skipped)
+- Cockpit: make the buffer boundary a compiler rule, not a lint (step 5 of the buffers-one-protocol plan, skipped; the plan is in git history, commit 22ac268)
     - Split `cockpit-ui` into a protocol crate (traits, `Shared`, `Target`/`Place`, the shared services), a buffers crate (each buffer, fields private: only constructors and the traits public) and the shell
     - Buffers' fields are still `pub`; the shell can't reach them today only because it holds `Box<dyn Buffer>`, and the lints in `lint.rs` only match text
     - Shared types: private fields behind accessors where they guard a rule (`Shared`, `Known`, `RowData`, `Drawing` were added with public fields); ast-grep's `rust-no-public-struct-fields` flags them
@@ -156,7 +156,7 @@ it impossible to write or modify the  location  field in the registry using the 
     - The palette calls `view.search(...)` on a buffer directly (`take_search`): go through the buffer's actions/asks like everything else
     - Check what else it reads or changes inside buffers or the shell, and whether its field takes the keyboard on its own
 
-- Tags for navigating (later; the tags core is planned in `dev_docs/terminal-view-and-tags-plan.md`)
+- Tags for navigating (later; the tags core is built: the terminal-view-and-tags plan is in git history, commit 22ac268)
     - Some tags are for moving around, kept for a long time, not references: jumping to one shouldn't always need the fuzzy picker
     - Something you can see and reach in a key or two, so you don't have to remember them (in the style of ThePrimeagen's Harpoon)
     - Decide how a navigation tag differs from a reference tag (a kind, a pin, an order)

@@ -1,7 +1,8 @@
 # Chat cleanup: findings
 
 What each stopping point found, and what happened to it. Reports are in
-`chat-cleanup-reviews/`. The plan is `chat-cleanup-plan.md`.
+`chat-cleanup-reviews/`. The plan is `chat-cleanup-plan.md`. (Plan and
+reports are in git history, commit 22ac268; kept here: the open decisions.)
 
 ## Along the way
 
