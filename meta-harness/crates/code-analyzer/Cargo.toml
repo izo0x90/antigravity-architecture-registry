@@ -2,6 +2,7 @@
 name = "code-analyzer"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "Our analyzer: reads each file once with ast-grep by its language pack (definitions, calls, data flow, placeholders, code-rule matches), and links names across files into one result."
 
 [dependencies]
@@ -16,7 +17,7 @@ streaming-iterator = "0.1"
 serde = { version = "1.0.229", features = ["derive"] }
 ignore = "0.4"
 rayon = "1"
-imbl = "6"
+imbl = "7"
 regex = "1"
 serde_json = "1.0"
 sha2 = "0.10"

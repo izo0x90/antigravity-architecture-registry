@@ -2,6 +2,7 @@
 name = "nah-changes"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "The project's changes, from git: comparisons, changed files, one file's changes, and the timeline's snapshots. Reads the user's repository; writes only its own snapshot refs."
 
 [dependencies]

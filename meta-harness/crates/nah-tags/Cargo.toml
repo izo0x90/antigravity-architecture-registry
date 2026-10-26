@@ -2,6 +2,7 @@
 name = "nah-tags"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "Tags: names given to things in the project, kept, told on the event stream; the things themselves are the things layer's (nah-things)."
 
 [features]

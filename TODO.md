@@ -191,6 +191,8 @@ it impossible to write or modify the  location  field in the registry using the 
     - Validation as part of the system: reviewers that run on a set of changes at a plan's checkpoints; a plan's steps and checkpoints as something a harness drives
     - Reuse what this build used by hand: the reviewer briefs (in `.nah/reviewers.toml`'s shape) and the build-and-validate process (`dev_docs/process/build-and-validate.md`)
 
+- Replace `ttf-parser` in `arch-graph` (its text measuring, `tree/measure.rs`): unmaintained (RUSTSEC-2026-0192), accepted in `meta-harness/deny.toml` until then (2026-10-26)
+
 - A flaky test: `arch-service` `gates.rs` (a content-identical touch) failed once under the whole suite's parallel load (2026-10-24, its trigger setup at line 69: likely the database locked by another test) and passed three runs out of three alone
 - Another: `nah-terminal`'s library tests failed once under the whole suite while the cockpit's tests built and ran beside them (2026-10-24, which test wasn't kept: the suite prints only the last lines), then passed six runs out of six alone. Rerun the suite with the full output kept to name it
     - Find what it shares with the tests beside it (a database file, a folder) and give it its own

@@ -79,6 +79,15 @@ the toolchain. It's safe to run any time; `DEEP=1` also wipes the whole
 build cache (the next build takes about 10 minutes). Builds run the same
 cleanup's build part on their own when the disk runs low.
 
+`make dev-setup`, once per machine, installs the development tools at
+CI's versions (gitleaks, cargo-deny, ast-grep, and Rust's clippy, rustfmt
+and browser target) and turns on the repository's git hooks: each commit
+is checked for secrets, and each push runs `make lint`. `make lint` runs
+clippy (the server and the cockpit's browser build), the structural rules
+in `rules/ast-grep`, gitleaks over the whole history (`.gitleaks.toml`
+says what's known not to be a secret) and cargo-deny over the
+dependencies (`deny.toml`: known security holes, licences, sources).
+
 `make check` runs the lints and every test. The tests need `git` and
 `python3` (stand-in language servers). A test that needs something more
 (the network, `ast-grep`, Chrome, an installed harness) ends its name with

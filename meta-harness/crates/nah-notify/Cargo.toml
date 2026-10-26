@@ -2,6 +2,7 @@
 name = "nah-notify"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "Notifications: what needs the user and what happened, from the event stream, kept and handed to adapters."
 
 [features]

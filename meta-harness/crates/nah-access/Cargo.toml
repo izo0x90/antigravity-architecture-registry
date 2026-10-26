@@ -2,6 +2,7 @@
 name = "nah-access"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "What each caller may do: capabilities, the roles that hold them, and the one check."
 
 [dependencies]

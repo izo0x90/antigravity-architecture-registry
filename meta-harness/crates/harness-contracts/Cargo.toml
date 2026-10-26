@@ -2,6 +2,7 @@
 name = "harness-contracts"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "Harness-neutral wire types shared by the meta-harness server, provider adapters and clients"
 
 [dependencies]

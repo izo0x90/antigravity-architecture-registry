@@ -11,16 +11,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # gitleaks reads the whole history.
+          fetch-depth: 0
       # The versions development uses (agy.yaml's RUST_VERSION), so new
       # lints don't fail a build nothing changed in.
       - uses: dtolnay/rust-toolchain@1.90.0
         with:
           components: clippy, rust-analyzer
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: meta-harness
-      - name: ast-grep
-        run: cargo install ast-grep --version 0.45.3 --locked
+      - name: Development tools (gitleaks, cargo-deny, ast-grep; as `make dev-setup`)
+        run: |
+          meta-harness/scripts/dev-setup.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Lint and test
         run: make check
       - name: Benchmarks (layout, walk, link, search), each once

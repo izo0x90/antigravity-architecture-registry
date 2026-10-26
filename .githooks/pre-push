@@ -1,0 +1,5 @@
+#!/bin/sh
+# Every push: the lints pass (clippy for the server and the browser build,
+# the structural rules, no secrets in the history, the dependencies).
+# Tools: `make dev-setup`.
+cd "$(git rev-parse --show-toplevel)" && exec make lint

@@ -2,6 +2,7 @@
 name = "workspace-fs"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "Text file access confined to a set of workspace roots"
 
 [dependencies]

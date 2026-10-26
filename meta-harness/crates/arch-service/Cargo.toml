@@ -2,6 +2,7 @@
 name = "arch-service"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "The architecture service: plan and index storage, incremental ingestion, plan operations and checks, approvals, contracts and implementation verification."
 
 [dependencies]

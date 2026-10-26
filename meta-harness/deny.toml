@@ -1,0 +1,41 @@
+# cargo-deny: what the dependencies may be (`make lint`, CI).
+
+[graph]
+# Every platform's dependencies, as cargo resolves them.
+all-features = false
+
+[advisories]
+# RustSec's database of known security holes and unmaintained crates: any
+# found fails the check. One accepted goes in `ignore`, with why.
+ignore = [
+    # Unmaintained, no maintained version to move to (2026-10-26):
+    { id = "RUSTSEC-2025-0141", reason = "bincode: through fff-search's index store (heed); upstream's to replace" },
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml: through serde_yaml in ast-grep-config; upstream's to replace" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser: arch-graph's own use; replacing it is in TODO.md" },
+]
+
+[licenses]
+# The project is AGPL-3.0; these are compatible with it (permissive, or
+# weak copyleft by file, MPL-2.0). Fonts and data have their own.
+allow = [
+    "MIT", "MIT-0", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "0BSD", "ISC",
+    "Zlib", "BSL-1.0", "Unlicense", "CC0-1.0", "Unicode-3.0", "MPL-2.0",
+    "CDLA-Permissive-2.0", "OFL-1.1", "Ubuntu-font-1.0",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# Our own crates aren't published (`publish = false`).
+ignore = true
+
+[bans]
+# Two versions of one crate happen through dependencies; not an error.
+multiple-versions = "allow"
+wildcards = "deny"
+# Our own crates name each other by path, with no version: not a wildcard.
+allow-wildcard-paths = true
+
+[sources]
+# Crates only from crates.io.
+unknown-registry = "deny"
+unknown-git = "deny"

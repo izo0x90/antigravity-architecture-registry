@@ -2,6 +2,7 @@
 name = "harness-acp"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "The driver for any ACP (Agent Client Protocol) agent, configured by its harness pack's settings"
 
 [dependencies]

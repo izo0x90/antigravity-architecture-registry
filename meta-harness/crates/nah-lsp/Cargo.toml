@@ -2,6 +2,7 @@
 name = "nah-lsp"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "A generic language server client: one process per language, positions as bytes."
 
 [dependencies]

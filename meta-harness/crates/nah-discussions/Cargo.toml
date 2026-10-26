@@ -2,6 +2,7 @@
 name = "nah-discussions"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "Discussions: a question or a change asked for on any thing in the project, and the back-and-forth on it; kept in the state database (what text is where) and files (the text), told on the event stream. The one discussion engine."
 
 [features]

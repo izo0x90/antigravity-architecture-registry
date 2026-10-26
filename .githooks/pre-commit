@@ -1,0 +1,10 @@
+#!/bin/sh
+# Every commit: nothing that looks like a secret goes in (what's staged).
+# Tools: `make dev-setup`.
+tools="${NAH_TOOLS:-$HOME/.local/bin}"
+gitleaks="$(command -v gitleaks || echo "$tools/gitleaks")"
+if [ ! -x "$gitleaks" ]; then
+  echo "pre-commit: gitleaks isn't installed: run make dev-setup" >&2
+  exit 1
+fi
+exec "$gitleaks" git --pre-commit --staged --redact --no-banner

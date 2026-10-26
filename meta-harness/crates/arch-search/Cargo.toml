@@ -2,6 +2,7 @@
 name = "arch-search"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "One way of matching what's typed, everywhere: symbols and actions matched with neo_frizbee; files and file contents found with fff-search (server only)."
 
 [features]

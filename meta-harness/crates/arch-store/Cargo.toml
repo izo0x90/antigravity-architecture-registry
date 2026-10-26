@@ -2,6 +2,7 @@
 name = "arch-store"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "Where the analysis is kept between runs: the plan's tables in SQLite, every row belonging to one file. Disposable: the code is the source of truth, so a store that can't be read is made again."
 
 [dependencies]

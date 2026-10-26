@@ -2,6 +2,7 @@
 name = "nah-timeline"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "The timeline: snapshots of the project's files whenever a session's turn starts or ends, the windows between them and who was working, kept and pruned."
 
 [dependencies]

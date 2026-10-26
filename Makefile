@@ -1,17 +1,32 @@
-.PHONY: start stop status clean restart log lint check ui sandbox-dev sandbox-clean
+.PHONY: start stop status clean restart log lint check ui sandbox-dev sandbox-clean dev-setup
 
-AST_GREP ?= $(shell which ast-grep 2>/dev/null || echo "$$HOME/.local/share/cargo/bin/ast-grep")
+# The tools `make dev-setup` installs (in ~/.local/bin, unless on PATH).
+TOOLS ?= $(HOME)/.local/bin
+AST_GREP ?= $(shell which ast-grep 2>/dev/null || echo "$(TOOLS)/ast-grep")
+GITLEAKS ?= $(shell which gitleaks 2>/dev/null || echo "$(TOOLS)/gitleaks")
+CARGO_DENY ?= $(shell which cargo-deny 2>/dev/null || echo "$(TOOLS)/cargo-deny")
 # Relative to meta-harness/ (cargo's default); overridden by sandbox-dev.
 CARGO_TARGET_DIR ?= target
 export CARGO_TARGET_DIR
 PID_FILE = mcp_server.pid
 LOG_FILE = mcp_server.log
 
+# The development tools at CI's versions, and the git hooks (a secret
+# check on each commit, `make lint` on each push). Once per machine.
+dev-setup:
+	meta-harness/scripts/dev-setup.sh
+
 lint:
-	@echo "==> Running Cargo Clippy in meta-harness..."
+	@echo "==> Clippy: the server and every crate"
 	cd meta-harness && cargo clippy --workspace --all-targets -- -D warnings
-	@echo "==> Running ast-grep structural checks..."
+	@echo "==> Clippy: the cockpit's browser build"
+	cd meta-harness && cargo clippy -p cockpit-ui --target wasm32-unknown-unknown -- -D warnings
+	@echo "==> ast-grep: the structural rules"
 	$(AST_GREP) scan
+	@echo "==> gitleaks: no secrets in anything committed"
+	$(GITLEAKS) git --redact --no-banner
+	@echo "==> cargo-deny: the dependencies (security, licences, sources)"
+	cd meta-harness && $(CARGO_DENY) check
 
 check: lint
 	@echo "==> Running Cargo Test in meta-harness..."

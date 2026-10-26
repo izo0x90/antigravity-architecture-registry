@@ -40,7 +40,7 @@ fn unzip(archive: &Path, into: &Path, extract: &[String]) -> Result<(), String> 
     let mut zip = zip::ZipArchive::new(open(archive)?).map_err(|e| e.to_string())?;
     for i in 0..zip.len() {
         let mut member = zip.by_index(i).map_err(|e| e.to_string())?;
-        let name = member.name().to_owned();
+        let name = member.name().map_err(|e| e.to_string())?.into_owned();
         if !wanted(&name, extract) {
             continue;
         }
@@ -59,7 +59,7 @@ fn unzip(archive: &Path, into: &Path, extract: &[String]) -> Result<(), String> 
             set_mode(&target, mode)?;
         }
     }
-    check_found(extract, |e| (0..zip.len()).any(|i| zip.name_for_index(i).is_some_and(|n| wanted(n, std::slice::from_ref(e)))))
+    check_found(extract, |e| (0..zip.len()).any(|i| zip.name_for_index(i).is_some_and(|n| n.is_ok_and(|n| wanted(&n, std::slice::from_ref(e))))))
 }
 
 fn untar(reader: impl Read, into: &Path, extract: &[String]) -> Result<(), String> {

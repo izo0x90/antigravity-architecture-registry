@@ -1,0 +1,8 @@
+# gitleaks: its default rules, and what's known not to be a secret (each
+# with why). Run by the pre-commit hook and `make lint`.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "The WebSocket standard's sample key (RFC 6455: 'the sample nonce'), in the server's tests"
+regexes = ['''dGhlIHNhbXBsZSBub25jZQ==''']
