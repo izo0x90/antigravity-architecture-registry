@@ -18,13 +18,59 @@ use harness_contracts::{
 use crate::net::{NetClient, NetResult, OpenSlotSession, SlotOpened};
 use crate::store::{Store, ThreadView};
 
-/// The lead's session as the AGENT light and the chat's banner see it.
+/// How an agent slot is doing: the one answer every place that names an
+/// agent reads (the AGENT light, the chat, a discussion, the inbox, the
+/// plan tree, the pickers), with its words and what can be done.
 #[derive(Debug, Clone, PartialEq)]
-pub enum SessionStatus {
+pub enum AgentState {
+    /// The slot was closed.
+    Gone,
+    /// It can't run: why (its harness's, its slot's, what failed).
+    CantRun(String),
+    /// A session starting.
+    Starting,
+    /// No session running; its last one, when it can be resumed.
+    NoSession { resume: Option<NativeId> },
+    /// Its session waits on you (a request of its).
+    WaitingOnYou,
+    /// At work: its turn, or (after it) its sub-agents, how many at work.
+    Working { subagents: usize },
+    /// Its session open, nothing running.
     Idle,
-    Connecting,
-    Connected(String),
-    Failed(String),
+}
+
+impl AgentState {
+    /// In a few words (after its name: "lead: no session running").
+    pub fn words(&self) -> String {
+        match self {
+            Self::Gone => "closed".into(),
+            Self::CantRun(why) => format!("can't run: {why}"),
+            Self::Starting => "starting a session".into(),
+            Self::NoSession { .. } => "no session running".into(),
+            Self::WaitingOnYou => "waiting on you".into(),
+            Self::Working { subagents: 0 } => "working".into(),
+            Self::Working { subagents: 1 } => "working · 1 sub-agent".into(),
+            Self::Working { subagents } => format!("working · {subagents} sub-agents"),
+            Self::Idle => "idle".into(),
+        }
+    }
+
+    pub fn tone(&self) -> crate::actions::Tone {
+        use crate::actions::Tone;
+        match self {
+            Self::CantRun(_) => Tone::Error,
+            Self::WaitingOnYou => Tone::Warn,
+            Self::Starting | Self::Working { .. } => Tone::Info,
+            Self::Idle => Tone::Ok,
+            Self::Gone | Self::NoSession { .. } => Tone::Muted,
+        }
+    }
+
+    /// It's doing something (working, starting, waiting on you): what's
+    /// waiting on it isn't stuck.
+    pub fn busy(&self) -> bool {
+        matches!(self, Self::Starting | Self::WaitingOnYou | Self::Working { .. })
+    }
 }
 
 /// What a buffer asks the agents to do, for the agent slot it shows (its
@@ -264,27 +310,57 @@ impl Agents {
         self.store.slots.get(slot)
     }
 
-    /// The lead's session (the AGENT light).
-    pub fn lead_status(&self) -> SessionStatus {
-        let lead = SlotId::new(LEAD);
-        if let Some(err) = self.errors.get(&lead) {
-            return SessionStatus::Failed(err.clone());
+    /// How agent slot `slot` is doing.
+    pub fn state(&self, slot: &SlotId) -> AgentState {
+        if let Some(err) = self.errors.get(slot) {
+            return AgentState::CantRun(err.clone());
         }
-        let thread = self.thread_id_in(&lead);
-        match thread.as_ref().and_then(|t| self.store.threads.get(t)).map(|t| t.thread.status) {
-            Some(ThreadStatus::Starting) => SessionStatus::Connecting,
-            Some(ThreadStatus::Error) => SessionStatus::Failed("the agent reported an error".into()),
-            Some(ThreadStatus::Closed) => SessionStatus::Failed("the agent session closed".into()),
-            Some(_) => SessionStatus::Connected(thread.map(|t| t.to_string()).unwrap_or_default()),
-            None if self.opening.contains(&lead) => SessionStatus::Connecting,
-            None => SessionStatus::Idle,
+        let Some(its) = self.store.slots.get(slot) else {
+            if self.store.closed.contains(slot) {
+                return AgentState::Gone;
+            }
+            return self.harness_problem(slot).map_or(AgentState::NoSession { resume: None }, AgentState::CantRun);
+        };
+        if let harness_contracts::SlotStatus::Unavailable { reason, .. } = &its.status {
+            return AgentState::CantRun(reason.clone());
+        }
+        let resume = its.current_session().filter(|s| s.thread.is_none()).and_then(|s| s.native_id.clone());
+        let Some(view) = self.thread_in(slot) else {
+            if self.opening.contains(slot) {
+                return AgentState::Starting;
+            }
+            return self.harness_problem(slot).map_or(AgentState::NoSession { resume }, AgentState::CantRun);
+        };
+        match view.thread.status {
+            ThreadStatus::Starting => AgentState::Starting,
+            ThreadStatus::Error => AgentState::CantRun("the agent reported an error".into()),
+            ThreadStatus::Closed => AgentState::NoSession { resume },
+            _ if view.pending_requests().any(|r| self.waits(r)) => AgentState::WaitingOnYou,
+            _ if view.running().is_some() || view.subagents_working() > 0 => AgentState::Working { subagents: view.subagents_working() },
+            _ => AgentState::Idle,
         }
     }
 
-    /// Why the lead's harness (else the first) can't start, and how to fix
+    /// Whose move it is in discussion `d`, in a few words ("waiting on
+    /// you", "waiting on lead", "settled"; the agent's state when it isn't
+    /// at it: "waiting on lead: no session running"), and whether it's
+    /// yours.
+    pub fn whose(&self, d: &harness_contracts::Discussion) -> (String, bool) {
+        match d.whose_move() {
+            harness_contracts::Move::User => ("waiting on you".to_owned(), true),
+            harness_contracts::Move::Agent(slot) => {
+                let state = self.state(&SlotId::new(slot.clone()));
+                let waiting = format!("waiting on {}", d.name_of(&slot));
+                (if state.busy() || state == AgentState::Idle { waiting } else { format!("{waiting}: {}", state.words()) }, false)
+            }
+            harness_contracts::Move::Nobody => ("settled".to_owned(), false),
+        }
+    }
+
+    /// Why `slot`'s harness (else the first) can't start, and how to fix
     /// it, as its instance says.
-    pub fn harness_problem(&self) -> Option<String> {
-        let instance = self.instance_in(&SlotId::new(LEAD))?;
+    fn harness_problem(&self, slot: &SlotId) -> Option<String> {
+        let instance = self.instance_in(slot)?;
         matches!(instance.status, ProviderStatus::Unavailable { .. } | ProviderStatus::Error { .. }).then(|| format!("{} {}", instance.display_name, status_words(&instance.status)))
     }
 
@@ -560,12 +636,13 @@ pub(crate) mod tests {
     #[test]
     fn a_harness_that_cant_start_says_why_and_the_fix() {
         let mut agents = Agents::default();
-        assert_eq!(agents.harness_problem(), None);
+        let lead = SlotId::new(LEAD);
+        assert_eq!(agents.state(&lead), AgentState::NoSession { resume: None });
         let reason = "antigravity-acp isn't installed (fix: meta-harness pack install antigravity-acp)";
         agents.apply(ClientEvent::InstanceUpdated { snapshot: snapshot(ProviderStatus::Unavailable { reason: reason.into() }) });
-        assert_eq!(agents.harness_problem().as_deref(), Some(format!("Antigravity can't run: {reason}").as_str()), "the AGENT light's hint");
+        assert_eq!(agents.state(&lead), AgentState::CantRun(format!("Antigravity can't run: {reason}")), "the AGENT light's hint");
         agents.apply(ClientEvent::InstanceUpdated { snapshot: snapshot(ProviderStatus::Ready) });
-        assert_eq!(agents.harness_problem(), None);
+        assert_eq!(agents.state(&lead), AgentState::NoSession { resume: None });
     }
 
     #[test]
@@ -573,7 +650,35 @@ pub(crate) mod tests {
         let mut agents = Agents::default();
         let (ctx, net) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"));
         agents.act(SlotId::new(LEAD), Act::Prompt { message: "hello".into(), add: false }, &net, &ctx);
-        assert!(matches!(agents.lead_status(), SessionStatus::Failed(e) if e.contains("No harness instance")));
+        assert!(matches!(agents.state(&SlotId::new(LEAD)), AgentState::CantRun(e) if e.contains("No harness instance")));
         assert_eq!(agents.error(&SlotId::new(LEAD)).map(String::as_str), Some("No harness instance is available yet."), "said in the lead's chat");
+    }
+
+    /// One answer to how an agent is, as every place names it: idle,
+    /// working (its sub-agents too), waiting on you; with no session, its
+    /// last to resume; and a discussion waiting on it says so then.
+    #[test]
+    fn how_an_agent_is_is_one_answer() {
+        use harness_contracts::{AdapterEvent, Turn, TurnId, TurnStatus};
+        let lead = SlotId::new(LEAD);
+        let mut agents = Agents::default();
+        crate::chat::tests::conversation_events().into_iter().for_each(|e| agents.apply(e));
+        assert_eq!(agents.state(&lead), AgentState::Idle);
+        let turn = |status| ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("now"), thread_id: ThreadId::new("t"), ordinal: 2, status, failure: None, usage: None } } };
+        agents.apply(turn(TurnStatus::Running));
+        assert_eq!(agents.state(&lead), AgentState::Working { subagents: 0 });
+        assert_eq!(agents.state(&lead).words(), "working");
+        // Its turn over, a sub-agent of its still at work: working.
+        agents.apply(turn(TurnStatus::Completed));
+        let sub = harness_contracts::Subagent { id: harness_contracts::SubagentId::new("a"), thread_id: ThreadId::new("t"), item_id: harness_contracts::ItemId::new("i50"), title: "Helper".into(), kind: None, description: None, prompt: None, answer: None, status: harness_contracts::SubagentStatus::Running, started_ms: 0, ended_ms: None, can_cancel: false };
+        agents.apply(ClientEvent::Session { event: AdapterEvent::SubagentUpdated { subagent: sub } });
+        assert_eq!(agents.state(&lead).words(), "working · 1 sub-agent");
+        // No session running: its last, to resume.
+        let mut slot = crate::chat::tests::lead(None);
+        slot.sessions[0].native_id = Some(NativeId::new("n1"));
+        agents.apply(ClientEvent::SlotUpdated { slot });
+        assert_eq!(agents.state(&lead), AgentState::NoSession { resume: Some(NativeId::new("n1")) });
+        let discussion = crate::discussions::tests::discussion(1, harness_contracts::Subject::CodeFile { path: "a.rs".into() }, harness_contracts::DiscussionStatus::Open);
+        assert_eq!(agents.whose(&discussion).0, "waiting on lead: no session running");
     }
 }

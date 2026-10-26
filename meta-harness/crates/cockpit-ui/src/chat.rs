@@ -10,7 +10,7 @@ use std::cell::Ref;
 use egui::{Color32, Frame, Pos2, Rect, RichText, Stroke, Vec2};
 use harness_contracts::{
     ConfigKind, McpServer, McpTransport, NativeId, OptionValue, ContentBlock, InstanceId, ItemBody, ItemStatus, ModelSelection, NoticeLevel, PlanBody,
-    PlanStep, ProviderSnapshot, ProviderStatus, RuntimeMode, RuntimePolicy, SessionKey, Slot, SlotId, SlotStatus,
+    PlanStep, ProviderSnapshot, ProviderStatus, RuntimeMode, RuntimePolicy, SessionKey, Slot, SlotId,
     StepStatus, SteerInput, ThreadId, TurnItem, TurnStatus, LEAD,
 };
 

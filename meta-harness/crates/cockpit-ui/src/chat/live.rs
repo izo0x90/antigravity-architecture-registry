@@ -35,7 +35,7 @@ impl ChatStreamState {
         // (Asking till your answer's taken: answered here, it's on its way.)
         let asking = view.pending_requests().next().is_some();
         // (A sub-agent of its at work: it waits on it, not gone quiet.)
-        let delegating = view.subagents_working() > 0;
+        let delegating = matches!(self.agents().state(&self.ui.slot), crate::agents::AgentState::Working { subagents } if subagents > 0);
         let liveness = match since_last {
             _ if !self.connected => Liveness::Disconnected,
             _ if asking => Liveness::Asking,
@@ -62,10 +62,8 @@ impl ChatStreamState {
     /// Whether the agent can still be reached, in words (for when it's
     /// been quiet too long): its slot's, its harness's state.
     fn reach(&self) -> Option<String> {
-        if let Some(slot) = self.slot()
-            && let SlotStatus::Unavailable { reason, .. } = &slot.status
-        {
-            return Some(format!("it can't run: {reason}"));
+        if let state @ crate::agents::AgentState::CantRun(_) = self.agents().state(&self.ui.slot) {
+            return Some(format!("it {}", state.words()));
         }
         Some(match &self.instance()?.status {
             ProviderStatus::Ready => "the server still reaches it".into(),

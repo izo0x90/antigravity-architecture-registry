@@ -27,6 +27,8 @@ pub struct PlanTree {
     seen: u64,
     /// Rows asked for, answered once the plan's read.
     asked: VecDeque<u64>,
+    /// Whose move it is in each of its discussions, as last said.
+    whose: Whose,
 }
 
 /// A card's section's title, as the card says it (`logic`: Logic steps).
@@ -34,30 +36,33 @@ fn titled(section: &str) -> String {
     crate::card::Section::from_key(section).map_or_else(|| section.to_owned(), |s| s.title().to_owned())
 }
 
-/// Whose move it is in a discussion, in a few words.
-fn whose(d: &Discussion) -> String {
-    crate::conversation::whose(d).0
+/// Whose move it is in each discussion, in a few words (as the agents
+/// say it), by its id.
+pub(crate) type Whose = std::collections::BTreeMap<DiscussionId, String>;
+
+fn whose(d: &Discussion, said: &Whose) -> String {
+    said.get(&d.id).cloned().unwrap_or_default()
 }
 
 /// The discussions not settled on a part, in a few words for its row
 /// (`1 waiting on you, 2 on lead`); none when there are none.
-fn waiting(on: &[&Discussion]) -> Option<String> {
+fn waiting(on: &[&Discussion], said: &Whose) -> Option<String> {
     let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for d in on.iter().filter(|d| d.status != DiscussionStatus::Settled) {
-        *counts.entry(whose(d)).or_default() += 1;
+        *counts.entry(whose(d, said)).or_default() += 1;
     }
     (!counts.is_empty()).then(|| counts.into_iter().map(|(who, n)| format!("{n} {who}")).collect::<Vec<_>>().join(", "))
 }
 
 /// A discussion's row: its id, what it is and asks, whose move it is.
-fn discussion_row(d: &Discussion, parent: Option<&str>) -> RowData {
+fn discussion_row(d: &Discussion, parent: Option<&str>, said: &Whose) -> RowData {
     let asking: String = d.asking().lines().next().unwrap_or_default().chars().take(80).collect();
-    RowData { key: format!("discussion:{}", d.id), label: format!("{} {}: {asking}", d.id, d.kind.words()), kind: whose(d), parent: parent.map(str::to_owned), more: 0 }
+    RowData { key: format!("discussion:{}", d.id), label: format!("{} {}: {asking}", d.id, d.kind.words()), kind: whose(d, said), parent: parent.map(str::to_owned), more: 0 }
 }
 
 /// The rows of `plan`: its own discussions, items (nested), then
 /// components and their sections; under each part, the discussions on it.
-pub(crate) fn rows_of(plan: &Plan, discussions: &[Discussion]) -> Rows {
+pub(crate) fn rows_of(plan: &Plan, discussions: &[Discussion], said: &Whose) -> Rows {
     let on = |subject: &Subject| discussions.iter().filter(|d| d.on.subject == *subject).collect::<Vec<_>>();
     // A part's row says what its discussions wait on (`also`: those of what
     // hangs off it, listed after: a component's relations').
@@ -65,15 +70,15 @@ pub(crate) fn rows_of(plan: &Plan, discussions: &[Discussion]) -> Rows {
         let here = on(&subject);
         let key = row.key.clone();
         let counted: Vec<&Discussion> = here.iter().chain(also).copied().collect();
-        let kind = match (waiting(&counted), row.kind.is_empty()) {
+        let kind = match (waiting(&counted, said), row.kind.is_empty()) {
             (Some(words), true) => words,
             (Some(words), false) => format!("{} · {words}", row.kind),
             (None, _) => row.kind,
         };
         rows.push(RowData { kind, ..row });
-        rows.extend(here.into_iter().map(|d| discussion_row(d, Some(&key))));
+        rows.extend(here.into_iter().map(|d| discussion_row(d, Some(&key), said)));
     };
-    let mut rows: Vec<RowData> = on(&Subject::Plan { plan: plan.id.clone() }).into_iter().map(|d| discussion_row(d, None)).collect();
+    let mut rows: Vec<RowData> = on(&Subject::Plan { plan: plan.id.clone() }).into_iter().map(|d| discussion_row(d, None, said)).collect();
     for i in &plan.items {
         let row = RowData { key: format!("item:{}", i.id), label: i.title.clone(), kind: i.state.name().to_owned(), parent: i.parent.as_ref().map(|p| format!("item:{p}")), more: 0 };
         part(&mut rows, row, Subject::PlanItem { plan: plan.id.clone(), item: i.id.0.clone() }, &[]);
@@ -87,7 +92,7 @@ pub(crate) fn rows_of(plan: &Plan, discussions: &[Discussion]) -> Rows {
             let row = RowData { key: format!("section:{}:{s}", c.id), label: titled(s), kind: String::new(), parent: Some(key.clone()), more: 0 };
             part(&mut rows, row, Subject::PlanSection { plan: plan.id.clone(), id: c.id.clone(), section: s.to_owned() }, &[]);
         }
-        rows.extend(related.into_iter().map(|d| discussion_row(d, Some(&key))));
+        rows.extend(related.into_iter().map(|d| discussion_row(d, Some(&key), said)));
     }
     Rows { rows, dropped: Vec::new(), cut: None }
 }
@@ -136,18 +141,29 @@ impl TreeSource for PlanTree {
             (None, _) => Err("No plan to show: show one in the graph (its source), and it shows here.".to_owned()),
             (Some(_), None) => return Vec::new(),
             (Some(_), Some(Err(e))) => Err(e.clone()),
-            (Some(_), Some(Ok(plan))) => Ok(rows_of(plan, &self.discussions)),
+            (Some(_), Some(Ok(plan))) => Ok(rows_of(plan, &self.discussions, &self.whose)),
         };
         self.asked.drain(..).map(|n| (n, answer.clone())).collect()
     }
 
-    /// The plan the desk reads, read again or discussed: its rows again.
+    /// The plan the desk reads, read again or discussed, or whose move it
+    /// is in its discussions said otherwise (the agents' states): its rows
+    /// again.
     fn share(&mut self, shared: &Shared) -> bool {
-        let Some(review) = shared.review_since(&mut self.seen) else { return false };
-        self.plan.clone_from(&review.plan);
-        self.read.clone_from(&review.read);
-        self.discussions.clone_from(&review.discussions);
-        true
+        let read = match shared.review_since(&mut self.seen) {
+            Some(review) => {
+                self.plan.clone_from(&review.plan);
+                self.read.clone_from(&review.read);
+                self.discussions.clone_from(&review.discussions);
+                true
+            }
+            None => false,
+        };
+        let agents = shared.agents.get();
+        let whose: Whose = self.discussions.iter().map(|d| (d.id.clone(), agents.whose(d).0)).collect();
+        let said = whose != self.whose;
+        self.whose = whose;
+        read || said
     }
 
     /// A discussion's row: the discussion; else the plan's part.

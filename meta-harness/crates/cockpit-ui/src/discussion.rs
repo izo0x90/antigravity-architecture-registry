@@ -34,8 +34,11 @@ pub enum Writing {
     Change,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Command {
+    /// A session for the agent whose move it is (its last resumed, else a
+    /// new one): it can't take its move without one.
+    Wake { slot: harness_contracts::SlotId, resume: Option<harness_contracts::NativeId> },
     Reply,
     Settle,
     Reopen,
@@ -54,6 +57,8 @@ enum Reply {
 #[derive(Default)]
 pub struct DiscussionView {
     discussions: Reader<Discussions>,
+    /// The agents (whose move it is, how the agent asked is doing).
+    agents: Reader<crate::agents::Agents>,
     /// The discussion shown.
     pub id: Option<DiscussionId>,
     /// What it's on says (for which discussion), as last read; asked again
@@ -405,6 +410,7 @@ impl Navigable for DiscussionView {
 
     fn share(&mut self, shared: &Shared) {
         self.discussions.follow(&shared.discussions);
+        self.agents.follow(&shared.agents);
         self.messages.follow(shared);
     }
 }
@@ -449,6 +455,17 @@ impl ActionProvider for DiscussionView {
             "Reopen",
             icon::ARROW_COUNTER_CLOCKWISE,
         ));
+        // The agent whose move it is, with no session running: one for it.
+        if let harness_contracts::Move::Agent(slot) = self.with(|d| d.whose_move()).unwrap_or(harness_contracts::Move::Nobody)
+            && let crate::agents::AgentState::NoSession { resume } = self.agents.get().state(&harness_contracts::SlotId::new(slot.clone()))
+        {
+            let slot = harness_contracts::SlotId::new(slot);
+            let (label, caption) = match resume {
+                Some(_) => (format!("Resume {slot}'s session"), "Resume its session"),
+                None => (format!("Start a session for {slot}"), "Start its session"),
+            };
+            out.push(f("discussion.wake", &label, "Its move waits on it, and it has no session running", Command::Wake { slot, resume }).importance(PRIMARY).on_view(Style::Button, caption, Some(icon::PLAY)));
+        }
         // (A change request asks an agent slot: its answer names what it changed.)
         let question = d.kind == DiscussionKind::Question && open && d.asked != harness_contracts::USER;
         out.push(f("discussion.change", "Make it a change request", "Its answer has to name what changed (answered: say why it's open again)", Command::Change).importance(MINOR).when(if question { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
@@ -458,6 +475,7 @@ impl ActionProvider for DiscussionView {
     fn run(&mut self, action: &Action, _value: Option<String>, cx: &mut RunCx<'_>) {
         let Some(d) = self.shown() else { return };
         match action.command::<Command>() {
+            Some(Command::Wake { slot, resume }) => self.asks.push(Ask::Agents { slot: slot.clone(), act: crate::agents::Act::Open { resume: resume.clone() } }),
             Some(Command::Reply) => self.write(Writing::Reply),
             Some(Command::Reopen) => self.write(Writing::Reopen),
             Some(Command::Settle) => cx.net.discussion_act(&d.id, "settle", serde_json::json!({}), cx.ctx.clone(), self.sent()),
@@ -483,9 +501,11 @@ impl Hosted for DiscussionView {
         self.with(|d| Status::new(format!("{} {} · {}", icon::CHAT_CIRCLE_DOTS, d.id, d.kind.words()), Tone::Info).detail(d.on.what.clone())).unwrap_or_else(|| Status::new(format!("{} Discussion", icon::CHAT_CIRCLE_DOTS), Tone::Muted))
     }
 
-    /// Whose move it is.
+    /// Whose move it is (how the agent asked is doing, when it isn't at
+    /// it).
     fn status(&self) -> Vec<Status> {
-        self.with(|d| match crate::conversation::whose(d) {
+        let agents = self.agents.get();
+        self.with(|d| match agents.whose(d) {
             (words, true) => Status::new(words, Tone::Warn),
             (words, _) if d.status == DiscussionStatus::Settled => Status::new(words, Tone::Muted),
             (words, _) => Status::new(words, Tone::Info),

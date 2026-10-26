@@ -365,10 +365,14 @@ impl ChatStreamState {
                 ui.label(RichText::new(format!("Not taken: {why}")).size(crate::theme::look().text_label).color(colors().text));
             });
         }
+        // No session: how the agent is, as everywhere it's named.
         if self.thread().is_none() {
-            let said = match &instance {
-                Some(s) => format!("No session yet with {}: type below to start one.", s.display_name),
-                None => "Waiting for the server…".to_owned(),
+            let state = self.agents().state(&self.ui.slot);
+            let said = match (&state, &instance) {
+                (_, None) => "Waiting for the server…".to_owned(),
+                (crate::agents::AgentState::NoSession { resume: Some(_) }, Some(s)) => format!("No session running with {}: type below to start one, or resume the last.", s.display_name),
+                (crate::agents::AgentState::NoSession { resume: None }, Some(s)) => format!("No session yet with {}: type below to start one.", s.display_name),
+                (other, Some(s)) => format!("{}: {}.", s.display_name, other.words()),
             };
             banner(ui, colors().info_bg, colors().focus, |ui| {
                 ui.label(RichText::new(said).size(crate::theme::look().text_label).color(colors().text));

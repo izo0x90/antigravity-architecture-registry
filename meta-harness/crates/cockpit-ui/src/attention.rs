@@ -51,8 +51,17 @@ pub fn age(at_ms: u64, now_ms: u64) -> String {
 }
 
 /// Its line in a list: `slot · kind · age`.
-pub fn detail(n: &Notification, store: &Store, now_ms: u64) -> String {
-    let slot = n.slot.as_ref().map(|s| store.slots.get(s).map_or_else(|| s.to_string(), |slot| slot.name.clone()));
+pub fn detail(n: &Notification, agents: &crate::agents::Agents, now_ms: u64) -> String {
+    let store = agents.store();
+    // Its agent, and how it is when it can't take what's asked (as
+    // everywhere it's named).
+    let slot = n.slot.as_ref().map(|s| {
+        let name = store.slots.get(s).map_or_else(|| s.to_string(), |slot| slot.name.clone());
+        match agents.state(s) {
+            state @ (crate::agents::AgentState::CantRun(_) | crate::agents::AgentState::NoSession { .. } | crate::agents::AgentState::Gone) => format!("{name} ({})", state.words()),
+            _ => name,
+        }
+    });
     [slot, Some(kind_word(n.kind).to_owned()), Some(age(n.at_ms, now_ms))].into_iter().flatten().collect::<Vec<_>>().join(" · ")
 }
 
@@ -98,7 +107,10 @@ mod tests {
         assert_eq!(list(&store, None).iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["req:1", "req:2", "turn:1"]);
         assert_eq!(counts(&store), (2, 1));
         let id = |s: &str| NotificationId::new(s);
-        assert_eq!(detail(&store.notifications[&id("req:2")], &store, 125_000), "sub-1 · approval · 2 min ago");
+        // Its agent with no session running: said so (as everywhere).
+        let mut agents = crate::agents::Agents::default();
+        agents.apply(ClientEvent::NotificationUpdated { notification: note("req:2", NotificationKind::Approval, "sub-1", 5) });
+        assert_eq!(detail(&store.notifications[&id("req:2")], &agents, 125_000), "sub-1 (no session running) · approval · 2 min ago");
     }
 
     #[test]

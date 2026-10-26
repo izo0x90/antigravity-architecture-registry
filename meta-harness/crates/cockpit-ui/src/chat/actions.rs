@@ -12,6 +12,8 @@ enum ChatCommand {
     ClearPrompt,
     NewSession,
     ResumeSession,
+    /// The slot's last session, resumed.
+    ResumeLast(NativeId),
     DeleteSaved,
     SwitchSession,
     SelectInstance,
@@ -85,6 +87,10 @@ impl ActionProvider for ChatStreamState {
         // Session
         let new = Action::new("session.new", "New session", "A fresh conversation in this agent slot (the last one is saved)", C::NewSession);
         out.push(if idle { banner(new, "New session", Some(icon::LIGHTNING)) } else { new });
+        // Its last session, not running: resumed at once.
+        if let crate::agents::AgentState::NoSession { resume: Some(native) } = agents.state(&self.ui.slot) {
+            out.push(banner(Action::new("session.resume_last", "Resume the last session", "Picks up this agent slot's last conversation where it was left", C::ResumeLast(native)).focused().importance(crate::actions::PRIMARY), "Resume the last", Some(icon::ARROW_COUNTER_CLOCKWISE)));
+        }
         if caps.sessions.list_saved {
             let param = self.saved_choices().map(Param::Choice).unwrap_or(Param::None);
             let resume = Action::new("session.resume", "Resume a saved session", "Picks up an earlier conversation where it was left", C::ResumeSession).param(param.clone());
@@ -130,7 +136,7 @@ impl ActionProvider for ChatStreamState {
         if store.slots.len() > 1 {
             let choices = super::slots::ordered(store)
                 .into_iter()
-                .map(|s| Choice::new(s.id.to_string(), slot_label(s, store)).detail(slot_detail(s)).current(s.id == self.ui.slot))
+                .map(|s| Choice::new(s.id.to_string(), slot_label(s, store)).detail(Some(format!("{}: {}", s.role, agents.state(&s.id).words()))).current(s.id == self.ui.slot))
                 .collect();
             out.push(Action::new("agent.pick", "Show an agent slot", "Pick one of the agents the server runs, for this chat", C::PickSlot).param(Param::Choice(choices)));
             out.push(Action::new("chat.next_slot", "Show the next agent slot", "This chat shows the next agent the server runs", C::StepSlot(1)).focused());
@@ -359,6 +365,7 @@ impl ActionProvider for ChatStreamState {
             ChatCommand::Insert => *cx.input_mode = crate::keymap::InputMode::Insert { at: cx.at },
             ChatCommand::ClearPrompt => self.ui.input.clear(),
             ChatCommand::NewSession | ChatCommand::Retry => self.open_thread(None),
+            ChatCommand::ResumeLast(native) => self.open_thread(Some(native.clone())),
             ChatCommand::ResumeSession => match value {
                 Some(native) => self.open_thread(Some(NativeId::new(native))),
                 None => self.load_saved(&action.id),
@@ -563,12 +570,4 @@ fn slot_label(slot: &Slot, store: &Store) -> String {
     }
 }
 
-/// Its role, and whether its session runs (or why it can't).
-fn slot_detail(slot: &Slot) -> Option<String> {
-    let state = match &slot.status {
-        SlotStatus::Unavailable { reason, .. } => reason.clone(),
-        SlotStatus::Ready if slot.current_thread().is_some() => "running".into(),
-        SlotStatus::Ready => "not running".into(),
-    };
-    Some(format!("{}: {state}", slot.role))
-}
+

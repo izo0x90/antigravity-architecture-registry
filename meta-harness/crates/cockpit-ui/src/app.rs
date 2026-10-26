@@ -8,7 +8,6 @@ use arch_graph::ComponentId;
 
 use crate::actions::{Action, Bound, Choice, Group, Invocation, LeaderEntry, MINOR, Origin, PRIMARY, Param, RunCx, SECONDARY, Scope, Situation, When, is_primary, leader_entries};
 use crate::actions::Layer;
-use crate::agents::SessionStatus;
 use crate::buffer::Buffer;
 use crate::panels::{Panels, BufferId};
 use crate::quick_look::QuickLook;

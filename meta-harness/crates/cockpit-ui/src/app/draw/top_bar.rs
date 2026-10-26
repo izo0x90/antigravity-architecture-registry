@@ -199,15 +199,13 @@ impl CockpitApp {
 
                     ui.add_space(crate::theme::look().space_sm);
                     let agents = self.desk.shared.agents.get();
-                    let (agent_color, agent_hint) = match &agents.lead_status() {
-                        SessionStatus::Idle => match agents.harness_problem() {
-                            Some(problem) => (colors().error, format!("Agent: unavailable — {problem}")),
-                            None => (colors().faint, "Agent: not connected".to_string()),
-                        },
-                        SessionStatus::Connecting => (colors().warn, "Agent: connecting…".to_string()),
-                        SessionStatus::Connected(tid) => (colors().ok, format!("Agent: connected [{}]", tid)),
-                        SessionStatus::Failed(err) => (colors().error, format!("Agent: failed — {}", err)),
+                    // The lead's state, as everywhere it's named.
+                    let state = agents.state(&harness_contracts::SlotId::new(harness_contracts::LEAD));
+                    let agent_color = match &state {
+                        crate::agents::AgentState::NoSession { .. } | crate::agents::AgentState::Gone => colors().faint,
+                        other => other.tone().color(),
                     };
+                    let agent_hint = format!("Lead: {}", state.words());
                     let activity = agents.lead_activity();
                     drop(agents);
                     let agent_res = self.agent_led.show(ui, "AGENT", agent_color, activity, &agent_hint);

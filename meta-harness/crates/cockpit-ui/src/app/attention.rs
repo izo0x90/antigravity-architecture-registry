@@ -99,7 +99,7 @@ impl CockpitApp {
                 .iter()
                 .map(|(server, n)| {
                     let agents = self.desks().find(|d| &d.server == server).expect("a desk per server listed").shared.agents.get();
-                    let detail = crate::attention::detail(n, agents.store(), now);
+                    let detail = crate::attention::detail(n, &agents, now);
                     Choice::new(format!("{server}/{}", n.id), &n.title).detail(Some(if many { format!("{server} · {detail}") } else { detail }))
                 })
                 .collect()

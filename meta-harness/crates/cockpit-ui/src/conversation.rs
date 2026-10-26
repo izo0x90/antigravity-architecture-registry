@@ -293,15 +293,6 @@ pub fn first_line(text: &str) -> String {
     text.lines().next().unwrap_or_default().chars().take(120).collect()
 }
 
-/// Whose move it is in a discussion, in a few words ("waiting on you",
-/// "waiting on lead", "settled"), and whether it's yours.
-pub fn whose(d: &harness_contracts::Discussion) -> (String, bool) {
-    match d.whose_move() {
-        harness_contracts::Move::User => ("waiting on you".to_owned(), true),
-        harness_contracts::Move::Agent(slot) => (format!("waiting on {}", d.name_of(&slot)), false),
-        harness_contracts::Move::Nobody => ("settled".to_owned(), false),
-    }
-}
 
 /// Where a discussion stands, in a word, and its colour.
 pub fn standing(d: &harness_contracts::Discussion) -> (&'static str, Color32) {

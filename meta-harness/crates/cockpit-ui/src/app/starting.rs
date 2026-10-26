@@ -39,7 +39,9 @@ impl CockpitApp {
         // The discussions on what you're on (or on the mark picked): one opened.
         let here_ids: Vec<harness_contracts::DiscussionId> = if self.desk.discussions_here.is_empty() { self.notes_here(here).discussions.into_iter().map(|d| d.id).collect() } else { self.desk.discussions_here.clone() };
         let all = self.desk.shared.discussions.get();
-        let choices: Vec<Choice> = here_ids.iter().filter_map(|id| all.get(id)).map(|d| Choice::new(d.id.as_str(), format!("{} {}: {}", d.id, d.kind.words(), crate::conversation::first_line(d.asking()))).detail(Some(crate::conversation::whose(d).0))).collect();
+        let agents = self.desk.shared.agents.get();
+        let choices: Vec<Choice> = here_ids.iter().filter_map(|id| all.get(id)).map(|d| Choice::new(d.id.as_str(), format!("{} {}: {}", d.id, d.kind.words(), crate::conversation::first_line(d.asking()))).detail(Some(agents.whose(d).0))).collect();
+        drop(agents);
         let available = !choices.is_empty();
         out.push(Action::new("discuss.open", "Open a discussion here", "One of those on what you're on, waiting on you first", S::DiscussOpen).param(Param::Choice(choices)).group(Group::GoTo).importance(MINOR).when(when(available)));
         if let Some(d) = &self.desk.discussing {
