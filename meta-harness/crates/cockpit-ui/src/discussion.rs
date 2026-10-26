@@ -34,11 +34,11 @@ pub enum Writing {
     Change,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Command {
     /// A session for the agent whose move it is (its last resumed, else a
     /// new one): it can't take its move without one.
-    Wake { slot: harness_contracts::SlotId, resume: Option<harness_contracts::NativeId> },
+    Wake { slot: harness_contracts::SlotId, act: Box<crate::agents::Act> },
     Reply,
     Settle,
     Reopen,
@@ -457,14 +457,11 @@ impl ActionProvider for DiscussionView {
         ));
         // The agent whose move it is, with no session running: one for it.
         if let harness_contracts::Move::Agent(slot) = self.with(|d| d.whose_move()).unwrap_or(harness_contracts::Move::Nobody)
-            && let crate::agents::AgentState::NoSession { resume } = self.agents.get().state(&harness_contracts::SlotId::new(slot.clone()))
+            && let Some((way, act)) = self.agents.get().state(&harness_contracts::SlotId::new(slot.clone())).way_out()
         {
+            let name = self.with(|d| d.name_of(&slot).to_owned()).unwrap_or_else(|| slot.clone());
             let slot = harness_contracts::SlotId::new(slot);
-            let (label, caption) = match resume {
-                Some(_) => (format!("Resume {slot}'s session"), "Resume its session"),
-                None => (format!("Start a session for {slot}"), "Start its session"),
-            };
-            out.push(f("discussion.wake", &label, "Its move waits on it, and it has no session running", Command::Wake { slot, resume }).importance(PRIMARY).on_view(Style::Button, caption, Some(icon::PLAY)));
+            out.push(f("discussion.wake", &format!("{way} ({name})"), "Its move waits on it, and it has no session running", Command::Wake { slot, act: Box::new(act) }).importance(PRIMARY).on_view(Style::Button, way, Some(icon::PLAY)));
         }
         // (A change request asks an agent slot: its answer names what it changed.)
         let question = d.kind == DiscussionKind::Question && open && d.asked != harness_contracts::USER;
@@ -475,7 +472,7 @@ impl ActionProvider for DiscussionView {
     fn run(&mut self, action: &Action, _value: Option<String>, cx: &mut RunCx<'_>) {
         let Some(d) = self.shown() else { return };
         match action.command::<Command>() {
-            Some(Command::Wake { slot, resume }) => self.asks.push(Ask::Agents { slot: slot.clone(), act: crate::agents::Act::Open { resume: resume.clone() } }),
+            Some(Command::Wake { slot, act }) => self.asks.push(Ask::Agents { slot: slot.clone(), act: (**act).clone() }),
             Some(Command::Reply) => self.write(Writing::Reply),
             Some(Command::Reopen) => self.write(Writing::Reopen),
             Some(Command::Settle) => cx.net.discussion_act(&d.id, "settle", serde_json::json!({}), cx.ctx.clone(), self.sent()),

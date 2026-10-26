@@ -285,6 +285,8 @@ pub(crate) struct ShapeOf {
     of: (ThreadId, u64, u64, u64, Option<harness_contracts::SubagentId>),
     facts: u64,
     shape: std::rc::Rc<rows::Shape>,
+    /// Which shape worked out this is (what's laid out from it, kept by it).
+    made: u64,
 }
 
 /// How often a chat on screen says its slot's updates were seen (seconds).
@@ -341,6 +343,11 @@ impl ChatStreamState {
         Some(self.shape().span().map_or(0..0, |s| *s.start()..*s.end() + 1))
     }
 
+    /// Which shape worked out the last `shape` is (a new one, another).
+    pub(crate) fn shape_made(&self) -> u64 {
+        self.ui.shape.borrow().as_ref().map_or(0, |s| s.made)
+    }
+
     /// The stream's shape (its rows, a folded run one of them; whether
     /// anything is folded, anything open), as drawn: worked out once per
     /// change of the thread or the folds.
@@ -354,8 +361,8 @@ impl ChatStreamState {
             Some(was) if (&was.of.0, was.of.1, was.of.3, &was.of.4) == (&of.0, of.1, of.3, &of.4) => {
                 let facts = rows::shape_facts(view.stream());
                 if facts == was.facts {
-                    let shape = was.shape.clone();
-                    *kept = Some(ShapeOf { of, facts, shape: shape.clone() });
+                    let (shape, made) = (was.shape.clone(), was.made);
+                    *kept = Some(ShapeOf { of, facts, shape: shape.clone(), made });
                     return shape;
                 }
                 facts
@@ -371,7 +378,8 @@ impl ChatStreamState {
             None => rows::shape(&view.stream().collect::<Vec<_>>(), &self.ui.folds),
         };
         let shape = std::rc::Rc::new(shape);
-        *kept = Some(ShapeOf { of, facts, shape: shape.clone() });
+        let made = kept.as_ref().map_or(1, |was| was.made + 1);
+        *kept = Some(ShapeOf { of, facts, shape: shape.clone(), made });
         shape
     }
 

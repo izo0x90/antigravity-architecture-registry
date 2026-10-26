@@ -201,10 +201,7 @@ impl CockpitApp {
                     let agents = self.desk.shared.agents.get();
                     // The lead's state, as everywhere it's named.
                     let state = agents.state(&harness_contracts::SlotId::new(harness_contracts::LEAD));
-                    let agent_color = match &state {
-                        crate::agents::AgentState::NoSession { .. } | crate::agents::AgentState::Gone => colors().faint,
-                        other => other.tone().color(),
-                    };
+                    let agent_color = state.colour();
                     let agent_hint = format!("Lead: {}", state.words());
                     let activity = agents.lead_activity();
                     drop(agents);

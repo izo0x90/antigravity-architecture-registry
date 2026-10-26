@@ -776,21 +776,37 @@ fn a_request_waiting_on_you_shows_its_answers_while_you_type() {
     assert!(sent(&app).iter().any(|c| c.starts_with("POST /api/threads/t/requests/r2")), "tapped while typing: the second answered");
 }
 
-/// A long chat draws only the rows near the screen: the rest is room, as
-/// its rows were last measured (each frame doesn't walk them all); moving
-/// to the first draws it there.
+/// A long chat costs a frame what a short one does, as the agent streams
+/// into its last message: only the rows near the screen are drawn, and
+/// where the others are is kept, not worked out again; `gg` gets to the
+/// top all the same.
 #[test]
-fn a_long_chat_draws_only_the_rows_near_the_screen() {
-    let (ctx, mut app) = full_app();
-    focus(&ctx, &mut app, BufferKind::Chat);
-    let said = |n: u32| crate::chat::tests::item(n, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: format!("message {n}") }], streaming: false });
-    (100..2100).map(said).for_each(|e| app.desk.shared.agents.get_mut().apply(e));
-    for _ in 0..4 {
-        frame(&ctx, &mut app, vec![]);
-    }
-    let drawn = app.desk.chat().ui.heights.len();
-    assert!(drawn < 300, "{drawn} rows measured, of 2000");
-    assert!(texts(&frame(&ctx, &mut app, vec![])).contains("message 2099"), "following the latest");
+fn a_long_chat_costs_a_frame_what_a_short_one_does() {
+    let said = |n: u32, text: String| crate::chat::tests::item(n, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text }], streaming: true });
+    // The slowest frame, over many, each with a chunk more of the last message.
+    let slowest = |count: u32| {
+        let (ctx, mut app) = full_app();
+        focus(&ctx, &mut app, BufferKind::Chat);
+        (100..100 + count).for_each(|n| app.desk.shared.agents.get_mut().apply(said(n, format!("message {n}"))));
+        for _ in 0..4 {
+            frame(&ctx, &mut app, vec![]);
+        }
+        let last = 99 + count;
+        let slowest = (0..30)
+            .map(|k| {
+                told(&app, said(last, format!("message {last}{}", " more".repeat(k))));
+                let start = std::time::Instant::now();
+                frame(&ctx, &mut app, vec![]);
+                start.elapsed()
+            })
+            .max()
+            .unwrap();
+        (slowest, ctx, app)
+    };
+    let (short, ..) = slowest(20);
+    let (long, ctx, mut app) = slowest(2_000);
+    eprintln!("slowest frame streaming: {short:?} with 20 messages, {long:?} with 2,000");
+    assert!(long < short * 3 + std::time::Duration::from_millis(10), "{long:?} against {short:?}");
     keys(&ctx, &mut app, "gg");
     // (It glides there.)
     for n in 0..8 {
@@ -798,7 +814,25 @@ fn a_long_chat_draws_only_the_rows_near_the_screen() {
     }
     let text = texts(&frame_at(&ctx, &mut app, vec![], 11.0));
     assert!(text.contains("fix the parser") && !text.contains("message 2099"), "{text}");
-    assert!(app.desk.chat().ui.heights.len() < 500, "{}", app.desk.chat().ui.heights.len());
+}
+
+/// With the buttons in a bar, what waits on you shows its answers there
+/// too while you're on something else and typing.
+#[test]
+fn in_a_bar_what_waits_shows_its_answers_while_youre_elsewhere() {
+    let (ctx, mut app) = full_app();
+    app.item_buttons = Some(crate::hosted::ItemButtons::Bar);
+    focus(&ctx, &mut app, BufferKind::Chat);
+    crate::chat::tests::conversation_events().into_iter().chain(request("r1", "cargo test", None, Some(100))).for_each(|e| app.desk.shared.agents.get_mut().apply(e));
+    frame(&ctx, &mut app, vec![]);
+    keys(&ctx, &mut app, "gg");
+    frame(&ctx, &mut app, key("i"));
+    for _ in 0..3 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    assert!(matches!(app.input_mode, InputMode::Insert { .. }) && app.desk.chat().ui.cursor == Some(0));
+    let text = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(text.contains("Allow") && text.contains("Deny"), "{text}");
 }
 
 /// The key bar cuts only a chip too wide for its share of the bar (a

@@ -10,6 +10,7 @@ use harness_contracts::ItemBody;
 
 use super::*;
 use super::live::{span_changes, span_words};
+use crate::agents::working_words;
 use crate::store::Seen;
 
 /// Chips shown before they fold into one ("4 sub-agents working").
@@ -17,15 +18,10 @@ const CHIPS_MOST: usize = 3;
 /// The folded strip's place (moved to, it shows each).
 const EACH: &str = "subagents";
 
-/// How many are at work, in words.
-pub(super) fn working_words(n: usize) -> String {
-    if n == 1 { "1 sub-agent working".to_owned() } else { format!("{n} sub-agents working") }
-}
-
 /// How long it ran, or has (seconds), as the server stamped it.
-fn ran_s(seen: &Seen) -> f64 {
+fn ran_s(seen: &Seen, now_ms: u64) -> f64 {
     let s = &seen.subagent;
-    let end = s.ended_ms.unwrap_or_else(crate::attention::now_ms);
+    let end = s.ended_ms.unwrap_or(now_ms);
     end.saturating_sub(s.started_ms) as f64 / 1000.0
 }
 
@@ -43,8 +39,11 @@ impl ChatStreamState {
     pub(super) fn render_subagents(&mut self, ui: &mut egui::Ui) {
         let now = ui.input(|i| i.time);
         let stays = self.settings.subagent_ended_s;
+        let now_ms = self.agents().server_now_ms();
         let shown = |s: &&Seen| s.subagent.status.working() || s.ended_seen.is_some_and(|e| now - e < stays);
-        let Some(count) = self.thread().map(|v| v.subagents().iter().filter(shown).count()) else { return };
+        // (None at work, none seen to end a moment ago: nothing to go
+        // through.)
+        let Some(count) = self.thread().map(|v| if v.subagents_working() == 0 && v.last_seen_ended().is_none_or(|e| now - e >= stays) { 0 } else { v.subagents().iter().filter(shown).count() }) else { return };
         // (Few enough again: folded again once there are more.)
         if count <= CHIPS_MOST {
             self.ui.subagents_unfolded = false;
@@ -69,7 +68,7 @@ impl ChatStreamState {
             }
             for seen in view.subagents().iter().filter(shown) {
                 let s = &seen.subagent;
-                let ran = ran_s(seen);
+                let ran = ran_s(seen, now_ms);
                 next = next.min(match seen.ended_seen {
                     Some(e) => stays - (now - e),
                     None => span_changes(ran),
@@ -99,13 +98,14 @@ impl ChatStreamState {
         let Some(id) = self.ui.alone.clone() else { return };
         let look = crate::theme::look();
         let told_steps = self.instance().is_some_and(|i| i.capabilities.subagents.lifecycle_events);
+        let now_ms = self.agents().server_now_ms();
         let Some(view) = self.thread() else { return };
         let Some(seen) = view.subagent(&id) else {
             ui.label(RichText::new("That sub-agent isn't in its chat now.").size(look.text_body).color(colors().muted));
             return;
         };
         let s = &seen.subagent;
-        let ran = ran_s(seen);
+        let ran = ran_s(seen, now_ms);
         if s.status.working() {
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(span_changes(ran)));
         }

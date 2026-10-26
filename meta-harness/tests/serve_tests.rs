@@ -169,12 +169,11 @@ fn the_servers_a_home_links_to_are_kept_from_the_command_line() {
 /// outdated or with its lock unreadable, said as such.
 #[test]
 fn a_font_packs_face_is_served_once_installed_and_not_sent_again_unchanged() {
-    use sha2::Digest;
     let server = Server::start_in(false, &["--no-project"], "");
     let face = b"a face, standing in for a font's bytes".to_vec();
     let file = server.home.path().join("Fake-Regular.ttf");
     std::fs::write(&file, &face).unwrap();
-    let sum: String = sha2::Sha256::digest(&face).iter().map(|b| format!("{b:02x}")).collect();
+    let sum = nah_packs::sha256_hex(&face);
     let pack = server.place().join(".nah/packs/fake-font");
     std::fs::create_dir_all(&pack).unwrap();
     let manifest = format!(

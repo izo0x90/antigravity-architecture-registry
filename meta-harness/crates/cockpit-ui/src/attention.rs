@@ -108,6 +108,7 @@ mod tests {
         assert_eq!(counts(&store), (2, 1));
         let id = |s: &str| NotificationId::new(s);
         // Its agent with no session running: said so (as everywhere).
+        crate::status::set(crate::config::UiConfig::with_overrides("").unwrap().status);
         let mut agents = crate::agents::Agents::default();
         agents.apply(ClientEvent::NotificationUpdated { notification: note("req:2", NotificationKind::Approval, "sub-1", 5) });
         assert_eq!(detail(&store.notifications[&id("req:2")], &agents, 125_000), "sub-1 (no session running) · approval · 2 min ago");

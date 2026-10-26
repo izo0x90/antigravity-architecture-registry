@@ -25,7 +25,8 @@ use crate::store::{Store, ThreadView};
 pub enum AgentState {
     /// The slot was closed.
     Gone,
-    /// It can't run: why (its harness's, its slot's, what failed).
+    /// It can't run, in words (its harness's, its slot's, or starting a
+    /// session failed).
     CantRun(String),
     /// A session starting.
     Starting,
@@ -39,30 +40,49 @@ pub enum AgentState {
     Idle,
 }
 
+/// How many sub-agents are at work, in words.
+pub fn working_words(n: usize) -> String {
+    if n == 1 { "1 sub-agent working".to_owned() } else { format!("{n} sub-agents working") }
+}
+
 impl AgentState {
-    /// In a few words (after its name: "lead: no session running").
-    pub fn words(&self) -> String {
+    /// Its name in the status vocabulary (`[status.agent_*]`: its word,
+    /// icon, colour).
+    pub fn status(&self) -> &'static str {
         match self {
-            Self::Gone => "closed".into(),
-            Self::CantRun(why) => format!("can't run: {why}"),
-            Self::Starting => "starting a session".into(),
-            Self::NoSession { .. } => "no session running".into(),
-            Self::WaitingOnYou => "waiting on you".into(),
-            Self::Working { subagents: 0 } => "working".into(),
-            Self::Working { subagents: 1 } => "working · 1 sub-agent".into(),
-            Self::Working { subagents } => format!("working · {subagents} sub-agents"),
-            Self::Idle => "idle".into(),
+            Self::Gone => "agent_gone",
+            Self::CantRun(_) => "agent_cant_run",
+            Self::Starting => "agent_starting",
+            Self::NoSession { .. } => "agent_no_session",
+            Self::WaitingOnYou => "agent_waiting",
+            Self::Working { .. } => "agent_working",
+            Self::Idle => "agent_idle",
         }
     }
 
-    pub fn tone(&self) -> crate::actions::Tone {
-        use crate::actions::Tone;
+    /// In a few words (after its name: "lead: no session running"): its
+    /// state's word, or why it can't run, or how many sub-agents are at
+    /// work.
+    pub fn words(&self) -> String {
         match self {
-            Self::CantRun(_) => Tone::Error,
-            Self::WaitingOnYou => Tone::Warn,
-            Self::Starting | Self::Working { .. } => Tone::Info,
-            Self::Idle => Tone::Ok,
-            Self::Gone | Self::NoSession { .. } => Tone::Muted,
+            Self::CantRun(why) => why.clone(),
+            Self::Working { subagents } if *subagents > 0 => working_words(*subagents),
+            other => crate::status::look(other.status()).1,
+        }
+    }
+
+    /// Its colour (its state's).
+    pub fn colour(&self) -> egui::Color32 {
+        crate::status::look(self.status()).2
+    }
+
+    /// What gets it going when it has no session: its words, and what's
+    /// asked of the agents.
+    pub fn way_out(&self) -> Option<(&'static str, Act)> {
+        match self {
+            Self::NoSession { resume: Some(native) } => Some(("Resume its last session", Act::Open { resume: Some(native.clone()) })),
+            Self::NoSession { resume: None } => Some(("Start a session", Act::Open { resume: None })),
+            _ => None,
         }
     }
 
@@ -181,6 +201,12 @@ pub struct Agents {
     /// Requests answered here whose answer is on its way (no longer
     /// waiting on you: another can't go to them meanwhile).
     answering: BTreeSet<harness_contracts::RequestId>,
+    /// Why a slot's last session couldn't start (cleared as one starts):
+    /// it can't run, everywhere it's named.
+    cant_open: BTreeMap<SlotId, String>,
+    /// How far this clock is ahead of the server's (its least gap seen
+    /// between an event happening and coming), in ms.
+    skew_ms: Option<i64>,
     /// Sub-agents asked to stop, till they say they have (or it's refused).
     stopping: BTreeSet<harness_contracts::SubagentId>,
     /// The clock (seconds) as of this frame, events applied at it.
@@ -214,7 +240,17 @@ impl Agents {
     /// happened: on this clock, that long before now (never after).
     pub fn apply_stamped(&mut self, stamped: harness_contracts::Stamped) {
         let harness_contracts::Stamped { at_ms, event } = stamped;
-        let ago = crate::attention::now_ms().saturating_sub(at_ms) as f64 / 1000.0;
+        // (Its server's clock and this one's differ by at most the least
+        // gap seen between when it says a thing happened and when it came:
+        // nothing comes before it happens.)
+        let at_ms = if at_ms == 0 { self.server_now_ms() } else { at_ms };
+        let gap = crate::attention::now_ms() as i64 - at_ms as i64;
+        if event == ClientEvent::Resync {
+            self.skew_ms = None;
+        }
+        let skew = self.skew_ms.map_or(gap, |s| s.min(gap));
+        self.skew_ms = Some(skew);
+        let ago = (gap - skew).max(0) as f64 / 1000.0;
         let at = self.now - ago;
         // Answered (as the server says): its answer arrived.
         if let ClientEvent::Session { event: harness_contracts::AdapterEvent::RequestUpdated { request } } = &event
@@ -229,6 +265,12 @@ impl Agents {
             self.stopping.remove(&subagent.id);
         }
         self.store.apply(event, at);
+    }
+
+    /// Now, as the server's clock has it (this one's, less how far it's
+    /// ahead).
+    pub fn server_now_ms(&self) -> u64 {
+        (crate::attention::now_ms() as i64 - self.skew_ms.unwrap_or(0)).max(0) as u64
     }
 
     /// Whether sub-agent `id` was asked to stop, and hasn't yet.
@@ -312,8 +354,8 @@ impl Agents {
 
     /// How agent slot `slot` is doing.
     pub fn state(&self, slot: &SlotId) -> AgentState {
-        if let Some(err) = self.errors.get(slot) {
-            return AgentState::CantRun(err.clone());
+        if let Some(why) = self.cant_open.get(slot) {
+            return AgentState::CantRun(format!("couldn't start a session: {why}"));
         }
         let Some(its) = self.store.slots.get(slot) else {
             if self.store.closed.contains(slot) {
@@ -322,7 +364,7 @@ impl Agents {
             return self.harness_problem(slot).map_or(AgentState::NoSession { resume: None }, AgentState::CantRun);
         };
         if let harness_contracts::SlotStatus::Unavailable { reason, .. } = &its.status {
-            return AgentState::CantRun(reason.clone());
+            return AgentState::CantRun(format!("can't run: {reason}"));
         }
         let resume = its.current_session().filter(|s| s.thread.is_none()).and_then(|s| s.native_id.clone());
         let Some(view) = self.thread_in(slot) else {
@@ -361,7 +403,7 @@ impl Agents {
     /// it, as its instance says.
     fn harness_problem(&self, slot: &SlotId) -> Option<String> {
         let instance = self.instance_in(slot)?;
-        matches!(instance.status, ProviderStatus::Unavailable { .. } | ProviderStatus::Error { .. }).then(|| format!("{} {}", instance.display_name, status_words(&instance.status)))
+        matches!(instance.status, ProviderStatus::Unavailable { .. } | ProviderStatus::Error { .. }).then(|| status_words(&instance.status))
     }
 
     /// How much the lead's session has done (the AGENT light blinks with it).
@@ -466,7 +508,8 @@ impl Agents {
                 Some(first) => Some(first.clone()),
                 None => {
                     self.queued.remove(&slot);
-                    self.errors.insert(slot, "No harness instance is available yet.".into());
+                    self.errors.insert(slot.clone(), "No harness instance is available yet.".into());
+                    self.cant_open.insert(slot, "no harness instance is available yet".into());
                     return;
                 }
             },
@@ -475,6 +518,7 @@ impl Agents {
             return;
         }
         self.errors.remove(&slot);
+        self.cant_open.remove(&slot);
         let body = OpenSlotSession { instance_id, resume, ..Default::default() };
         let mailbox = self.mailbox.clone();
         let for_slot = slot.clone();
@@ -534,7 +578,9 @@ impl Agents {
                 Reply::Opened(slot, Err(e)) => {
                     self.opening.remove(&slot);
                     self.queued.remove(&slot);
-                    self.errors.insert(slot, e.into());
+                    let why: String = e.into();
+                    self.cant_open.insert(slot.clone(), why.clone());
+                    self.errors.insert(slot, why);
                 }
                 // Not taken: it waits on you again, and why is said.
                 Reply::Answered { slot, request, result: Err(e) } => {
@@ -640,7 +686,7 @@ pub(crate) mod tests {
         assert_eq!(agents.state(&lead), AgentState::NoSession { resume: None });
         let reason = "antigravity-acp isn't installed (fix: meta-harness pack install antigravity-acp)";
         agents.apply(ClientEvent::InstanceUpdated { snapshot: snapshot(ProviderStatus::Unavailable { reason: reason.into() }) });
-        assert_eq!(agents.state(&lead), AgentState::CantRun(format!("Antigravity can't run: {reason}")), "the AGENT light's hint");
+        assert_eq!(agents.state(&lead), AgentState::CantRun(format!("can't run: {reason}")), "the AGENT light's hint");
         agents.apply(ClientEvent::InstanceUpdated { snapshot: snapshot(ProviderStatus::Ready) });
         assert_eq!(agents.state(&lead), AgentState::NoSession { resume: None });
     }
@@ -650,7 +696,7 @@ pub(crate) mod tests {
         let mut agents = Agents::default();
         let (ctx, net) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"));
         agents.act(SlotId::new(LEAD), Act::Prompt { message: "hello".into(), add: false }, &net, &ctx);
-        assert!(matches!(agents.state(&SlotId::new(LEAD)), AgentState::CantRun(e) if e.contains("No harness instance")));
+        assert!(matches!(agents.state(&SlotId::new(LEAD)), AgentState::CantRun(e) if e.contains("no harness instance")));
         assert_eq!(agents.error(&SlotId::new(LEAD)).map(String::as_str), Some("No harness instance is available yet."), "said in the lead's chat");
     }
 
@@ -660,6 +706,7 @@ pub(crate) mod tests {
     #[test]
     fn how_an_agent_is_is_one_answer() {
         use harness_contracts::{AdapterEvent, Turn, TurnId, TurnStatus};
+        crate::status::set(crate::config::UiConfig::with_overrides("").unwrap().status);
         let lead = SlotId::new(LEAD);
         let mut agents = Agents::default();
         crate::chat::tests::conversation_events().into_iter().for_each(|e| agents.apply(e));
@@ -672,7 +719,7 @@ pub(crate) mod tests {
         agents.apply(turn(TurnStatus::Completed));
         let sub = harness_contracts::Subagent { id: harness_contracts::SubagentId::new("a"), thread_id: ThreadId::new("t"), item_id: harness_contracts::ItemId::new("i50"), title: "Helper".into(), kind: None, description: None, prompt: None, answer: None, status: harness_contracts::SubagentStatus::Running, started_ms: 0, ended_ms: None, can_cancel: false };
         agents.apply(ClientEvent::Session { event: AdapterEvent::SubagentUpdated { subagent: sub } });
-        assert_eq!(agents.state(&lead).words(), "working · 1 sub-agent");
+        assert_eq!(agents.state(&lead).words(), "1 sub-agent working");
         // No session running: its last, to resume.
         let mut slot = crate::chat::tests::lead(None);
         slot.sessions[0].native_id = Some(NativeId::new("n1"));
@@ -680,5 +727,22 @@ pub(crate) mod tests {
         assert_eq!(agents.state(&lead), AgentState::NoSession { resume: Some(NativeId::new("n1")) });
         let discussion = crate::discussions::tests::discussion(1, harness_contracts::Subject::CodeFile { path: "a.rs".into() }, harness_contracts::DiscussionStatus::Open);
         assert_eq!(agents.whose(&discussion).0, "waiting on lead: no session running");
+    }
+
+    /// The server's clock may differ from this one: an event's age is told
+    /// by the least gap seen (nothing comes before it happens), so a server
+    /// a minute ahead doesn't make its news look as if it's still to come,
+    /// nor one behind make it look old.
+    #[test]
+    fn an_events_time_is_read_on_its_servers_clock() {
+        for ahead_ms in [60_000_i64, -60_000] {
+            let mut agents = Agents { now: 100.0, ..Default::default() };
+            let server_now = (crate::attention::now_ms() as i64 + ahead_ms) as u64;
+            agents.apply_stamped(harness_contracts::Stamped { at_ms: server_now, event: ClientEvent::Replayed });
+            crate::chat::tests::conversation_events().into_iter().filter(|e| *e != ClientEvent::Replayed).for_each(|event| agents.apply_stamped(harness_contracts::Stamped { at_ms: server_now - 3_000, event }));
+            let heard = agents.thread_in(&SlotId::new(LEAD)).and_then(|t| t.last_heard()).unwrap();
+            assert!((agents.now - heard - 3.0).abs() < 0.5, "{ahead_ms}: heard {heard}");
+            assert!((agents.server_now_ms() as i64 - server_now as i64).abs() < 500);
+        }
     }
 }

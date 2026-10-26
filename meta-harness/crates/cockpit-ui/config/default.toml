@@ -636,6 +636,43 @@ word = "done"
 icon = "check-circle"
 color = "ok"
 
+# An agent (a slot): closed, can't run, starting a session, no session,
+# waiting on you, working, idle.
+[status.agent_gone]
+word = "closed"
+icon = "x-circle"
+color = "faint"
+
+[status.agent_cant_run]
+word = "can't run"
+icon = "warning-circle"
+color = "error"
+
+[status.agent_starting]
+word = "starting a session"
+icon = "hourglass"
+color = "warn"
+
+[status.agent_no_session]
+word = "no session running"
+icon = "circle-dashed"
+color = "faint"
+
+[status.agent_waiting]
+word = "waiting on you"
+icon = "hand"
+color = "warn"
+
+[status.agent_working]
+word = "working"
+icon = "play"
+color = "info"
+
+[status.agent_idle]
+word = "idle"
+icon = "circle"
+color = "ok"
+
 # A sub-agent: at work, waiting on you, ended (its harness not saying how),
 # done, failed, stopped.
 [status.subagent_running]

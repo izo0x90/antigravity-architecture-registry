@@ -196,8 +196,11 @@ async fn stream(entry: &ServerEntry, hub: &Arc<EventHub>, state: &Arc<Mutex<Link
             }
             _ => {}
         }
-        // (As of when it happened there.)
-        hub.publish_at(event, at_ms);
+        // (As of when it happened there; not said: now.)
+        match at_ms {
+            0 => hub.publish(event),
+            at => hub.publish_at(event, at),
+        }
     }
     Ok(())
 }

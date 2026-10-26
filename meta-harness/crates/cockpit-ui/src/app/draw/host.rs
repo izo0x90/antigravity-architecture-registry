@@ -160,8 +160,9 @@ impl CockpitApp {
             }
             false => vec![(egui::Id::new("item_controls"), item, yours.into_iter().filter(|b| b.action.at() != Some(At::Typing)).collect())],
         };
-        // The rest of what waits: each under its own (in a bar, only what
-        // you're on's: one row says what it's for).
+        // The rest of what waits: each under its own. In a bar (one row
+        // says what it's for), what you're on's; you're on none: the
+        // first's, so what waits is always answerable.
         if self.item_bars.iter().all(|(h, _)| *h != host) {
             let view = self.desk.view(kind);
             for b in waiting {
@@ -170,6 +171,12 @@ impl CockpitApp {
                     Some((.., group)) => group.push(b),
                     None => groups.push((egui::Id::new(("waiting_controls", &key)), view.spot_at(&key), vec![b])),
                 }
+            }
+        } else if !groups.iter().flat_map(|(.., g)| g).any(|b| b.action.at() == Some(At::Waiting)) {
+            let first = waiting.first().and_then(|b| b.action.control.as_ref()?.under.clone());
+            let first: Vec<Bound> = waiting.into_iter().filter(|b| b.action.control.as_ref().is_some_and(|c| c.under == first)).collect();
+            if let Some((.., group)) = groups.last_mut() {
+                group.extend(first);
             }
         }
         let look = crate::theme::look();

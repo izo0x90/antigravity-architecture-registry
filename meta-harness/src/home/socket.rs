@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
-use harness_contracts::{ClientEvent, HomeEvent, Stamped};
+use harness_contracts::{ClientEvent, HomeEvent};
 use harness_core::EventHub;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
@@ -86,7 +86,7 @@ fn stop(following: HashMap<String, tokio::task::AbortHandle>) {
 async fn forward(server: String, hub: Arc<EventHub>, tx: mpsc::Sender<HomeEvent>) {
     loop {
         let (replay, mut live) = hub.subscribe();
-        let now = |event| Stamped { at_ms: harness_core::now_ms(), event };
+        let now = harness_core::stamped_now;
         for event in std::iter::once(now(ClientEvent::Resync)).chain(replay).chain([now(ClientEvent::Replayed)]) {
             if tx.send(HomeEvent::Event { server: server.clone(), event: Box::new(event) }).await.is_err() {
                 return;

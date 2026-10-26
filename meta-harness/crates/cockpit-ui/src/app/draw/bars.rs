@@ -67,7 +67,7 @@ impl CockpitApp {
         if !show_keys && status.is_none() && self.note.is_none() {
             return;
         }
-        egui::TopBottomPanel::bottom("key_bar").show(ctx, |ui| {
+        let bar = egui::TopBottomPanel::bottom("key_bar").show(ctx, |ui| {
             // The keys first: what's said after them (a search, a note)
             // grows and wraps after them and never moves them.
             ui.horizontal_wrapped(|ui| {
@@ -82,6 +82,9 @@ impl CockpitApp {
                 }
             });
         });
+        // (Its keys act on what's on top: a tap on it is inside what's over
+        // the panels, whatever that is.)
+        self.overlays.drawn_across(bar.response.rect);
         if let Some(b) = run {
             self.run_bound(&b, None, ctx);
         }

@@ -80,6 +80,10 @@ pub struct Overlays {
     drawn: Vec<(Overlay, Rect)>,
     /// Those drawn, in the order they opened (the last on top).
     order: Vec<Overlay>,
+    /// What acts on whatever's on top (the key bar): inside every one,
+    /// this frame and last.
+    across: Option<Rect>,
+    across_drawn: Option<Rect>,
     taking: Taking,
 }
 
@@ -89,9 +93,16 @@ impl Overlays {
         self.drawing.push((overlay, rect));
     }
 
+    /// `rect` acts on whatever's on top (the key bar): a tap in it is
+    /// inside every one.
+    pub fn drawn_across(&mut self, rect: Rect) {
+        self.across = Some(rect);
+    }
+
     /// The frame's drawn: what the next frame's taps are measured by; one
     /// drawn first now opened last.
     pub fn frame_done(&mut self) {
+        self.across_drawn = self.across.take();
         std::mem::swap(&mut self.drawn, &mut self.drawing);
         self.drawing.clear();
         let drawn = &self.drawn;
@@ -109,7 +120,7 @@ impl Overlays {
     }
 
     fn inside(&self, overlay: Overlay, at: Pos2) -> bool {
-        self.drawn.iter().any(|(o, r)| *o == overlay && r.contains(at))
+        self.across_drawn.is_some_and(|r| r.contains(at)) || self.drawn.iter().any(|(o, r)| *o == overlay && r.contains(at))
     }
 
     /// A tap in `raw` outside `top` (the top one open): it, to close.
@@ -269,6 +280,17 @@ mod tests {
         let mut next = raw(vec![press(Pos2::new(20.0, 20.0), true), press(Pos2::new(20.0, 20.0), false)]);
         o.outside_tap(&mut next, None);
         assert_eq!(next.events.len(), 2, "{:?}", next.events);
+    }
+
+    /// A tap on what acts on whatever's on top (the key bar) is inside it.
+    #[test]
+    fn a_tap_on_the_key_bar_is_inside_whatever_is_on_top() {
+        let mut o = Overlays::default();
+        o.drawn_at(Overlay::QuickLook, CARD);
+        o.drawn_across(Rect::from_min_max(Pos2::new(0.0, 900.0), Pos2::new(1000.0, 940.0)));
+        o.frame_done();
+        assert_eq!(o.outside_tap(&mut raw(vec![press(Pos2::new(10.0, 920.0), true)]), Some(Overlay::QuickLook)), None);
+        assert_eq!(o.outside_tap(&mut raw(vec![press(Pos2::new(10.0, 10.0), true)]), Some(Overlay::QuickLook)), Some(Overlay::QuickLook));
     }
 
     /// The top is the one opened last, whatever the order they're drawn

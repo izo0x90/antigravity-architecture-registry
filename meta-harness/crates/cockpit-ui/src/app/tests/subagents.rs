@@ -133,8 +133,9 @@ fn a_chip_opens_its_work_in_the_quick_look_and_it_stops_alone_where_it_can() {
     let stop = at(&frame(&ctx, &mut app, vec![]), "Stop it");
     click(&ctx, &mut app, stop);
     assert!(sent(&app).is_empty(), "being stopped: not asked again");
-    // A tap outside closes it.
-    click(&ctx, &mut app, egui::pos2(4.0, SCREEN.y - 4.0));
+    // A tap outside closes it (on the panel it's beside).
+    let beside = app.panel_rects[app.desk.panels.focused()].center();
+    click(&ctx, &mut app, beside);
     assert!(app.quick_look.is_none());
     // One its harness can't stop alone: its stop there, not offered.
     let chip = at(&frame(&ctx, &mut app, vec![]), "Helper 2 · Read file2.rs");

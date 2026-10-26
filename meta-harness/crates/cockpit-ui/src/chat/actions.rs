@@ -87,8 +87,9 @@ impl ActionProvider for ChatStreamState {
         let new = Action::new("session.new", "New session", "A fresh conversation in this agent slot (the last one is saved)", C::NewSession);
         out.push(if idle { banner(new, "New session", Some(icon::LIGHTNING)) } else { new });
         // Its last session, not running: resumed at once.
-        if let crate::agents::AgentState::NoSession { resume: Some(native) } = agents.state(&self.ui.slot) {
-            out.push(banner(Action::new("session.resume_last", "Resume the last session", "Picks up this agent slot's last conversation where it was left", C::ResumeLast(native)).focused().importance(crate::actions::PRIMARY), "Resume the last", Some(icon::ARROW_COUNTER_CLOCKWISE)));
+        let state = agents.state(&self.ui.slot);
+        if let (crate::agents::AgentState::NoSession { resume: Some(native) }, Some((way, _))) = (&state, state.way_out()) {
+            out.push(banner(Action::new("session.resume_last", way, "Picks up this agent slot's last conversation where it was left", C::ResumeLast(native.clone())).focused().importance(crate::actions::PRIMARY), way, Some(icon::ARROW_COUNTER_CLOCKWISE)));
         }
         if caps.sessions.list_saved {
             let param = self.saved_choices().map(Param::Choice).unwrap_or(Param::None);

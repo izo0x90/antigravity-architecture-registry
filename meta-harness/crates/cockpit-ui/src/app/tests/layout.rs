@@ -267,7 +267,7 @@ fn the_agent_is_talked_to_from_anywhere_without_moving_anything() {
     assert_eq!(app.desk.chat().ui.input.text, "what calls step?", "typing goes into it, not to the keys");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert!(app.desk.chat().ui.input.text.is_empty(), "sent");
-    assert!(matches!(app.desk.shared.agents.get().state(&harness_contracts::SlotId::new(harness_contracts::LEAD)), crate::agents::AgentState::CantRun(e) if e.contains("No harness instance")), "it went to the lead (no harness here)");
+    assert!(matches!(app.desk.shared.agents.get().state(&harness_contracts::SlotId::new(harness_contracts::LEAD)), crate::agents::AgentState::CantRun(e) if e.contains("no harness instance")), "it went to the lead (no harness here)");
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert_eq!((app.quick_look.is_some(), app.input_mode), (true, InputMode::Normal), "Escape stops typing");
     frame(&ctx, &mut app, press(egui::Key::Escape, false));

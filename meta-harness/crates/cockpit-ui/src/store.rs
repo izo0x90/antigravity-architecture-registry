@@ -68,6 +68,7 @@ pub struct ThreadView {
     subagent_at: HashMap<harness_contracts::SubagentId, usize>,
     subagent_items: HashMap<ItemId, usize>,
     working: usize,
+    last_seen_ended: Option<f64>,
 }
 
 /// A sub-agent as it's seen here: what it's doing (its latest call's
@@ -83,7 +84,7 @@ pub struct Seen {
 impl ThreadView {
     fn new(thread: Thread) -> Self {
         let epoch = EPOCHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Self { thread, turns: Vec::new(), rank: Vec::new(), items: Vec::new(), requests: Vec::new(), request_at: HashMap::new(), pending: Vec::new(), plan: None, usage: None, activity: 0, epoch, known_at: None, settled_at: None, replayed_news: None, news: 0, changed: Vec::new(), stream: Vec::new(), item_at: HashMap::new(), turn_at: HashMap::new(), shown_at: Vec::new(), request_items: HashMap::new(), arrivals: VecDeque::new(), subagents: Vec::new(), subagent_at: HashMap::new(), subagent_items: HashMap::new(), working: 0 }
+        Self { thread, turns: Vec::new(), rank: Vec::new(), items: Vec::new(), requests: Vec::new(), request_at: HashMap::new(), pending: Vec::new(), plan: None, usage: None, activity: 0, epoch, known_at: None, settled_at: None, replayed_news: None, news: 0, changed: Vec::new(), stream: Vec::new(), item_at: HashMap::new(), turn_at: HashMap::new(), shown_at: Vec::new(), request_items: HashMap::new(), arrivals: VecDeque::new(), subagents: Vec::new(), subagent_at: HashMap::new(), subagent_items: HashMap::new(), working: 0, last_seen_ended: None }
     }
 
     /// Its sub-agents, in the order they started.
@@ -99,6 +100,12 @@ impl ThreadView {
     /// How many of its sub-agents are at work.
     pub fn subagents_working(&self) -> usize {
         self.working
+    }
+
+    /// When one of its sub-agents was last seen to end (the clock's
+    /// seconds).
+    pub fn last_seen_ended(&self) -> Option<f64> {
+        self.last_seen_ended
     }
 
     /// Where sub-agent `id`'s work is in the order shown: its steps (at
@@ -135,6 +142,9 @@ impl ThreadView {
             (_, true) => None,
             _ => seen.ended_seen,
         };
+        if seen.ended_seen == Some(now) {
+            self.last_seen_ended = Some(now);
+        }
         seen.subagent = subagent;
         self.working = self.working + usize::from(working) - usize::from(was);
         true

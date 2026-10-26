@@ -37,11 +37,6 @@ pub(super) struct Told {
     parent: String,
 }
 
-/// Now, as the server's clock has it.
-fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
-}
-
 /// Sets `field` to `value`: whether that changed it.
 fn set<T: PartialEq>(field: &mut T, value: T) -> bool {
     let changed = *field != value;
@@ -208,12 +203,14 @@ impl SessionState {
         let was = (std::mem::replace(&mut self.parent, under), std::mem::replace(&mut self.turn, turn));
         let item_id: ItemId = self.push_item(ItemBody::Subagent { subagent_id: id.clone() }, item_status(one.status), Some(one.title.clone()), None);
         (self.parent, self.turn) = was;
-        let started_ms = now_ms();
+        let started_ms = harness_core::now_ms();
         let ended_ms = (!one.status.working()).then_some(started_ms);
         let Started { title, kind, description, prompt, status, can_cancel } = one;
         self.subagents.push(Subagent { id, thread_id: self.thread.id.clone(), item_id, title, kind, description, prompt, answer: None, status, started_ms, ended_ms, can_cancel });
         let at = self.subagents.len() - 1;
-        self.emit(AdapterEvent::SubagentUpdated { subagent: self.subagents[at].clone() });
+        if !self.replaying {
+            self.emit(AdapterEvent::SubagentUpdated { subagent: self.subagents[at].clone() });
+        }
         at
     }
 
@@ -226,7 +223,7 @@ impl SessionState {
         }
         let now = &mut self.subagents[at];
         if now.status != status {
-            now.ended_ms = (!now.status.working()).then(now_ms);
+            now.ended_ms = (!now.status.working()).then(harness_core::now_ms);
         }
         let now = now.clone();
         if now.status != status || now.title != title {
@@ -237,7 +234,9 @@ impl SessionState {
                 item.title = Some(title);
             });
         }
-        self.emit(AdapterEvent::SubagentUpdated { subagent: now });
+        if !self.replaying {
+            self.emit(AdapterEvent::SubagentUpdated { subagent: now });
+        }
     }
 
     /// Every sub-agent, as it is (for a late subscriber).
@@ -380,9 +379,14 @@ mod tests {
     #[test]
     fn a_sub_agent_antigravity_replays_is_there_ended() {
         let mut state = session("antigravity-acp");
+        state.replays_by(None, super::super::Chunks::OfItsId);
+        let mut events = state.subscribe();
         let recorded: Value = serde_json::from_str(include_str!("../../fixtures/subagent-replayed-antigravity-1.4.3.json")).unwrap();
         send(&mut state, recorded["replay"].as_array().unwrap());
         state.replayed();
+        // (Told once, as it is: not as at work, then ended.)
+        let told: Vec<SubagentStatus> = std::iter::from_fn(|| events.try_recv().ok()).filter_map(|e| if let AdapterEvent::SubagentUpdated { subagent } = e { Some(subagent.status) } else { None }).collect();
+        assert_eq!(told, [SubagentStatus::Idle]);
         let [one] = state.subagents.as_slice() else { panic!("{:?}", state.subagents) };
         assert_eq!((one.title.as_str(), one.status), ("File Counter", SubagentStatus::Idle));
         assert_eq!(item(&state, &one.item_id).status, ItemStatus::Completed);

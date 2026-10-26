@@ -332,6 +332,17 @@ impl Measured {
         self.said = true;
     }
 
+    /// Item `at`, as kept (`laid_out`), drawn `by` taller (shorter, less
+    /// than 0): those after it move by it.
+    pub fn grew(&mut self, at: usize, by: f32) {
+        if let Some(stop) = self.stops.get_mut(at) {
+            stop.height = (stop.height + by).max(0.0);
+        }
+        for stop in self.stops.iter_mut().skip(at + 1) {
+            stop.top += by;
+        }
+    }
+
     /// After drawing: what the area showed, and where each item went.
     pub fn drawn<R>(&mut self, output: &egui::scroll_area::ScrollAreaOutput<R>) {
         let top = output.inner_rect.top() - output.state.offset.y;

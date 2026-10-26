@@ -78,7 +78,7 @@ impl ChatStreamState {
         // Its sub-agents at work, said with it.
         match self.subagents_working() {
             0 => (words, colour, next),
-            n => (format!("{words} · {}", super::subagents::working_words(n)), colour, next),
+            n => (format!("{words} · {}", crate::agents::working_words(n)), colour, next),
         }
     }
 

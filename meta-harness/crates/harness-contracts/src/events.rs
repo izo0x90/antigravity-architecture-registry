@@ -42,7 +42,8 @@ pub struct CatalogUpdate {
 /// epoch, its clock): what the server streams, each event so.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Stamped {
-    #[serde(rename = "atMs")]
+    /// (0: not said: a server from before stamps; taken as now.)
+    #[serde(rename = "atMs", default)]
     pub at_ms: u64,
     #[serde(flatten)]
     pub event: ClientEvent,

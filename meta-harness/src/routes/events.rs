@@ -32,7 +32,7 @@ async fn ws_events_handler(_: crate::cockpit::Ticketed, ws: WebSocketUpgrade, St
 async fn stream_events(socket: WebSocket, hub: Arc<EventHub>) {
     let (mut sink, mut incoming) = socket.split();
     let (replay, mut live) = hub.subscribe();
-    let now = |event| Stamped { at_ms: harness_core::now_ms(), event };
+    let now = harness_core::stamped_now;
     if send_all(&mut sink, replay.into_iter().chain([now(ClientEvent::Replayed)])).await.is_err() {
         return;
     }

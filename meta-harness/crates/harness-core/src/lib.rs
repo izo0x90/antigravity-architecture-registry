@@ -26,6 +26,7 @@ pub fn now_ms() -> u64 {
 }
 
 pub use hub::EventHub;
+pub use hub::now as stamped_now;
 pub use registry::{InstanceConfig, InstanceRegistry};
 pub use sessions::{OpenThread, SessionManager};
 pub use slots::{Delivery, KeyHolder, Open, Opened, Origin, Reported, Sent, SlotManager, SlotReport, SlotSettings, SlotState, SlotStore};

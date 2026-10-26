@@ -50,11 +50,23 @@ pub(crate) struct LiveAt {
 /// heights as last drawn, once per change of the shape or of a height. A
 /// frame draws only the rows near the screen; the rest are this room.
 pub(crate) struct RowsAt {
-    of: (usize, u64),
+    /// Of which shape worked out, and which clearing of the heights.
+    of: (u64, u64),
     tops: Vec<f32>,
     /// Each row starts a turn (its line is part of it).
     heads: Vec<bool>,
     bottom: f32,
+}
+
+impl RowsAt {
+    /// Row `at` drawn `by` taller (shorter, less than 0): those after it
+    /// move down by it.
+    fn grew(&mut self, at: usize, by: f32) {
+        for top in &mut self.tops[at + 1..] {
+            *top += by;
+        }
+        self.bottom += by;
+    }
 }
 
 /// What a row was drawn as: whether it starts a turn (its line above it),
@@ -372,7 +384,7 @@ impl ChatStreamState {
                 (_, None) => "Waiting for the server…".to_owned(),
                 (crate::agents::AgentState::NoSession { resume: Some(_) }, Some(s)) => format!("No session running with {}: type below to start one, or resume the last.", s.display_name),
                 (crate::agents::AgentState::NoSession { resume: None }, Some(s)) => format!("No session yet with {}: type below to start one.", s.display_name),
-                (other, Some(s)) => format!("{}: {}.", s.display_name, other.words()),
+                (other, Some(s)) => format!("{}: {}", s.display_name, other.words()),
             };
             banner(ui, colors().info_bg, colors().focus, |ui| {
                 ui.label(RichText::new(said).size(crate::theme::look().text_label).color(colors().text));
@@ -495,18 +507,17 @@ impl ChatStreamState {
         self.lay_out_rows(view, &shape, unknown);
         // (Held while the rows are drawn: their heights may change it, for
         // the next frame.)
-        let Some(rows_at) = self.ui.rows_at.take() else { return };
-        let RowsAt { tops, heads, bottom, .. } = &rows_at;
-        let bottom = *bottom;
+        let Some(mut rows_at) = self.ui.rows_at.take() else { return };
+        let bottom = rows_at.bottom;
         // The rows near the screen (following the latest, the last
         // window's too, from the end).
         let top = ui.cursor().min.y;
         let (lo, hi) = (near.top() - top, near.bottom() - top);
-        let last = tops.partition_point(|t| *t < hi);
-        let first = tops.partition_point(|t| *t <= lo).saturating_sub(1).min(last);
+        let last = rows_at.tops.partition_point(|t| *t < hi);
+        let first = rows_at.tops.partition_point(|t| *t <= lo).saturating_sub(1).min(last);
         let mut ranges = vec![(first, last)];
         if self.ui.cursor.is_none() {
-            let tail = tops.partition_point(|t| *t < bottom - visible.height() * 1.25).saturating_sub(1);
+            let tail = rows_at.tops.partition_point(|t| *t < bottom - visible.height() * 1.25).saturating_sub(1);
             match tail <= last {
                 true => ranges[0].1 = shape.rows.len(),
                 false => ranges.push((tail, shape.rows.len())),
@@ -516,21 +527,24 @@ impl ChatStreamState {
         // The running turn's: the agent at work, as of this frame.
         let mut live = view.running().map(|t| (t.id.clone(), self.activity(view, ui.input(|i| i.time))));
         // Its line not drawn (above the rows drawn): where it is, all the
-        // same (its line pins to the top while its turn's in sight).
+        // same (its line pins to the top while its turn's in sight). (Found
+        // from the end, among the turns' first rows: it's the last, or near
+        // it.)
+        let turn_of = |at: usize| view.in_stream(shape.rows[at].first).map(|i| &i.turn_id);
         if let Some((id, _)) = &live
-            && let Some(start) = shape.rows.iter().position(|r| view.in_stream(r.first).is_some_and(|i| i.turn_id == *id))
+            && let Some(start) = (0..shape.rows.len()).rev().filter(|at| rows_at.heads[*at]).find(|at| turn_of(*at) == Some(id))
             && start < first
         {
-            let end = shape.rows[start..].iter().position(|r| view.in_stream(r.first).is_none_or(|i| i.turn_id != *id)).map_or(shape.rows.len(), |n| start + n);
-            let line = Rect::from_min_size(egui::pos2(ui.cursor().min.x, top + tops[start]), Vec2::new(width, unknown));
-            let turn_bottom = top + tops.get(end).copied().unwrap_or(bottom);
+            let end = (start + 1..shape.rows.len()).find(|at| rows_at.heads[*at]).unwrap_or(shape.rows.len());
+            let line = Rect::from_min_size(egui::pos2(ui.cursor().min.x, top + rows_at.tops[start]), Vec2::new(width, unknown));
+            let turn_bottom = top + rows_at.tops.get(end).copied().unwrap_or(bottom);
             if let Some((turn, activity)) = live.take() {
                 self.ui.live_at = Some(LiveAt { turn, line, spot: None, turn_bottom, activity });
             }
         }
         for at in ranges.iter().flat_map(|(a, b)| *a..*b) {
             // (Up to it: the room of those not drawn.)
-            let gap = tops[at] - (ui.cursor().min.y - top);
+            let gap = rows_at.tops[at] - (ui.cursor().min.y - top);
             if gap > 0.5 {
                 ui.add_space(gap);
             }
@@ -538,7 +552,7 @@ impl ChatStreamState {
             let Some(item) = view.in_stream(row.first) else { continue };
             let starts = ui.cursor().min.y;
             // Each turn under its line (what it is, how it went).
-            if heads[at] {
+            if rows_at.heads[at] {
                 if at > 0 {
                     ui.add(egui::Separator::default().spacing(look.space_m));
                 }
@@ -555,17 +569,21 @@ impl ChatStreamState {
                 ItemBody::Request { request_id } => view.request(request_id).map(|r| (r.status, self.agents().waits(r))),
                 _ => None,
             };
-            let measure = Measure { heads: heads[at], span: row.last - row.first, folded: row.folded, open: opens && self.ui.folds.item_open(item), changed: (row.first..=row.last).map(|i| view.changed(i)).max().unwrap_or(0), asks, width, text };
+            let measure = Measure { heads: rows_at.heads[at], span: row.last - row.first, folded: row.folded, open: opens && self.ui.folds.item_open(item), changed: (row.first..=row.last).map(|i| view.changed(i)).max().unwrap_or(0), asks, width, text };
             let on = self.ui.cursor.is_some_and(|c| row.holds(c));
             let rect = self.item_frame(ui, on, row.depth, |chat, ui| if row.folded { chat.render_run(ui, view, row) } else { chat.render_item(ui, view, item, row) });
             ui.add_space(look.space_xs);
-            // (As tall as it's drawn, its line too: where the rows after it
-            // are.)
+            // (As tall as it's drawn, its line too: the rows after it move
+            // by what it grew, kept so: nothing's worked out again.)
             let height = ui.cursor().min.y - starts;
+            let laid = rows_at.tops.get(at + 1).copied().unwrap_or(rows_at.bottom) - rows_at.tops[at];
+            if (height - laid).abs() > 0.5 {
+                rows_at.grew(at, height - laid);
+                self.ui.scrolling.grew(at, height - laid);
+                moved = true;
+            }
             if self.ui.heights.get(&item.id).is_none_or(|(was, h)| *was != measure || *h != height) {
-                moved |= self.ui.heights.get(&item.id).is_none_or(|(_, h)| *h != height);
                 self.ui.heights.insert(item.id.clone(), (measure, height));
-                self.ui.heights_changed += 1;
             }
             self.ui.item_rects.push(rect);
             // A request waiting on you is a place where it's kept (its
@@ -581,7 +599,7 @@ impl ChatStreamState {
             }
         }
         // The rest: their room; the last turn's end.
-        let rest = bottom - (ui.cursor().min.y - top);
+        let rest = rows_at.bottom - (ui.cursor().min.y - top);
         if rest > 0.5 {
             ui.add_space(rest);
         }
@@ -598,8 +616,8 @@ impl ChatStreamState {
     /// row's height changed (one never drawn: `unknown` tall, its turn's
     /// line too); the viewport told where each is when it changed.
     fn lay_out_rows(&mut self, view: &ThreadView, shape: &std::rc::Rc<rows::Shape>, unknown: f32) {
-        let of = (std::rc::Rc::as_ptr(shape) as usize, self.ui.heights_changed);
-        if self.ui.rows_at.as_ref().is_some_and(|at| at.of == of) {
+        let of = (self.shape_made(), self.ui.heights_changed);
+        if self.ui.rows_at.as_ref().is_some_and(|at| at.of == of && at.tops.len() == shape.rows.len()) {
             self.ui.scrolling.laid_out(None);
             return;
         }
@@ -977,7 +995,7 @@ impl crate::hosted::Hosted for ChatStreamState {
         // Its sub-agents at work: seen here while it isn't focused.
         let working = match self.subagents_working() {
             0 => None,
-            n => Some(Status::new(format!("{} {n}", icon::ROBOT), Tone::Info).detail(subagents::working_words(n))),
+            n => Some(Status::new(format!("{} {n}", icon::ROBOT), Tone::Info).detail(crate::agents::working_words(n))),
         };
         let Some(s) = self.instance() else { return [Status::new("No harness", Tone::Plain)].into_iter().chain(working).collect() };
         let mut out = vec![Status::new(s.display_name.clone(), Tone::Plain)];

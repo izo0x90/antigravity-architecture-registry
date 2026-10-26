@@ -15,7 +15,9 @@ enum Key {
     Item(String),
     Request(String),
     Plan(String),
-    Subagent(String),
+    /// A sub-agent of a thread's (its id is the harness's: two threads of
+    /// one session share them).
+    Subagent(ThreadId, String),
     Usage(ThreadId),
     /// The latest request to show part of the architecture graph.
     ArchitectureView,
@@ -96,7 +98,7 @@ impl Cache {
                 AdapterEvent::ItemUpdated { item } => (Key::Item(item.id.to_string()), Some(item.thread_id.clone())),
                 AdapterEvent::RequestUpdated { request } => (Key::Request(request.id.to_string()), Some(request.thread_id.clone())),
                 AdapterEvent::PlanUpdated { plan } => (Key::Plan(plan.id.to_string()), Some(plan.thread_id.clone())),
-                AdapterEvent::SubagentUpdated { subagent } => (Key::Subagent(subagent.id.to_string()), Some(subagent.thread_id.clone())),
+                AdapterEvent::SubagentUpdated { subagent } => (Key::Subagent(subagent.thread_id.clone(), subagent.id.to_string()), Some(subagent.thread_id.clone())),
                 AdapterEvent::UsageUpdated { thread_id, .. } => (Key::Usage(thread_id.clone()), Some(thread_id.clone())),
                 // Catalog changes reach clients through the instance snapshot.
                 AdapterEvent::CatalogUpdated { .. } => return,
@@ -117,6 +119,12 @@ impl Cache {
         entries.sort_by_key(|e| e.seq);
         entries.into_iter().map(|e| e.event.clone()).collect()
     }
+}
+
+/// `event`, as it happens now (what a stream says of itself: `Resync`,
+/// `Replayed`).
+pub fn now(event: ClientEvent) -> Stamped {
+    Stamped { at_ms: crate::now_ms(), event }
 }
 
 pub struct EventHub {
@@ -159,7 +167,7 @@ impl EventHub {
     pub fn reset(&self) {
         let mut cache = self.cache();
         cache.entries.clear();
-        let _ = self.tx.send(Stamped { at_ms: crate::now_ms(), event: ClientEvent::Resync });
+        let _ = self.tx.send(now(ClientEvent::Resync));
     }
 
     /// The latest state of one thread's entities (its turns, items,
