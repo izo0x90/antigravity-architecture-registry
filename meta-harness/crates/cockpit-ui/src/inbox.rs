@@ -87,14 +87,13 @@ impl InboxView {
     fn sync(&mut self, shared: &Shared) {
         let agents = shared.agents.get();
         let store = agents.store();
-        let now_ms = crate::attention::now_ms();
         if self.item.is_none() {
             self.item = crate::attention::list(store, None).first().map(|n| n.id.clone());
             self.cursor = usize::MAX;
         }
         let shown = self.item.as_ref().and_then(|id| store.notifications.get(id)).map(|n| {
             let harness = n.slot.as_ref().and_then(|s| store.slots.get(s)).and_then(|s| s.instance_id.as_ref()).and_then(|i| store.instances.get(i)).map(|i| i.display_name.clone());
-            let from = [Some(crate::attention::detail(n, &agents, now_ms)), harness].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            let from = [Some(crate::attention::detail(n, &agents)), harness].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             let request = n.thread.as_ref().zip(n.request.as_ref()).and_then(|(t, r)| store.threads.get(t)?.request(r).cloned());
             let said = n.thread.as_ref().and_then(|t| agents.last_said(t)).filter(|s| n.detail.as_deref() != Some(s.as_str()));
             let waits = request.as_ref().is_some_and(|r| agents.waits(r));

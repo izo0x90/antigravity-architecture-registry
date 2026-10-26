@@ -62,8 +62,6 @@ pub struct SessionState {
     pieces: Option<crate::pieces::Replay>,
     /// What a chunk of a message of yours the agent replays is.
     chunks: Chunks,
-    /// The history's being replayed (a session opening).
-    replaying: bool,
     /// The sub-agents started, in order.
     subagents: Vec<harness_contracts::Subagent>,
     /// Each told-of sub-agent's own session: which it is (`subagents`).
@@ -105,7 +103,6 @@ impl SessionState {
             open_user: None,
             pieces: None,
             chunks: Chunks::OfItsId,
-            replaying: false,
             subagents: Vec::new(),
             children: HashMap::new(),
             started_by: None,
@@ -191,19 +188,15 @@ impl SessionState {
     /// How replayed messages are read from now on: their pieces (none: as
     /// they come), and what a chunk is.
     pub fn replays_by(&mut self, pieces: Option<crate::pieces::Replay>, chunks: Chunks) {
-        (self.pieces, self.chunks, self.replaying) = (pieces, chunks, true);
+        (self.pieces, self.chunks) = (pieces, chunks);
     }
 
-    /// The history's replay is over: its last message of yours is read back;
-    /// its sub-agents, ended, are told as they are (not as they went: a
-    /// replay isn't news).
+    /// The history's replay is over: its last message of yours is read
+    /// back; its sub-agents end. (What it emitted meanwhile reached no one:
+    /// the session's events are followed from its state once it's open.)
     pub fn replayed(&mut self) {
         self.close_user();
         self.subagents_replayed();
-        self.replaying = false;
-        for event in self.subagents_now().collect::<Vec<_>>() {
-            self.emit(event);
-        }
     }
 
     /// The message of yours being replayed, all come: its item, read back

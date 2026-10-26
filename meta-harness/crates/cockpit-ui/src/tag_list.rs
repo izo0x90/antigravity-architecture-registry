@@ -55,6 +55,8 @@ impl Row {
 #[derive(Default)]
 pub struct TagList {
     tags: Reader<Tags>,
+    /// The server's clock (its tags' times are on it).
+    clock: crate::agents::ServerClock,
     /// The tags' version its rows are of.
     synced: Option<u64>,
     /// The tags unfolded (each folds to its line to start).
@@ -190,7 +192,7 @@ impl TagList {
             return;
         }
         let tags = self.tags.get();
-        let now = crate::attention::now_ms();
+        let now = self.clock.now_ms();
         // The rows laid out by their heights; only those in view are drawn.
         let tops: Vec<f32> = self.heights.iter().scan(0.0, |top, h| {
             let at = *top;
@@ -295,6 +297,7 @@ impl Navigable for TagList {
 
     fn share(&mut self, shared: &Shared) {
         self.tags.follow(&shared.tags);
+        self.clock = shared.agents.get().clock();
         self.sync();
     }
 

@@ -10,7 +10,8 @@ fn view(name: &str) -> ServerView {
 }
 
 fn from_home(app: &CockpitApp, events: Vec<HomeEvent>) {
-    app.home.from_home.lock().unwrap().extend(events);
+    let now = crate::attention::now_ms();
+    app.home.from_home.lock().unwrap().extend(events.into_iter().map(|e| (now, e)));
 }
 
 fn event(server: &str, event: ClientEvent) -> HomeEvent {

@@ -18,9 +18,35 @@ pub struct Discussing {
     pub text: harness_contracts::Message,
 }
 
-/// What a search found (its items' keys, best first), as of which change
-/// of its view's items, and when (ms).
-pub type Found = (Option<u64>, u64, Vec<String>);
+/// While a view's items keep changing (a streaming chat's, on each
+/// chunk), its search is found again at most this often (ms).
+pub const FOUND_AGAIN_MS: u64 = 500;
+
+/// What a search found in a buffer: its items' keys, best first; for
+/// which search, as of which change of its items, and when.
+pub struct Found {
+    query: String,
+    changed: Option<u64>,
+    at_ms: u64,
+    pub keys: Vec<String>,
+}
+
+impl Found {
+    pub fn new(query: &str, changed: Option<u64>, keys: Vec<String>) -> Self {
+        Self { query: query.to_owned(), changed, at_ms: crate::attention::now_ms(), keys }
+    }
+
+    /// Of its items as of `changed` (they haven't changed since).
+    pub fn current(&self, changed: Option<u64>) -> bool {
+        self.changed.is_some() && self.changed == changed
+    }
+
+    /// Still what `query` finds among items as of `changed`: the same
+    /// search, and its items the same (or found a moment ago).
+    pub fn holds(&self, query: &str, changed: Option<u64>) -> bool {
+        self.query == query && (self.current(changed) || crate::attention::now_ms().saturating_sub(self.at_ms) < FOUND_AGAIN_MS)
+    }
+}
 
 pub struct Desk {
     /// Its server's name (`here`: home's own).
@@ -58,10 +84,9 @@ pub struct Desk {
     /// and the last that found nothing (so `n` can say so).
     pub searches: BTreeMap<BufferKind, String>,
     pub missed: BTreeMap<BufferKind, String>,
-    /// What the last search in each kind of buffer found (its items' keys,
-    /// best first), and as of which change of its items (`Navigable::
-    /// items_changed`): the key bar says where the cursor is among them,
-    /// found again once they change.
+    /// What each buffer's last search found (`Navigable::items_changed`
+    /// says when its items change): the key bar says where the cursor is
+    /// among them, found again once they change.
     pub found: std::cell::RefCell<BTreeMap<crate::panels::BufferId, Found>>,
     /// Go-tos: component details, and one under way or being picked.
     pub details: Details,
@@ -291,3 +316,15 @@ impl Desk {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    /// Kept for the search it's of: another (the same kind's other buffer
+    /// searched since) is found anew.
+    #[test]
+    fn what_a_search_found_holds_for_that_search() {
+        let found = super::Found::new("needle", Some(1), vec!["4".into()]);
+        assert!(found.holds("needle", Some(1)));
+        assert!(!found.holds("thread", Some(1)));
+    }
+}

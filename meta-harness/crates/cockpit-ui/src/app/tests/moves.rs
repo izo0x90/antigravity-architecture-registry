@@ -514,10 +514,10 @@ fn searches_and_restores_put_things_back_exactly() {
     focus(&ctx, &mut app, BufferKind::Tree);
     keys(&ctx, &mut app, "/step");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    assert!(app.search_status().is_some());
+    assert!(app.search_status(&ctx).is_some());
     frame(&ctx, &mut app, key("/"));
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    assert!(app.search_status().is_none() && !app.desk.searches.contains_key(&BufferKind::Tree));
+    assert!(app.search_status(&ctx).is_none() && !app.desk.searches.contains_key(&BufferKind::Tree));
     // The spec comes back to the item, not just its old position.
     focus(&ctx, &mut app, BufferKind::Spec);
     app.desk.spec_mut().move_to("logic#Step(1)");

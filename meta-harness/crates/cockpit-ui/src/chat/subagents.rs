@@ -39,7 +39,7 @@ impl ChatStreamState {
     pub(super) fn render_subagents(&mut self, ui: &mut egui::Ui) {
         let now = ui.input(|i| i.time);
         let stays = self.settings.subagent_ended_s;
-        let now_ms = self.agents().server_now_ms();
+        let now_ms = self.agents().clock().now_ms();
         let shown = |s: &&Seen| s.subagent.status.working() || s.ended_seen.is_some_and(|e| now - e < stays);
         // (None at work, none seen to end a moment ago: nothing to go
         // through.)
@@ -98,7 +98,7 @@ impl ChatStreamState {
         let Some(id) = self.ui.alone.clone() else { return };
         let look = crate::theme::look();
         let told_steps = self.instance().is_some_and(|i| i.capabilities.subagents.lifecycle_events);
-        let now_ms = self.agents().server_now_ms();
+        let now_ms = self.agents().clock().now_ms();
         let Some(view) = self.thread() else { return };
         let Some(seen) = view.subagent(&id) else {
             ui.label(RichText::new("That sub-agent isn't in its chat now.").size(look.text_body).color(colors().muted));

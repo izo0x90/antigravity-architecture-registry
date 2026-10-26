@@ -180,6 +180,8 @@ pub struct ChangesView {
     pub ui: ChangesUi,
     /// What it took last from what the buffers share.
     seen: crate::shared::Seen,
+    /// The server's clock (its windows' times are on it).
+    server_clock: crate::agents::ServerClock,
     /// The desk reading the list, and why it couldn't.
     loading: bool,
     list_error: Option<String>,
@@ -230,6 +232,7 @@ impl Default for ChangesView {
             layout: DiffLayout::default(),
             ui: ChangesUi::default(),
             seen: Default::default(),
+            server_clock: Default::default(),
             loading: false,
             list_error: None,
             error: None,
@@ -776,7 +779,7 @@ impl ChangesView {
     /// A timeline window: when, how many files, who was working.
     fn draw_window(&self, ui: &mut egui::Ui, w: &Window) {
         let look = crate::theme::look();
-        let now = crate::attention::now_ms();
+        let now = self.server_clock.now_ms();
         let compared = w.comparison() == self.comparison;
         ui.horizontal(|ui| {
             let when = match w.ended_ms {
@@ -1077,6 +1080,7 @@ impl Navigable for ChangesView {
     /// Its settings, and the desk's comparison: its list (read again: the
     /// cursor stays on its row), the components it touches, the timeline.
     fn share(&mut self, shared: &crate::shared::Shared) {
+        self.server_clock = shared.agents.get().clock();
         if let Some(settings) = shared.settings.since(&mut self.seen.settings) {
             self.ui = settings.changes.clone();
         }

@@ -684,7 +684,7 @@ fn messages_are_moved_through_and_searched() {
     }
     let (n41, n42) = (key_of(&app, "src/needle41.rs"), key_of(&app, "src/needle42.rs"));
     assert_eq!(seen, [Some(run), Some(n41.clone()), Some(n42), Some(n41)], "in order, on and back");
-    assert_eq!(app.search_status().map(|(t, _)| t).as_deref(), Some("/needle4 2/3"));
+    assert_eq!(app.search_status(&ctx).map(|(t, _)| t).as_deref(), Some("/needle4 2/3"));
     // A sub-agent's step put in before them: still where it says.
     let mut sub = item(44, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "a step".into() }], streaming: false });
     if let ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } } = &mut sub {
@@ -694,7 +694,7 @@ fn messages_are_moved_through_and_searched() {
     frame(&ctx, &mut app, vec![]);
     // (Found again at most so often while the items change.)
     std::thread::sleep(std::time::Duration::from_millis(600));
-    assert_eq!(app.search_status().map(|(t, _)| t).as_deref(), Some("/needle4 2/3"), "found again once the items changed");
+    assert_eq!(app.search_status(&ctx).map(|(t, _)| t).as_deref(), Some("/needle4 2/3"), "found again once the items changed");
 }
 
 /// From a file a call changed, `g x` shows the turn's changes in the

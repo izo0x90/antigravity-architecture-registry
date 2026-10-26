@@ -143,7 +143,7 @@ impl ThreadView {
             _ => seen.ended_seen,
         };
         if seen.ended_seen == Some(now) {
-            self.last_seen_ended = Some(now);
+            self.last_seen_ended = Some(self.last_seen_ended.map_or(now, |was| was.max(now)));
         }
         seen.subagent = subagent;
         self.working = self.working + usize::from(working) - usize::from(was);

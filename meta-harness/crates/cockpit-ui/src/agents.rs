@@ -140,7 +140,7 @@ enum Reply {
     /// An answer to `request` was taken, or why not.
     Answered { slot: SlotId, request: harness_contracts::RequestId, result: NetResult<()> },
     /// Stopping sub-agent `id` was taken, or why not.
-    Stopping { slot: SlotId, id: harness_contracts::SubagentId, result: NetResult<()> },
+    Stopping { slot: SlotId, thread: ThreadId, id: harness_contracts::SubagentId, result: NetResult<()> },
     SlotMade(SlotId, NetResult<SlotId>),
     /// A session was ended to start again with new tool servers.
     Restart { slot: SlotId, resume: Option<NativeId>, result: NetResult<()> },
@@ -205,12 +205,13 @@ pub struct Agents {
     /// it can't run, everywhere it's named.
     cant_open: BTreeMap<SlotId, String>,
     /// Which change of what it knows this is (an event, a reply, an act).
-    changes: u64,
+    version: u64,
     /// How far this clock is ahead of the server's (its least gap seen
     /// between an event happening and coming), in ms.
     skew_ms: Option<i64>,
-    /// Sub-agents asked to stop, till they say they have (or it's refused).
-    stopping: BTreeSet<harness_contracts::SubagentId>,
+    /// Sub-agents asked to stop (by thread: ids repeat across them), till
+    /// they say they have (or it's refused).
+    stopping: BTreeSet<(ThreadId, harness_contracts::SubagentId)>,
     /// The clock (seconds) as of this frame, events applied at it.
     now: f64,
     mailbox: Mailbox,
@@ -228,32 +229,49 @@ pub fn status_words(status: &ProviderStatus) -> String {
     }
 }
 
+/// A server's clock, as this one has it: this one's, less how far it's
+/// ahead (ms). What its times are compared with: when a thing happened
+/// there, how long ago that is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ServerClock(i64);
+
+impl ServerClock {
+    /// Now, on the server's clock.
+    pub fn now_ms(self) -> u64 {
+        (crate::attention::now_ms() as i64 - self.0).max(0) as u64
+    }
+}
+
 impl Agents {
     pub fn store(&self) -> &Store {
         &self.store
     }
 
-    /// Takes a server event, as it happens now.
+    /// Takes a server event, as it happens now (tests).
+    #[cfg(test)]
     pub fn apply(&mut self, event: ClientEvent) {
-        self.apply_stamped(harness_contracts::Stamped { at_ms: crate::attention::now_ms(), event });
+        let now = crate::attention::now_ms();
+        self.apply_stamped(harness_contracts::Stamped { at_ms: now, event }, now);
     }
 
-    /// Takes a server event (the shell, for every one), as of when it
-    /// happened: on this clock, that long before now (never after).
-    pub fn apply_stamped(&mut self, stamped: harness_contracts::Stamped) {
-        self.changes += 1;
+    /// Takes a server event (the shell, for every one), which came at
+    /// `arrived_ms` (this clock), as of when it happened: on this clock,
+    /// that long before now (never after).
+    pub fn apply_stamped(&mut self, stamped: harness_contracts::Stamped, arrived_ms: u64) {
+        self.version += 1;
         let harness_contracts::Stamped { at_ms, event } = stamped;
         // (Its server's clock and this one's differ by at most the least
-        // gap seen between when it says a thing happened and when it came:
-        // nothing comes before it happens.)
-        let at_ms = if at_ms == 0 { self.server_now_ms() } else { at_ms };
-        let gap = crate::attention::now_ms() as i64 - at_ms as i64;
+        // gap seen between when it says a thing happened and when it came
+        // here, whenever it's taken: nothing comes before it happens. Not
+        // said: as it came.)
         if event == ClientEvent::Resync {
             self.skew_ms = None;
         }
+        let at_ms = if at_ms == 0 { (arrived_ms as i64 - self.skew_ms.unwrap_or(0)).max(0) as u64 } else { at_ms };
+        let gap = arrived_ms as i64 - at_ms as i64;
         let skew = self.skew_ms.map_or(gap, |s| s.min(gap));
         self.skew_ms = Some(skew);
-        let ago = (gap - skew).max(0) as f64 / 1000.0;
+        let ago = (crate::attention::now_ms() as i64 - at_ms as i64 - skew).max(0) as f64 / 1000.0;
         let at = self.now - ago;
         // Answered (as the server says): its answer arrived.
         if let ClientEvent::Session { event: harness_contracts::AdapterEvent::RequestUpdated { request } } = &event
@@ -265,26 +283,26 @@ impl Agents {
         if let ClientEvent::Session { event: harness_contracts::AdapterEvent::SubagentUpdated { subagent } } = &event
             && !subagent.status.working()
         {
-            self.stopping.remove(&subagent.id);
+            self.stopping.remove(&(subagent.thread_id.clone(), subagent.id.clone()));
         }
         self.store.apply(event, at);
     }
 
     /// Which change of what it knows this is: the same, nothing of it
     /// changed.
-    pub fn changes(&self) -> u64 {
-        self.changes
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
-    /// Now, as the server's clock has it (this one's, less how far it's
-    /// ahead).
-    pub fn server_now_ms(&self) -> u64 {
-        (crate::attention::now_ms() as i64 - self.skew_ms.unwrap_or(0)).max(0) as u64
+    /// The server's clock, as this one has it.
+    pub fn clock(&self) -> ServerClock {
+        ServerClock(self.skew_ms.unwrap_or(0))
     }
 
-    /// Whether sub-agent `id` was asked to stop, and hasn't yet.
-    pub fn stopping(&self, id: &harness_contracts::SubagentId) -> bool {
-        self.stopping.contains(id)
+    /// Whether sub-agent `id` of `thread` was asked to stop, and hasn't
+    /// yet.
+    pub fn stopping(&self, thread: &ThreadId, id: &harness_contracts::SubagentId) -> bool {
+        self.stopping.contains(&(thread.clone(), id.clone()))
     }
 
     /// Whether `request` waits on you: pending, and no answer to it on its
@@ -363,14 +381,14 @@ impl Agents {
 
     /// How agent slot `slot` is doing.
     pub fn state(&self, slot: &SlotId) -> AgentState {
-        if let Some(why) = self.cant_open.get(slot) {
-            return AgentState::CantRun(format!("couldn't start a session: {why}"));
-        }
+        // (A session this one couldn't start: so till one runs, from here
+        // or anywhere, or its error is put away.)
+        let couldnt = || self.cant_open.get(slot).map(|why| AgentState::CantRun(format!("couldn't start a session: {why}")));
         let Some(its) = self.store.slots.get(slot) else {
             if self.store.closed.contains(slot) {
                 return AgentState::Gone;
             }
-            return self.harness_problem(slot).map_or(AgentState::NoSession { resume: None }, AgentState::CantRun);
+            return couldnt().or_else(|| self.harness_problem(slot).map(AgentState::CantRun)).unwrap_or(AgentState::NoSession { resume: None });
         };
         if let harness_contracts::SlotStatus::Unavailable { reason, .. } = &its.status {
             return AgentState::CantRun(format!("can't run: {reason}"));
@@ -379,6 +397,9 @@ impl Agents {
         let Some(view) = self.thread_in(slot) else {
             if self.opening.contains(slot) {
                 return AgentState::Starting;
+            }
+            if let Some(state) = couldnt() {
+                return state;
             }
             return self.harness_problem(slot).map_or(AgentState::NoSession { resume }, AgentState::CantRun);
         };
@@ -430,7 +451,7 @@ impl Agents {
 
     /// Does what `slot`'s chat (or the inbox) asked.
     pub fn act(&mut self, slot: SlotId, act: Act, net: &NetClient, ctx: &egui::Context) {
-        self.changes += 1;
+        self.version += 1;
         let mailbox = self.mailbox.clone();
         let for_slot = slot.clone();
         let done = move |r: NetResult<()>| post(&mailbox, Reply::Done(for_slot, r));
@@ -462,9 +483,10 @@ impl Agents {
             Act::CloseSession { key } => net.close_slot_session(&slot, &key, ctx.clone(), done),
             Act::Stop { thread } => net.interrupt(&thread, ctx.clone()),
             Act::StopSubagent { thread, id } => {
-                self.stopping.insert(id.clone());
+                self.stopping.insert((thread.clone(), id.clone()));
                 let mailbox = self.mailbox.clone();
-                net.cancel_subagent(&thread, &id.clone(), ctx.clone(), move |result| post(&mailbox, Reply::Stopping { slot, id, result }));
+                let (asked, of) = (thread.clone(), id.clone());
+                net.cancel_subagent(&asked, &of, ctx.clone(), move |result| post(&mailbox, Reply::Stopping { slot, thread, id, result }));
             }
             Act::Reprobe { instance } => net.refresh_instance(&instance, ctx.clone(), done),
             Act::Steer { thread, input } => net.steer(&thread, &input, ctx.clone(), done),
@@ -501,8 +523,10 @@ impl Agents {
             Act::PutSignInEndAway { id } => {
                 self.ends_put_away.insert(id);
             }
+            // (A session it couldn't start too: its way out shows.)
             Act::PutErrorAway => {
                 self.errors.remove(&slot);
+                self.cant_open.remove(&slot);
             }
             Act::Seen => net.notifications_seen(&slot, ctx.clone(), |_| {}),
         }
@@ -569,7 +593,7 @@ impl Agents {
         }
         let replies = std::mem::take(&mut *self.mailbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         if !replies.is_empty() {
-            self.changes += 1;
+            self.version += 1;
         }
         for reply in replies {
             match reply {
@@ -602,8 +626,8 @@ impl Agents {
                 }
                 Reply::Answered { result: Ok(()), .. } => {}
                 // Refused: it's said why, and can be asked again.
-                Reply::Stopping { slot, id, result: Err(e) } => {
-                    self.stopping.remove(&id);
+                Reply::Stopping { slot, thread, id, result: Err(e) } => {
+                    self.stopping.remove(&(thread, id));
                     self.errors.insert(slot, e.into());
                 }
                 Reply::Stopping { result: Ok(()), .. } => {}
@@ -724,6 +748,11 @@ pub(crate) mod tests {
         let mut agents = Agents::default();
         crate::chat::tests::conversation_events().into_iter().for_each(|e| agents.apply(e));
         assert_eq!(agents.state(&lead), AgentState::Idle);
+        // One this tab couldn't start, while one runs (started anywhere):
+        // it's as the one running is.
+        agents.cant_open.insert(lead.clone(), "refused".into());
+        assert_eq!(agents.state(&lead), AgentState::Idle);
+        agents.cant_open.clear();
         let turn = |status| ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("now"), thread_id: ThreadId::new("t"), ordinal: 2, status, failure: None, usage: None } } };
         agents.apply(turn(TurnStatus::Running));
         assert_eq!(agents.state(&lead), AgentState::Working { subagents: 0 });
@@ -743,19 +772,24 @@ pub(crate) mod tests {
     }
 
     /// The server's clock may differ from this one: an event's age is told
-    /// by the least gap seen (nothing comes before it happens), so a server
-    /// a minute ahead doesn't make its news look as if it's still to come,
-    /// nor one behind make it look old.
+    /// by the least gap seen between its time and when it came (nothing
+    /// comes before it happens), so a server a minute ahead doesn't make
+    /// its news look as if it's still to come, nor one behind make it look
+    /// old; nor events taken late (a hidden tab's) look new.
     #[test]
     fn an_events_time_is_read_on_its_servers_clock() {
-        for ahead_ms in [60_000_i64, -60_000] {
-            let mut agents = Agents { now: 100.0, ..Default::default() };
-            let server_now = (crate::attention::now_ms() as i64 + ahead_ms) as u64;
-            agents.apply_stamped(harness_contracts::Stamped { at_ms: server_now, event: ClientEvent::Replayed });
-            crate::chat::tests::conversation_events().into_iter().filter(|e| *e != ClientEvent::Replayed).for_each(|event| agents.apply_stamped(harness_contracts::Stamped { at_ms: server_now - 3_000, event }));
+        for (ahead_ms, late_ms) in [(60_000_i64, 0_u64), (-60_000, 0), (0, 300_000)] {
+            let mut agents = Agents { now: 1000.0, ..Default::default() };
+            let (here_now, server_now) = (crate::attention::now_ms(), (crate::attention::now_ms() as i64 + ahead_ms) as u64);
+            let came = here_now - late_ms;
+            for event in [ClientEvent::Resync, ClientEvent::Replayed] {
+                agents.apply_stamped(harness_contracts::Stamped { at_ms: server_now - late_ms, event }, came);
+            }
+            crate::chat::tests::conversation_events().into_iter().filter(|e| *e != ClientEvent::Replayed).for_each(|event| agents.apply_stamped(harness_contracts::Stamped { at_ms: server_now - late_ms - 3_000, event }, came));
             let heard = agents.thread_in(&SlotId::new(LEAD)).and_then(|t| t.last_heard()).unwrap();
-            assert!((agents.now - heard - 3.0).abs() < 0.5, "{ahead_ms}: heard {heard}");
-            assert!((agents.server_now_ms() as i64 - server_now as i64).abs() < 500);
+            let ago = (late_ms + 3_000) as f64 / 1000.0;
+            assert!((agents.now - heard - ago).abs() < 0.5, "{ahead_ms} {late_ms}: heard {heard}");
+            assert!((agents.clock().now_ms() as i64 - server_now as i64).abs() < 500);
         }
     }
 }

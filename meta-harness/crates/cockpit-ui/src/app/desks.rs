@@ -45,7 +45,7 @@ impl CockpitApp {
     pub(super) fn take_from_home(&mut self, ctx: &egui::Context) {
         self.home.poll_ws(ctx);
         let said = self.home.from_home.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
-        for event in said {
+        for (came_ms, event) in said {
             match event {
                 HomeEvent::Servers { servers } => self.servers_now(servers, ctx),
                 HomeEvent::Event { server, event } => match self.desk_mut(&server) {
@@ -54,7 +54,7 @@ impl CockpitApp {
                             desk.net.reconnected = true;
                         }
                         if let Ok(mut incoming) = desk.net.incoming.lock() {
-                            incoming.push(*event);
+                            incoming.push((came_ms, *event));
                         }
                     }
                     None => log::warn!("an event for {server}, which has no desk"),

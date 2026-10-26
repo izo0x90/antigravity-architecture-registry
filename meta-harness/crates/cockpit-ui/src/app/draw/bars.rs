@@ -61,7 +61,7 @@ impl CockpitApp {
             Some(Capture::Hint(h)) => Some((format!("hint: type a label{}", if h.typed.is_empty() { String::new() } else { format!(" ({})", h.typed) }), colors().key)),
             Some(Capture::MarkSet) => Some(("mark: press a letter".into(), colors().key)),
             Some(Capture::MarkJump) => Some(("jump to mark: press its letter".into(), colors().key)),
-            _ => self.search_status().map(|(text, typing)| (text, if typing { colors().key } else { colors().muted })),
+            _ => self.search_status(ctx).map(|(text, typing)| (text, if typing { colors().key } else { colors().muted })),
         };
         let show_keys = self.config.keymap.bar.show;
         if !show_keys && status.is_none() && self.note.is_none() {

@@ -201,8 +201,12 @@ fn escaped(text: &str) -> String {
     urlencoding::encode(text).into_owned()
 }
 
+/// `text` as `escaped` wrote it (none: a `%` isn't followed by two hex
+/// digits, so it wasn't).
 fn unescaped(text: &str) -> Option<String> {
-    urlencoding::decode(text).ok().map(std::borrow::Cow::into_owned)
+    let bytes = text.as_bytes();
+    let well_formed = text.match_indices('%').all(|(at, _)| bytes.get(at + 1..at + 3).is_some_and(|hex| hex.iter().all(u8::is_ascii_hexdigit)));
+    well_formed.then(|| urlencoding::decode(text).ok()).flatten().map(std::borrow::Cow::into_owned)
 }
 
 impl Message {
@@ -269,5 +273,8 @@ mod tests {
         assert_eq!(Piece::read_label("nah://tag/x?at=1-3-auto"), None, "no length");
         assert_eq!(Piece::read_label("nah://tag/x?at=1-3-auto &len=1"), None, "past a space: not read");
         assert_eq!(Piece::read_label("https://tag/x?at=1-3-auto&len=1"), None, "not ours");
+        for bad in ["%G1", "%4", "x%"] {
+            assert_eq!(Piece::read_label(&format!("nah://tag/{bad}?at=1-3-auto&len=1")), None, "{bad}: not as we escape");
+        }
     }
 }

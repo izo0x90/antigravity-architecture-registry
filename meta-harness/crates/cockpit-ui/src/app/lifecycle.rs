@@ -126,7 +126,7 @@ impl CockpitApp {
         let socket = self.home.ws_state.lock().map_or(crate::net::WsState::Closed, |s| *s);
         self.desk.shared.socket.set(socket);
         let events = self.desk.net.incoming.lock().map(|mut lock| lock.drain(..).collect::<Vec<_>>()).unwrap_or_default();
-        for stamped in events {
+        for (came_ms, stamped) in events {
             let event = &stamped.event;
             if let harness_contracts::ClientEvent::Architecture { event: arch_graph::ArchEvent::Index { status } } = &event {
                 self.desk.shared.index.set((**status).clone());
@@ -162,7 +162,7 @@ impl CockpitApp {
             self.desk.shared.terminals.get_mut().apply(event);
             self.desk.shared.tags.get_mut().apply(event);
             self.desk.shared.discussions.get_mut().apply(event);
-            self.desk.shared.agents.get_mut().apply_stamped(stamped);
+            self.desk.shared.agents.get_mut().apply_stamped(stamped, came_ms);
         }
         for reply in std::mem::take(&mut *self.desk.index_inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
             match reply {

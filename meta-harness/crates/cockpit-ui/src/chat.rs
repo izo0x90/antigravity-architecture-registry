@@ -137,8 +137,8 @@ pub struct ChatView {
     /// How tall what's under the stream was last frame (the requests kept
     /// in sight, the typing box): the stream leaves room for it.
     pub(crate) below: f32,
-    /// Where its typing box is, while it's typed in, with the strip over
-    /// it (what's put over the box clears both).
+    /// Where its typing box is, while it's typed in, with the strip on it
+    /// (`Hosted::typing_rect`).
     pub(crate) typing: Option<Rect>,
     /// A sign-in has the typing box (see `tend_sign_in_box`).
     pub(crate) sign_in_has_box: bool,
@@ -464,7 +464,7 @@ impl ChatStreamState {
         let instance = self.active_instance()?;
         let agents = self.agents();
         let waiting = agents.waiting(&instance)?.clone();
-        let left_s = waiting.until_ms.map(|until| until.saturating_sub(crate::attention::now_ms()).div_ceil(1000));
+        let left_s = waiting.until_ms.map(|until| until.saturating_sub(agents.clock().now_ms()).div_ceil(1000));
         let pasted = agents.pasted(&instance, waiting.id).cloned();
         Some(SignInNow { ran_out: left_s == Some(0), left_s, pasted, waiting })
     }

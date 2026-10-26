@@ -170,8 +170,9 @@ impl Template {
     }
 }
 
-/// The most labels a message read back has (no message is sent with
-/// more links than this).
+/// The most pieces read in a row: past it, what follows a message's words
+/// isn't taken as its pieces (one linking more things than this is shown
+/// as it came), and no reading goes on for long, however it's written.
 const PIECES_MOST: usize = 256;
 
 /// A label read, its links, and its content's length.
@@ -213,11 +214,6 @@ impl Replay {
     pub fn read(&self, text: &str) -> Option<(String, Vec<Piece>)> {
         let first = self.listed.as_ref().unwrap_or(&self.piece);
         let needle = format!("{}{LABEL_START}", first.lead());
-        // (More labels than a message is sent with: none of ours, and not
-        // read through, however it's written.)
-        if text.matches(LABEL_START).nth(PIECES_MOST).is_some() {
-            return None;
-        }
         let mut from = 0;
         while let Some(found) = text.get(from..).and_then(|t| t.find(&needle)) {
             let at = from + found;
@@ -241,6 +237,9 @@ impl Replay {
                 while let Some((label, .., end)) = listed.head_at(text, pos) {
                     labels.push(label);
                     pos = end;
+                    if labels.len() > PIECES_MOST {
+                        return None;
+                    }
                 }
                 for label in labels {
                     let (piece, end) = self.piece.piece_at(text, pos, Some(label))?;
@@ -249,7 +248,7 @@ impl Replay {
                 }
             }
             None => {
-                while pos < text.len() {
+                while pos < text.len() && pieces.len() <= PIECES_MOST {
                     let (piece, end) = self.piece.piece_at(text, pos, None)?;
                     pieces.push(piece);
                     pos = end;
@@ -367,6 +366,17 @@ mod tests {
             }
         }
         assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    }
+
+    /// Pasted content that names labels often (a log, a review of this
+    /// code) is still read back: only pieces in a row are counted.
+    #[test]
+    fn content_naming_labels_often_still_reads_back() {
+        let (text, mut pieces) = sent();
+        pieces[0].text = "nah://tag/t?at=0-2-auto&len=1 ".repeat(300);
+        let as_text = blocks(text.into(), pieces.clone(), Sending::InText);
+        let [acp::ContentBlock::Text(t)] = as_text.as_slice() else { panic!("{as_text:?}") };
+        assert_eq!(Replay::ours().read(&t.text), Some((text.to_owned(), pieces)));
     }
 
     #[test]

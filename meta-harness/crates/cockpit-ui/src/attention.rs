@@ -51,7 +51,7 @@ pub fn age(at_ms: u64, now_ms: u64) -> String {
 }
 
 /// Its line in a list: `slot · kind · age`.
-pub fn detail(n: &Notification, agents: &crate::agents::Agents, now_ms: u64) -> String {
+pub fn detail(n: &Notification, agents: &crate::agents::Agents) -> String {
     let store = agents.store();
     // Its agent, and how it is when it can't take what's asked (as
     // everywhere it's named).
@@ -62,7 +62,7 @@ pub fn detail(n: &Notification, agents: &crate::agents::Agents, now_ms: u64) -> 
             _ => name,
         }
     });
-    [slot, Some(kind_word(n.kind).to_owned()), Some(age(n.at_ms, now_ms))].into_iter().flatten().collect::<Vec<_>>().join(" · ")
+    [slot, Some(kind_word(n.kind).to_owned()), Some(age(n.at_ms, agents.clock().now_ms()))].into_iter().flatten().collect::<Vec<_>>().join(" · ")
 }
 
 pub fn now_ms() -> u64 {
@@ -110,8 +110,8 @@ mod tests {
         // Its agent with no session running: said so (as everywhere).
         crate::status::set(crate::config::UiConfig::with_overrides("").unwrap().status);
         let mut agents = crate::agents::Agents::default();
-        agents.apply(ClientEvent::NotificationUpdated { notification: note("req:2", NotificationKind::Approval, "sub-1", 5) });
-        assert_eq!(detail(&store.notifications[&id("req:2")], &agents, 125_000), "sub-1 (no session running) · approval · 2 min ago");
+        agents.apply(ClientEvent::NotificationUpdated { notification: note("req:2", NotificationKind::Approval, "sub-1", now_ms() - 125_000) });
+        assert_eq!(detail(&agents.store().notifications[&id("req:2")], &agents), "sub-1 (no session running) · approval · 2 min ago");
     }
 
     #[test]

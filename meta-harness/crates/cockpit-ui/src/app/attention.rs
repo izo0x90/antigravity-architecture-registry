@@ -92,14 +92,13 @@ impl CockpitApp {
     /// the next waiting, the system notifications switch.
     pub(super) fn attention_actions(&self) -> Vec<Action> {
         use ShellCommand as S;
-        let now = crate::attention::now_ms();
         let many = self.servers.len() > 1;
         let rows = |level: Level| -> Vec<Choice> {
             self.all_open(Some(level))
                 .iter()
                 .map(|(server, n)| {
                     let agents = self.desks().find(|d| &d.server == server).expect("a desk per server listed").shared.agents.get();
-                    let detail = crate::attention::detail(n, &agents, now);
+                    let detail = crate::attention::detail(n, &agents);
                     Choice::new(format!("{server}/{}", n.id), &n.title).detail(Some(if many { format!("{server} · {detail}") } else { detail }))
                 })
                 .collect()

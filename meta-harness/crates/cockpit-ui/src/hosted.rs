@@ -121,7 +121,9 @@ pub trait Hosted {
         false
     }
 
-    /// Where its typing box is, while it's typed in (its controls go under).
+    /// Where its typing box is, while it's typed in, with what's drawn on
+    /// it (a chat's sub-agent strip): the box's controls go under it, or
+    /// over it, never on it.
     fn typing_rect(&self) -> Option<egui::Rect> {
         None
     }

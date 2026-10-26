@@ -102,17 +102,19 @@ pub struct NetClient {
     ws_url: String,
     ws_sender: Option<WsSender>,
     /// What the socket said, by which socket (one dropped may still speak).
-    ws_events: Arc<Mutex<Vec<(u64, WsEvent)>>>,
+    ws_events: Arc<Mutex<Vec<(u64, u64, WsEvent)>>>,
     /// The socket opened last.
     ws_generation: u64,
     /// Sees each server event's text as it arrives, even while no frame
     /// runs (a hidden browser tab).
     on_arrival: Option<Arrival>,
-    /// This server's events, as home's socket brought them, since the last drain.
-    pub incoming: Arc<Mutex<Vec<harness_contracts::Stamped>>>,
+    /// This server's events, as home's socket brought them (each with when
+    /// it came, ms), since the last drain.
+    pub incoming: Arc<Mutex<Vec<(u64, harness_contracts::Stamped)>>>,
     /// What home's socket said (every server's events, and the servers),
-    /// since the last drain: only the client that holds the socket.
-    pub from_home: Arc<Mutex<Vec<HomeEvent>>>,
+    /// each with when it came (ms), since the last drain: only the client
+    /// that holds the socket.
+    pub from_home: Arc<Mutex<Vec<(u64, HomeEvent)>>>,
     pub ws_state: Arc<Mutex<WsState>>,
     /// Bumped on every HTTP request/response and WebSocket message (drives the activity LED).
     pub activity: Arc<AtomicU64>,
@@ -383,7 +385,7 @@ impl NetClient {
                 arrival(text);
             }
             if let Ok(mut queue) = queue.lock() {
-                queue.push((generation, event));
+                queue.push((generation, crate::attention::now_ms(), event));
             }
             ctx.request_repaint();
             std::ops::ControlFlow::Continue(())
@@ -408,8 +410,8 @@ impl NetClient {
         let arrived = self.ws_events.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         // Only the socket open now (a dropped one may still be speaking).
         let current = self.ws_sender.is_some().then_some(self.ws_generation);
-        for (_, event) in arrived.into_iter().filter(|(g, _)| Some(*g) == current) {
-            self.on_ws_event(event, now);
+        for (_, came_ms, event) in arrived.into_iter().filter(|(g, ..)| Some(*g) == current) {
+            self.on_ws_event(event, now, came_ms);
         }
         if let Some((at, _)) = self.retry.filter(|(at, _)| at.is_finite()) {
             if now >= at && !self.events_door.asking() {
@@ -420,15 +422,15 @@ impl NetClient {
         }
     }
 
-    /// One socket event at app time `now`.
-    pub fn on_ws_event(&mut self, event: WsEvent, now: f64) {
+    /// One socket event at app time `now`, which came at `came_ms`.
+    pub fn on_ws_event(&mut self, event: WsEvent, now: f64, came_ms: u64) {
         match event {
             WsEvent::Message(WsMessage::Text(text)) => {
                 self.activity.fetch_add(1, Ordering::Relaxed);
                 match serde_json::from_str::<HomeEvent>(&text) {
                     Ok(parsed) => {
                         if let Ok(mut events) = self.from_home.lock() {
-                            events.push(parsed);
+                            events.push((came_ms, parsed));
                         }
                     }
                     Err(err) => log::warn!("Unreadable server event: {err} | {text}"),
@@ -1042,18 +1044,18 @@ mod tests {
     fn a_dropped_event_socket_comes_back_with_backoff_and_asks_for_a_refresh() {
         let mut net = NetClient::new("http://127.0.0.1:9");
         net.set_backoff(500, 4000);
-        net.on_ws_event(WsEvent::Opened, 0.0);
+        net.on_ws_event(WsEvent::Opened, 0.0, 0);
         assert!(!net.reconnected, "the first open isn't a reconnect");
-        net.on_ws_event(WsEvent::Error("gone".into()), 10.0);
+        net.on_ws_event(WsEvent::Error("gone".into()), 10.0, 0);
         assert_eq!(*net.ws_state.lock().unwrap(), WsState::Closed);
         assert_eq!(net.retry.map(|(at, _)| at), Some(10.5), "first retry after the minimum delay");
         // Each failed attempt waits twice as long, up to the cap.
         for (now, expected) in [(10.5, 11.5), (11.5, 13.5), (13.5, 17.5), (17.5, 21.5)] {
             net.retry = net.retry.map(|(_, d)| (f64::INFINITY, d));
-            net.on_ws_event(WsEvent::Closed, now);
+            net.on_ws_event(WsEvent::Closed, now, 0);
             assert_eq!(net.retry.map(|(at, _)| at), Some(expected), "at {now}");
         }
-        net.on_ws_event(WsEvent::Opened, 30.0);
+        net.on_ws_event(WsEvent::Opened, 30.0, 0);
         assert_eq!(net.retry.map(|(at, _)| at), None);
         assert!(net.reconnected, "views refetch what they missed");
         assert_eq!(*net.ws_state.lock().unwrap(), WsState::Open);
@@ -1062,10 +1064,10 @@ mod tests {
     #[test]
     fn home_says_whose_events_and_another_servers_calls_go_through_it() {
         let mut net = NetClient::new("http://127.0.0.1:9");
-        net.on_ws_event(WsEvent::Opened, 0.0);
-        net.on_ws_event(WsEvent::Message(WsMessage::Text(r#"{"type":"event","server":"cloud","event":{"atMs":5,"type":"resync"}}"#.into())), 1.0);
+        net.on_ws_event(WsEvent::Opened, 0.0, 0);
+        net.on_ws_event(WsEvent::Message(WsMessage::Text(r#"{"type":"event","server":"cloud","event":{"atMs":5,"type":"resync"}}"#.into())), 1.0, 7);
         let events = std::mem::take(&mut *net.from_home.lock().unwrap());
-        assert_eq!(events, [HomeEvent::Event { server: "cloud".into(), event: Box::new(harness_contracts::Stamped { at_ms: 5, event: harness_contracts::ClientEvent::Resync }) }]);
+        assert_eq!(events, [(7, HomeEvent::Event { server: "cloud".into(), event: Box::new(harness_contracts::Stamped { at_ms: 5, event: harness_contracts::ClientEvent::Resync }) })]);
         let cloud = NetClient::for_server("http://127.0.0.1:9", "cloud");
         cloud.notifications_seen(&SlotId::new("lead"), egui::Context::default(), |_| {});
         assert_eq!(*cloud.sent.lock().unwrap(), ["POST /s/cloud/api/notifications/seen"]);

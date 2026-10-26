@@ -150,3 +150,35 @@ async fn a_server_asked_to_stop_stops_and_home_keeps_it_listed_as_lost() {
     assert!(lost, "home says it's lost, and keeps it listed until it's removed");
     assert_eq!(http(home, "GET", "/health", None).await.0, 200);
 }
+
+/// A server whose clock is behind home's: its events come on home's
+/// clock (as long ago as they happened there), not as old as the clocks
+/// are apart.
+#[tokio::test]
+async fn a_servers_times_come_on_homes_clock() {
+    use futures::SinkExt;
+    const BEHIND_MS: u64 = 60_000;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let at = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        let theirs = |ago: u64| harness_core::now_ms() - BEHIND_MS - ago;
+        for (event, at_ms) in [(ClientEvent::Resync, theirs(0)), (ClientEvent::Replayed, theirs(5_000))] {
+            let text = serde_json::to_string(&harness_contracts::Stamped { at_ms, event }).unwrap();
+            socket.send(Message::text(text)).await.unwrap();
+        }
+        futures::future::pending::<()>().await;
+    });
+    let (home, _) = spawn_app().await;
+    let mut socket = home_socket(home).await;
+    assert_eq!(add(home, "late", &format!("http://{at}")).await.0, 201);
+    // (Home's own marks of its stream are now: not the one it sent.)
+    let ago = |at_ms: u64| harness_core::now_ms() as i64 - at_ms as i64;
+    let ago = until(&mut socket, |e| match e {
+        HomeEvent::Event { server, event } if server == "late" && event.event == ClientEvent::Replayed && ago(event.at_ms) > 1_000 => Some(ago(event.at_ms)),
+        _ => None,
+    })
+    .await;
+    assert!((4_000..10_000).contains(&ago), "5 s ago on home's clock, not 65: {ago} ms");
+}

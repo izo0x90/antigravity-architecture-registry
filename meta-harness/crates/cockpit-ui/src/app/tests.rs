@@ -117,7 +117,8 @@ fn bodies(app: &CockpitApp, call: &str) -> Vec<serde_json::Value> {
 
 /// The server says `event` on the event stream.
 fn told(app: &CockpitApp, event: harness_contracts::ClientEvent) {
-    app.desk.net.incoming.lock().unwrap().push(harness_contracts::Stamped { at_ms: crate::attention::now_ms(), event });
+    let now = crate::attention::now_ms();
+    app.desk.net.incoming.lock().unwrap().push((now, harness_contracts::Stamped { at_ms: now, event }));
 }
 
 /// Double-clicks the drawn text `label`.

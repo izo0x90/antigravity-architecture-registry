@@ -49,18 +49,20 @@ pub struct Rules {
     /// It reads the way back out itself (it steps back through its own
     /// first: a menu's path, a picker to its list).
     pub own_back: bool,
+    /// The key bar's keys act on it (a tap there is inside it).
+    pub keys_on_the_bar: bool,
 }
 
 impl Overlay {
     pub fn rules(self) -> Rules {
-        let (outside, modal, own_back) = match self {
-            Self::QuickLook => (Outside::Closes, false, true),
-            Self::Inspector => (Outside::Stays, true, false),
-            Self::Feedback | Self::Issues => (Outside::Closes, true, false),
-            Self::Hints | Self::Keys => (Outside::ClosesAndPasses, false, true),
-            Self::Menu | Self::Palette => (Outside::Closes, true, true),
+        let (outside, modal, own_back, keys_on_the_bar) = match self {
+            Self::QuickLook => (Outside::Closes, false, true, true),
+            Self::Inspector => (Outside::Stays, true, false, false),
+            Self::Feedback | Self::Issues => (Outside::Closes, true, false, false),
+            Self::Hints | Self::Keys => (Outside::ClosesAndPasses, false, true, false),
+            Self::Menu | Self::Palette => (Outside::Closes, true, true, false),
         };
-        Rules { outside, modal, own_back }
+        Rules { outside, modal, own_back, keys_on_the_bar }
     }
 }
 
@@ -80,7 +82,7 @@ pub struct Overlays {
     drawn: Vec<(Overlay, Rect)>,
     /// Those drawn, in the order they opened (the last on top).
     order: Vec<Overlay>,
-    /// What acts on whatever's on top (the key bar): inside every one,
+    /// The key bar: inside one whose keys it shows (`keys_on_the_bar`),
     /// this frame and last.
     across: Option<Rect>,
     across_drawn: Option<Rect>,
@@ -93,8 +95,8 @@ impl Overlays {
         self.drawing.push((overlay, rect));
     }
 
-    /// `rect` acts on whatever's on top (the key bar): a tap in it is
-    /// inside every one.
+    /// `rect` is the key bar: a tap in it is inside one whose keys it
+    /// shows.
     pub fn drawn_across(&mut self, rect: Rect) {
         self.across = Some(rect);
     }
@@ -120,7 +122,7 @@ impl Overlays {
     }
 
     fn inside(&self, overlay: Overlay, at: Pos2) -> bool {
-        self.across_drawn.is_some_and(|r| r.contains(at)) || self.drawn.iter().any(|(o, r)| *o == overlay && r.contains(at))
+        (overlay.rules().keys_on_the_bar && self.across_drawn.is_some_and(|r| r.contains(at))) || self.drawn.iter().any(|(o, r)| *o == overlay && r.contains(at))
     }
 
     /// A tap in `raw` outside `top` (the top one open): it, to close.
@@ -282,15 +284,22 @@ mod tests {
         assert_eq!(next.events.len(), 2, "{:?}", next.events);
     }
 
-    /// A tap on what acts on whatever's on top (the key bar) is inside it.
+    /// A tap on the key bar is inside the quick look (its keys are the
+    /// bar's), not inside a menu over the panels (the bar's are theirs).
     #[test]
-    fn a_tap_on_the_key_bar_is_inside_whatever_is_on_top() {
+    fn a_tap_on_the_key_bar_is_inside_the_one_whose_keys_it_shows() {
+        let bar = Rect::from_min_max(Pos2::new(0.0, 900.0), Pos2::new(1000.0, 940.0));
         let mut o = Overlays::default();
         o.drawn_at(Overlay::QuickLook, CARD);
-        o.drawn_across(Rect::from_min_max(Pos2::new(0.0, 900.0), Pos2::new(1000.0, 940.0)));
+        o.drawn_across(bar);
         o.frame_done();
         assert_eq!(o.outside_tap(&mut raw(vec![press(Pos2::new(10.0, 920.0), true)]), Some(Overlay::QuickLook)), None);
         assert_eq!(o.outside_tap(&mut raw(vec![press(Pos2::new(10.0, 10.0), true)]), Some(Overlay::QuickLook)), Some(Overlay::QuickLook));
+        let mut o = Overlays::default();
+        o.drawn_at(Overlay::Menu, LIST);
+        o.drawn_across(bar);
+        o.frame_done();
+        assert_eq!(o.outside_tap(&mut raw(vec![press(Pos2::new(10.0, 920.0), true)]), Some(Overlay::Menu)), Some(Overlay::Menu));
     }
 
     /// The top is the one opened last, whatever the order they're drawn

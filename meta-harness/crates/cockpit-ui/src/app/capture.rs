@@ -1,10 +1,7 @@
 //! Hints, search and marks: typed keys a view reads itself.
 
 use super::*;
-
-/// How often, at most, a kept search is found again while its view's
-/// items change.
-const FOUND_AGAIN_MS: u64 = 500;
+use super::desk::Found;
 
 /// Where a hint label goes so it hides as little as it can, and never on
 /// another label: just left of its item, else just right of it (inside the
@@ -86,7 +83,7 @@ impl CockpitApp {
                             let found: Vec<String> = rank_matches(&items, &search.query).into_iter().map(|i| items[i].key.clone()).collect();
                             if !found.is_empty() {
                                 self.desk.searches.insert(kind, search.query.clone());
-                                self.desk.found.borrow_mut().insert(self.desk.used_buffer(kind), (self.desk.view(kind).items_changed(), crate::attention::now_ms(), found));
+                                self.desk.found.borrow_mut().insert(self.desk.used_buffer(kind), Found::new(&search.query, self.desk.view(kind).items_changed(), found));
                                 self.desk.missed.remove(&kind);
                             } else {
                                 self.desk.searches.remove(&kind);
@@ -161,7 +158,7 @@ impl CockpitApp {
         };
         let items = self.desk.view(kind).items();
         let found = rank_matches(&items, &query);
-        self.desk.found.borrow_mut().insert(self.desk.used_buffer(kind), (self.desk.view(kind).items_changed(), crate::attention::now_ms(), found.iter().map(|i| items[*i].key.clone()).collect()));
+        self.desk.found.borrow_mut().insert(self.desk.used_buffer(kind), Found::new(&query, self.desk.view(kind).items_changed(), found.iter().map(|i| items[*i].key.clone()).collect()));
         if found.is_empty() {
             self.note = Some(format!("No match for {query}."));
             return;
@@ -179,7 +176,7 @@ impl CockpitApp {
 
     /// The search line for the key bar: the prompt while typing, else where
     /// the cursor is among the view's last search's matches.
-    pub(super) fn search_status(&self) -> Option<(String, bool)> {
+    pub(super) fn search_status(&self, ctx: &egui::Context) -> Option<(String, bool)> {
         if let Some(Capture::Search(search)) = &self.capture {
             let found = search.found;
             return Some((format!("/{}| {found} {}", search.query, if found == 1 { "match" } else { "matches" }), true));
@@ -190,14 +187,19 @@ impl CockpitApp {
         let changed = view.items_changed();
         let buffer = self.desk.used_buffer(kind);
         let mut kept = self.desk.found.borrow_mut();
-        // (Its items changed, or it doesn't say: found again; at most so
-        // often while they change, as a streaming chat's do on each chunk.)
-        let now = crate::attention::now_ms();
-        if !kept.get(&buffer).is_some_and(|(was, at, _)| (was.is_some() && *was == changed) || now.saturating_sub(*at) < FOUND_AGAIN_MS) {
-            let items = view.items();
-            kept.insert(buffer, (changed, now, rank_matches(&items, query).into_iter().map(|i| items[i].key.clone()).collect()));
+        match kept.get(&buffer) {
+            Some(found) if found.holds(query, changed) => {
+                // (Kept a moment while its items change: found again after.)
+                if !found.current(changed) {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(super::desk::FOUND_AGAIN_MS));
+                }
+            }
+            _ => {
+                let items = view.items();
+                kept.insert(buffer, Found::new(query, changed, rank_matches(&items, query).into_iter().map(|i| items[i].key.clone()).collect()));
+            }
         }
-        let found = &kept.get(&buffer)?.2;
+        let found = &kept.get(&buffer)?.keys;
         let cursor = view.cursor_key()?;
         let at = found.iter().position(|key| *key == cursor)?;
         Some((format!("/{query} {}/{}", at + 1, found.len()), false))

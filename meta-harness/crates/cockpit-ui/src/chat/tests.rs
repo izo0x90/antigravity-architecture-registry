@@ -537,7 +537,7 @@ fn an_update_is_as_of_when_it_happened() {
     let mut chat = Fed::default();
     chat.shared.socket.set(crate::net::WsState::Open);
     let now = crate::attention::now_ms();
-    let mut take = |event: ClientEvent, ago_s: u64| chat.shared.agents.get_mut().apply_stamped(harness_contracts::Stamped { at_ms: now - ago_s * 1000, event });
+    let mut take = |event: ClientEvent, ago_s: u64| chat.shared.agents.get_mut().apply_stamped(harness_contracts::Stamped { at_ms: now - ago_s * 1000, event }, now);
     // (The stream starts so: said now, on the server's clock.)
     take(ClientEvent::Resync, 0);
     for event in conversation_events() {
@@ -552,10 +552,10 @@ fn an_update_is_as_of_when_it_happened() {
     assert_eq!((activity.liveness, activity.since_last.map(|s| s.round())), (crate::indicator::Liveness::Quiet, Some(90.0)));
     assert!(chat.live_words(&activity).0.starts_with("No word for 1 min"), "{:?}", chat.live_words(&activity).0);
     let mut replayed = Fed::default();
-    replayed.shared.agents.get_mut().apply_stamped(harness_contracts::Stamped { at_ms: now, event: ClientEvent::Resync });
+    replayed.shared.agents.get_mut().apply_stamped(harness_contracts::Stamped { at_ms: now, event: ClientEvent::Resync }, now);
     for event in conversation_events() {
         let ago = if event == ClientEvent::Replayed { 0 } else { 300 };
-        replayed.shared.agents.get_mut().apply_stamped(harness_contracts::Stamped { at_ms: now - ago * 1000, event });
+        replayed.shared.agents.get_mut().apply_stamped(harness_contracts::Stamped { at_ms: now - ago * 1000, event }, now);
     }
     replayed.read();
     let view = replayed.thread().unwrap().clone();

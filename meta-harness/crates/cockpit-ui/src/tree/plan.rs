@@ -163,10 +163,10 @@ impl TreeSource for PlanTree {
         };
         // (Said again only when the agents or the discussions changed.)
         let agents = shared.agents.get();
-        if !read && agents.changes() == self.agents_seen {
+        if !read && agents.version() == self.agents_seen {
             return false;
         }
-        self.agents_seen = agents.changes();
+        self.agents_seen = agents.version();
         let whose: Whose = self.discussions.iter().map(|d| (d.id.clone(), agents.whose(d).0)).collect();
         let said = whose != self.whose;
         self.whose = whose;

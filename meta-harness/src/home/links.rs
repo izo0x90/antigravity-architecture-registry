@@ -175,6 +175,10 @@ async fn stream(entry: &ServerEntry, hub: &Arc<EventHub>, state: &Arc<Mutex<Link
     if let Some(me) = links.upgrade() {
         me.set(&entry.name, state, LinkState::Connected);
     }
+    // (How far home's clock is ahead of its: at most the least gap seen
+    // between when it says a thing happened and when it came here. Its
+    // times are put on home's clock with it, as home's own events are.)
+    let mut lead: Option<i64> = None;
     while let Some(message) = socket.next().await {
         let text = match message.map_err(|e| e.to_string())? {
             Message::Text(text) => text,
@@ -182,6 +186,10 @@ async fn stream(entry: &ServerEntry, hub: &Arc<EventHub>, state: &Arc<Mutex<Link
             _ => continue,
         };
         let Stamped { at_ms, mut event } = serde_json::from_str(&text).map_err(|e| format!("an event home can't read ({e})"))?;
+        if at_ms != 0 {
+            let gap = harness_core::now_ms() as i64 - at_ms as i64;
+            lead = Some(lead.map_or(gap, |l| l.min(gap)));
+        }
         match &mut event {
             // It fell behind on its side: its whole state follows.
             ClientEvent::Resync => {
@@ -199,7 +207,7 @@ async fn stream(entry: &ServerEntry, hub: &Arc<EventHub>, state: &Arc<Mutex<Link
         // (As of when it happened there; not said: now.)
         match at_ms {
             0 => hub.publish(event),
-            at => hub.publish_at(event, at),
+            at => hub.publish_at(event, (at as i64 + lead.unwrap_or(0)).max(0) as u64),
         }
     }
     Ok(())

@@ -208,9 +208,7 @@ impl SessionState {
         let Started { title, kind, description, prompt, status, can_cancel } = one;
         self.subagents.push(Subagent { id, thread_id: self.thread.id.clone(), item_id, title, kind, description, prompt, answer: None, status, started_ms, ended_ms, can_cancel });
         let at = self.subagents.len() - 1;
-        if !self.replaying {
-            self.emit(AdapterEvent::SubagentUpdated { subagent: self.subagents[at].clone() });
-        }
+        self.emit(AdapterEvent::SubagentUpdated { subagent: self.subagents[at].clone() });
         at
     }
 
@@ -234,9 +232,7 @@ impl SessionState {
                 item.title = Some(title);
             });
         }
-        if !self.replaying {
-            self.emit(AdapterEvent::SubagentUpdated { subagent: now });
-        }
+        self.emit(AdapterEvent::SubagentUpdated { subagent: now });
     }
 
     /// Every sub-agent, as it is (for a late subscriber).
@@ -379,13 +375,11 @@ mod tests {
     #[test]
     fn a_sub_agent_antigravity_replays_is_there_ended() {
         let mut state = session("antigravity-acp");
-        state.replays_by(None, super::super::Chunks::OfItsId);
-        let mut events = state.subscribe();
         let recorded: Value = serde_json::from_str(include_str!("../../fixtures/subagent-replayed-antigravity-1.4.3.json")).unwrap();
         send(&mut state, recorded["replay"].as_array().unwrap());
         state.replayed();
-        // (Told once, as it is: not as at work, then ended.)
-        let told: Vec<SubagentStatus> = std::iter::from_fn(|| events.try_recv().ok()).filter_map(|e| if let AdapterEvent::SubagentUpdated { subagent } = e { Some(subagent.status) } else { None }).collect();
+        // (Followed once it's open: told once, as it is, not as at work.)
+        let told: Vec<SubagentStatus> = state.replay().into_iter().filter_map(|e| if let AdapterEvent::SubagentUpdated { subagent } = e { Some(subagent.status) } else { None }).collect();
         assert_eq!(told, [SubagentStatus::Idle]);
         let [one] = state.subagents.as_slice() else { panic!("{:?}", state.subagents) };
         assert_eq!((one.title.as_str(), one.status), ("File Counter", SubagentStatus::Idle));

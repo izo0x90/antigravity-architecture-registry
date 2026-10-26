@@ -159,7 +159,7 @@ impl ActionProvider for ChatStreamState {
             out.push(Action::new("chat.open_subagent", "Open the sub-agent", "Its steps as they come, what it was told, stopping it", C::OpenSubagent).focused().importance(crate::actions::PRIMARY).group(crate::actions::Group::GoTo).on_item(crate::actions::Style::Button, "Open", Some(icon::ROBOT)));
         }
         // (Only what's needed of it, read where it's kept.)
-        let alone = self.ui.alone.as_ref().and_then(|id| view.and_then(|v| v.subagent(id)).map(|s| (s.subagent.status.working(), s.subagent.can_cancel, agents.stopping(id))));
+        let alone = self.ui.alone.as_ref().and_then(|id| view.and_then(|v| v.subagent(id)).map(|s| (s.subagent.status.working(), s.subagent.can_cancel, agents.stopping(&s.subagent.thread_id, id))));
         if let Some((working, can_cancel, stopping)) = alone {
             if working {
                 let stop = Action::new("chat.stop_subagent", "Stop the sub-agent", "Stops its work alone; the agent's turn goes on", C::StopSubagent).focused().importance(crate::actions::PRIMARY).on_view(crate::actions::Style::Button, "Stop it", Some(icon::STOP));
