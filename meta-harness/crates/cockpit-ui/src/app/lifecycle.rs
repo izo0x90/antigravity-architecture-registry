@@ -25,7 +25,12 @@ impl CockpitApp {
         if let Some(Ok(types)) = self.desk.types_inbox.lock().ok().and_then(|mut t| t.take()) {
             self.desk.shared.types.set(Some(types));
         }
-        self.desk.shared.settings.set(crate::shared::Settings::of(&self.config));
+        // (What shows an agent at work: as picked here, else the config's.)
+        let mut settings = crate::shared::Settings::of(&self.config);
+        if let Some(kind) = self.at_work {
+            settings.chat.indicator = kind;
+        }
+        self.desk.shared.settings.set(settings);
         self.desk.shared.user.set(self.config.user.name.clone());
         if let Some(note) = self.fonts.tend(ctx) {
             self.note = Some(note);

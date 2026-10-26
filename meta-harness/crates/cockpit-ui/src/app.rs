@@ -82,6 +82,8 @@ enum ShellCommand {
     ToggleIssues,
     /// The buttons of what you're on in a bar (true) or floating.
     ItemButtons,
+    /// What shows an agent at work, picked (by its name).
+    AtWork,
     /// The quick look on what the cursor is on (or closed, when open).
     QuickLook,
     /// The quick look's card in a panel instead.
@@ -331,6 +333,9 @@ pub struct CockpitApp {
     /// the UI config says), and this frame's row kept for them by each host
     /// (the quick look, or a panel by its number) while they're in a bar.
     pub(crate) item_buttons: Option<crate::hosted::ItemButtons>,
+    /// What shows an agent at work, once picked here (else the UI config
+    /// says: `[chat] indicator`).
+    pub(crate) at_work: Option<crate::config::IndicatorKind>,
     /// Each host's content this frame (under its top line): where its
     /// view takes gestures.
     contents: Vec<(crate::keymap::Host, egui::Rect)>,
@@ -414,6 +419,7 @@ impl CockpitApp {
             note_since: None,
             panel_rects: Vec::new(),
             item_buttons: None,
+            at_work: None,
             item_bars: Vec::new(),
             top_bar_needs: 0.0,
             contents: Vec::new(),

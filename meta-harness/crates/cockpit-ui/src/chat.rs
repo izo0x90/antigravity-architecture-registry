@@ -156,7 +156,6 @@ pub struct ChatView {
 #[serde(default)]
 pub(crate) struct Picked {
     pub shows: Option<crate::config::Verbosity>,
-    pub at_work: Option<crate::config::IndicatorKind>,
 }
 
 impl Default for ChatView {

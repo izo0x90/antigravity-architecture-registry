@@ -564,7 +564,7 @@ fn an_update_is_as_of_when_it_happened() {
 #[test]
 fn what_is_picked_is_each_chats_own() {
     let mut chat = conversation();
-    chat.ui.picked.insert(SlotId::new(LEAD), crate::chat::Picked { shows: Some(crate::config::Verbosity::Quiet), at_work: None });
+    chat.ui.picked.insert(SlotId::new(LEAD), crate::chat::Picked { shows: Some(crate::config::Verbosity::Quiet) });
     chat.read();
     assert_eq!(chat.ui.folds.verbosity(), crate::config::Verbosity::Quiet);
     chat.ui.slot = SlotId::new("coder");

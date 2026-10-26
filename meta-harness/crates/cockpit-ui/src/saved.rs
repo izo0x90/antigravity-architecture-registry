@@ -56,6 +56,10 @@ pub struct SavedUi {
     /// the UI config says).
     #[serde(default)]
     pub item_buttons: Option<crate::hosted::ItemButtons>,
+    /// What shows an agent at work, once picked here (else the UI config
+    /// says).
+    #[serde(default)]
+    pub at_work: Option<crate::config::IndicatorKind>,
 }
 
 /// What came back from the server.
@@ -183,7 +187,7 @@ mod tests {
     use super::*;
 
     fn state(draft: &str) -> SavedUi {
-        SavedUi { version: VERSION, panels: Panels::default(), views: Vec::new(), kept: vec![(BufferId::new(crate::kind::BufferKind::Spec, 0), serde_json::Value::String(draft.into()))], used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), agents: false, comparison: Default::default(), item_buttons: None, versions: BTreeMap::new() }
+        SavedUi { version: VERSION, panels: Panels::default(), views: Vec::new(), kept: vec![(BufferId::new(crate::kind::BufferKind::Spec, 0), serde_json::Value::String(draft.into()))], used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), agents: false, comparison: Default::default(), item_buttons: None, at_work: None, versions: BTreeMap::new() }
     }
 
     fn arrive(keeper: &Keeper, value: Option<serde_json::Value>) {

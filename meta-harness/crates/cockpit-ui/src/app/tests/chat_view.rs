@@ -294,7 +294,7 @@ fn a_running_turn_says_what_its_doing_and_how_live_it_is() {
     let marks = |output: &egui::FullOutput| output.shapes.iter().filter(|c| matches!(c.shape, egui::Shape::Path(_) | egui::Shape::Circle(_) | egui::Shape::LineSegment { .. })).count();
     frame_at(&ctx, &mut app, vec![], 99.0);
     let with = marks(&frame_at(&ctx, &mut app, vec![], 99.5));
-    let none = app.bound_actions().into_iter().find(|b| b.action.id == "chat.indicator").expect("the setting");
+    let none = app.bound_actions().into_iter().find(|b| b.action.id == "look.at_work").expect("the setting");
     app.invoke(Invocation { action: none.action, origin: none.origin, value: Some("none".into()) }, &ctx);
     let (words, again) = line(&ctx, &mut app, 100.0);
     assert!(words.starts_with("No word for 1 min") && again > 10.0, "{words:?}, again in {again}");

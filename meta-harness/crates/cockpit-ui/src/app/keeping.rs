@@ -32,6 +32,7 @@ impl CockpitApp {
             agents: self.desk.remote.agents,
             comparison: self.desk.shared.changes.comparison().clone(),
             item_buttons: self.item_buttons,
+            at_work: self.at_work,
         }
     }
 
@@ -67,6 +68,7 @@ impl CockpitApp {
         self.desk.remote.agents = saved.agents;
         self.desk.shared.changes.compare(saved.comparison.clone());
         self.item_buttons = saved.item_buttons;
+        self.at_work = saved.at_work;
         // A kind saved in another version of itself starts new; the rest holds.
         let current = |kind: BufferKind| saved.versions.get(&kind).copied().unwrap_or(1) == kind.saved_version();
         let saved_kinds = saved.views.iter().map(|(b, _)| b.kind).chain(saved.kept.iter().map(|(b, _)| b.kind));

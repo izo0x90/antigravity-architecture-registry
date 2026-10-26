@@ -55,7 +55,6 @@ enum ChatCommand {
     Retry,
     DismissError,
     Answer { thread: ThreadId, request: harness_contracts::RequestId, option: String },
-    Indicator,
     Verbosity,
 }
 
@@ -317,7 +316,6 @@ impl ActionProvider for ChatStreamState {
             Param::Choice(T::ALL.iter().map(|c| Choice::new(c.name(), c.words()).detail(Some(c.detail().into())).current(*c == current)).collect())
         }
         out.push(Action::new("chat.verbosity", "How much it shows", "Quiet: messages and what needs you; normal: calls folded into runs; everything: every call and its output", C::Verbosity).param(choices(self.ui.folds.verbosity())).setting("Shows", None).group(crate::actions::Group::View).importance(MINOR));
-        out.push(Action::new("chat.indicator", "What shows the agent at work", "Beside the running turn's words: a heartbeat of its updates, or nothing", C::Indicator).param(choices(self.ui.indicator.kind())).setting("At work", None).group(crate::actions::Group::View).importance(MINOR));
         // Typed in: sending it (to the sign-in, while one waits for it).
         out.push(match self.sign_in_box() {
             Some(_) => Action::new("chat.send", "Send to the sign-in", "What's typed goes to the sign-in waiting for it, not the agent", C::Send).on_typing(Button, "Send to the sign-in", Some(icon::KEY)),
@@ -545,12 +543,6 @@ impl ActionProvider for ChatStreamState {
             ChatCommand::Verbosity => {
                 if let Some(verbosity) = value.as_deref().and_then(Named::named) {
                     self.ui.picked.entry(self.ui.slot.clone()).or_default().shows = Some(verbosity);
-                    self.settle();
-                }
-            }
-            ChatCommand::Indicator => {
-                if let Some(kind) = value.as_deref().and_then(Named::named) {
-                    self.ui.picked.entry(self.ui.slot.clone()).or_default().at_work = Some(kind);
                     self.settle();
                 }
             }

@@ -156,6 +156,7 @@ t = "Tags"
 "panel.add" = { leader = "l a" }
 "panel.close" = { leader = "l x" }
 "panel.item_buttons" = { leader = "l b" }
+"look.at_work" = { leader = "l w" }
 "inspector.toggle" = { leader = "D i", keys = ["ctrl+shift+c"] }
 "issues.toggle" = { leader = "D d", keys = ["F2"] }
 # The quick look: the full card of what the cursor is on, over the view
@@ -296,7 +297,6 @@ t = "Tags"
 "config.category.mode" = { leader = "o o" }
 "config.*" = { leader = "m #" }
 "chat.verbosity" = { leader = "m v" }
-"chat.indicator" = { leader = "m a" }
 "model.next" = { leader = "m m" }
 "mode.native" = { leader = "o o" }
 "mode.runtime" = { leader = "o o" }

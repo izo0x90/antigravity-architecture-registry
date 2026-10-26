@@ -24,6 +24,11 @@ impl CockpitApp {
         actions.push(admin("panel.add".into(), "Add a panel".into(), "One more panel, on the right: a hidden buffer comes back in it".into(), S::SetLayout(self.desk.panels.len() + 1)));
         actions.push(admin("panel.fewer".into(), "One panel fewer (its buffer is hidden, not lost)".into(), "The rightmost panel goes; its buffer stays open, hidden".into(), S::SetLayout(self.desk.panels.len().saturating_sub(1).max(1))));
         let bar = self.item_buttons_now() == ItemButtons::Bar;
+        // What shows an agent at work: a look of the cockpit's, not a
+        // chat's.
+        let at_work = self.at_work.unwrap_or(self.config.chat.indicator);
+        let choices = <crate::config::IndicatorKind as crate::config::Named>::ALL.iter().map(|k| crate::actions::Choice::new(crate::config::Named::name(*k), crate::config::Named::words(*k)).detail(Some(crate::config::Named::detail(*k).into())).current(*k == at_work)).collect();
+        actions.push(Action::new("look.at_work", "What shows an agent at work", "Beside a running turn's words, in every chat: a heartbeat of its updates, or nothing", S::AtWork).param(Param::Choice(choices)).group(Group::View).importance(MINOR));
         actions.push(Action::new("panel.item_buttons", "Show the buttons of what you're on in a bar along each panel's bottom (else floating under it)", "Where the buttons for the item under the cursor show, in every panel", S::ItemButtons).param(Param::Toggle { on: bar }).group(Group::View).importance(MINOR));
         actions.push(admin("inspector.toggle".into(), "Toggle element inspector".into(), "For reporting the cockpit itself: point at anything drawn to file feedback on it".into(), S::ToggleInspector));
         actions.push(admin("issues.toggle".into(), "Toggle issues window".into(), "The feedback filed on the cockpit, and what came of it".into(), S::ToggleIssues));
@@ -421,6 +426,11 @@ impl CockpitApp {
             ShellCommand::QuickLookToPanel => self.quick_look_to_panel(),
             ShellCommand::Talk => self.talk(ctx),
             ShellCommand::PopTerminal => self.pop_terminal(ctx),
+            ShellCommand::AtWork => {
+                if let Some(kind) = value.as_deref().and_then(crate::config::Named::named) {
+                    self.at_work = Some(kind);
+                }
+            }
             ShellCommand::ItemButtons => {
                 let bar = value.as_deref() == Some("true");
                 self.item_buttons = Some(if bar { ItemButtons::Bar } else { ItemButtons::Floating });

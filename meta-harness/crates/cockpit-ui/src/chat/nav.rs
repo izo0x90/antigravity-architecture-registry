@@ -170,13 +170,13 @@ impl crate::buffer::Buffer for ChatStreamState {
 }
 
 impl ChatStreamState {
-    /// How much it shows and what shows the agent at work: as picked for
-    /// it, else as the config says (a change of what it shows starts the
-    /// folds afresh).
+    /// How much it shows: as picked for it, else as the config says (a
+    /// change of what it shows starts the folds afresh); what shows the
+    /// agent at work, as the cockpit's set.
     pub(super) fn settle(&mut self) {
         let picked = self.ui.picked.get(&self.ui.slot).copied().unwrap_or_default();
         self.ui.folds.set_verbosity(picked.shows.unwrap_or(self.settings.shows));
-        let kind = picked.at_work.unwrap_or(self.settings.indicator);
+        let kind = self.settings.indicator;
         if self.ui.indicator.kind() != kind {
             self.ui.indicator = crate::indicator::Shown::of(kind);
         }
