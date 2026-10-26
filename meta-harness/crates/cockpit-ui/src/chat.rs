@@ -118,6 +118,10 @@ pub struct ChatView {
     /// How tall each row was last drawn (by its first item), and as what:
     /// a row out of sight takes that room without being drawn.
     pub(crate) heights: std::collections::HashMap<harness_contracts::ItemId, (render::Measure, f32)>,
+    /// Which change of `heights` this is; where each row is down the
+    /// stream, as worked out from them (once per change).
+    pub(crate) heights_changed: u64,
+    pub(crate) rows_at: Option<render::RowsAt>,
     /// What in the item a hint picked: one of its links, or code blocks.
     pub(crate) pick: Option<Pick>,
     /// Where it's looking (the shared rules move it, a message a stop);
@@ -172,6 +176,8 @@ impl Default for ChatView {
             picked: std::collections::BTreeMap::new(),
             live_at: None,
             heights: Default::default(),
+            heights_changed: 0,
+            rows_at: None,
             pick: None,
             scrolling: Default::default(),
             spots: Vec::new(),

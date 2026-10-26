@@ -774,3 +774,28 @@ fn a_request_waiting_on_you_shows_its_answers_while_you_type() {
     click(&ctx, &mut app, second);
     assert!(sent(&app).iter().any(|c| c.starts_with("POST /api/threads/t/requests/r2")), "tapped while typing: the second answered");
 }
+
+/// A long chat draws only the rows near the screen: the rest is room, as
+/// its rows were last measured (each frame doesn't walk them all); moving
+/// to the first draws it there.
+#[test]
+fn a_long_chat_draws_only_the_rows_near_the_screen() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Chat);
+    let said = |n: u32| crate::chat::tests::item(n, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: format!("message {n}") }], streaming: false });
+    (100..2100).map(said).for_each(|e| app.desk.shared.agents.get_mut().apply(e));
+    for _ in 0..4 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    let drawn = app.desk.chat().ui.heights.len();
+    assert!(drawn < 300, "{drawn} rows measured, of 2000");
+    assert!(texts(&frame(&ctx, &mut app, vec![])).contains("message 2099"), "following the latest");
+    keys(&ctx, &mut app, "gg");
+    // (It glides there.)
+    for n in 0..8 {
+        frame_at(&ctx, &mut app, vec![], 10.0 + f64::from(n) * 0.1);
+    }
+    let text = texts(&frame_at(&ctx, &mut app, vec![], 11.0));
+    assert!(text.contains("fix the parser") && !text.contains("message 2099"), "{text}");
+    assert!(app.desk.chat().ui.heights.len() < 500, "{}", app.desk.chat().ui.heights.len());
+}

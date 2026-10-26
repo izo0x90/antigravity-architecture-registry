@@ -288,6 +288,10 @@ pub struct Measured {
     stops: Vec<Stop>,
     /// This frame's items as drawn (on screen), in order.
     drawing: Vec<egui::Rect>,
+    /// The stops were said whole this frame (a view that keeps where each
+    /// item is, drawing only those near the screen): not taken from
+    /// `drawing`.
+    said: bool,
     /// An item to show as asked once laid out.
     show: Option<(usize, Show)>,
     clock: f64,
@@ -318,10 +322,22 @@ impl Measured {
         self.drawing.push(rect);
     }
 
+    /// Where every item is down the content, kept by the view (it draws
+    /// only those near the screen): `stops`, when they changed; none, as
+    /// they were.
+    pub fn laid_out(&mut self, stops: Option<Vec<Stop>>) {
+        if let Some(stops) = stops {
+            self.stops = stops;
+        }
+        self.said = true;
+    }
+
     /// After drawing: what the area showed, and where each item went.
     pub fn drawn<R>(&mut self, output: &egui::scroll_area::ScrollAreaOutput<R>) {
         let top = output.inner_rect.top() - output.state.offset.y;
-        self.stops = self.drawing.iter().map(|r| Stop::new(r.top() - top, r.height())).collect();
+        if !std::mem::take(&mut self.said) {
+            self.stops = self.drawing.iter().map(|r| Stop::new(r.top() - top, r.height())).collect();
+        }
         self.viewport.drawn(output.state.offset, output.inner_rect.size(), output.content_size);
     }
 
