@@ -124,7 +124,9 @@ pub struct SignInEnded {
 pub enum SignInEnd {
     SignedIn,
     /// It failed, saying why.
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
     /// Its time ran out.
     RanOut,
     /// Cancelled, or a new one started in its place.

@@ -24,7 +24,8 @@ pub enum Action {
 pub fn topological(plan: &Plan, graph: &Graph, types: &TypeSystem) -> Vec<ComponentId> {
     let ids: Vec<&ComponentId> = plan.components.iter().map(|c| &c.id).collect::<BTreeSet<_>>().into_iter().collect();
     let index: BTreeMap<&ComponentId, usize> = ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
-    let deps: Vec<Vec<usize>> = ids.iter().map(|id| graph.dependencies(id, is_data_type(types)).iter().filter_map(|d| index.get(d).copied()).collect()).collect();
+    let deps: Vec<Vec<usize>> =
+        ids.iter().map(|id| graph.dependencies(id, is_data_type(types)).iter().filter_map(|d| index.get(d).copied()).collect()).collect();
     let groups = strongly_connected(&deps);
     let group_of: Vec<usize> = {
         let mut g = vec![0; ids.len()];
@@ -36,8 +37,11 @@ pub fn topological(plan: &Plan, graph: &Graph, types: &TypeSystem) -> Vec<Compon
         g
     };
     // Kahn's algorithm over the groups (a loop is one group).
-    let group_deps: Vec<BTreeSet<usize>> =
-        groups.iter().enumerate().map(|(gi, members)| members.iter().flat_map(|&m| deps[m].iter().map(|&d| group_of[d])).filter(|&g| g != gi).collect()).collect();
+    let group_deps: Vec<BTreeSet<usize>> = groups
+        .iter()
+        .enumerate()
+        .map(|(gi, members)| members.iter().flat_map(|&m| deps[m].iter().map(|&d| group_of[d])).filter(|&g| g != gi).collect())
+        .collect();
     let mut done = vec![false; groups.len()];
     let mut order = Vec::with_capacity(ids.len());
     loop {

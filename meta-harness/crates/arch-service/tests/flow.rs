@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use arch_graph::{
-    ArchEvent, ChangeReason, ComponentId, FindingCode, Graph, Param, Plan, PlanId, ProposedLocation, Provenance, Relation, RelationKind, RepoPath,
-    Requester, Severity, Signature, Stage, Status, TypeSystem, ViewRequest,
+    ArchEvent, ChangeReason, ComponentId, FindingCode, Graph, Param, Plan, PlanId, ProposedLocation, Provenance, Relation, RelationKind,
+    RepoPath, Requester, Severity, Signature, Stage, Status, TypeSystem, ViewRequest,
 };
-use code_analyzer::CodeRules;
 use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp, ServiceError};
+use code_analyzer::CodeRules;
 
 mod common;
 
@@ -91,7 +91,11 @@ fn add_validate(r: &Repo, plan: &str) {
                 description: "Checks input before running.".into(),
                 parent: Some(id("sample")),
                 file: None,
-                signature: Some(Signature { params: vec![Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] }),
+                signature: Some(Signature {
+                    params: vec![Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }],
+                    returns: Some("bool".into()),
+                    qualifiers: vec![],
+                }),
                 schemas: None,
                 spec: None,
             },
@@ -100,7 +104,9 @@ fn add_validate(r: &Repo, plan: &str) {
 }
 
 fn relate(r: &Repo, plan: &str, kind: RelationKind, a: &str, b: &str) {
-    r.service.apply(&pid(plan), PlanOp::Relate { kind, source: id(a), target: id(b), order: None, ports: None, note: None, expects: None }).unwrap();
+    r.service
+        .apply(&pid(plan), PlanOp::Relate { kind, source: id(a), target: id(b), order: None, ports: None, note: None, expects: None })
+        .unwrap();
 }
 
 fn write(r: &Repo, file: &str, text: &str) {
@@ -157,7 +163,15 @@ fn referenced_components_and_subtrees_stay_existing_with_real_anchors() {
     r.service.create_plan("p", "Extend run", "", arch_graph::PlanKind::Change).unwrap();
     r.service.apply(&pid("p"), PlanOp::Reference { id: id("sample::run"), kinds: vec![RelationKind::Calls], depth: 2 }).unwrap();
     let scope = r.service.scope(&pid("p")).unwrap();
-    for expected in ["sample::run", "sample::store::Store::new", "sample::Upper::apply", "sample::store::Store::save", "sample::log", "sample::util::shout", "sample::store::Store::check"] {
+    for expected in [
+        "sample::run",
+        "sample::store::Store::new",
+        "sample::Upper::apply",
+        "sample::store::Store::save",
+        "sample::log",
+        "sample::util::shout",
+        "sample::store::Store::check",
+    ] {
         assert!(scope.contains(&id(expected)), "{expected} in scope: {scope:?}");
     }
     assert!(!scope.contains(&id("sample::later")));
@@ -177,7 +191,15 @@ fn plan_operations_validate_inputs_and_reject_bad_ones() {
     add_validate(&r, "p");
     let plan = r.service.plan(&pid("p")).unwrap();
     let v = plan.component(&id("sample::validate")).unwrap();
-    assert_eq!(v.proposed.as_ref().unwrap(), &ProposedLocation { language: "rust".into(), file: RepoPath::new("src/lib.rs").unwrap(), parent: Some(id("sample")), symbol: "sample::validate".into() });
+    assert_eq!(
+        v.proposed.as_ref().unwrap(),
+        &ProposedLocation {
+            language: "rust".into(),
+            file: RepoPath::new("src/lib.rs").unwrap(),
+            parent: Some(id("sample")),
+            symbol: "sample::validate".into()
+        }
+    );
     assert!(plan.relations.iter().any(|rel| rel.kind == RelationKind::Contains && rel.target == id("sample::validate")));
 
     let reject = |op: PlanOp, needle: &str| {
@@ -201,12 +223,39 @@ fn plan_operations_validate_inputs_and_reject_bad_ones() {
     reject(add("m", "module", Some("sample::run"), None), "can't contain");
     reject(add("x", "function", None, None), "parent or a file");
     reject(add("x", "function", None, Some("notes/readme.md")), "no language pack");
-    reject(PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::Upper"), target: id("sample::log"), order: None, ports: None, note: None, expects: None }, "can't call");
-    reject(PlanOp::Relate { kind: RelationKind::DataFlow, source: id("sample::run"), target: id("sample::log"), order: None, ports: None, note: None, expects: None }, "ports");
+    reject(
+        PlanOp::Relate {
+            kind: RelationKind::Calls,
+            source: id("sample::Upper"),
+            target: id("sample::log"),
+            order: None,
+            ports: None,
+            note: None,
+            expects: None,
+        },
+        "can't call",
+    );
+    reject(
+        PlanOp::Relate {
+            kind: RelationKind::DataFlow,
+            source: id("sample::run"),
+            target: id("sample::log"),
+            order: None,
+            ports: None,
+            note: None,
+            expects: None,
+        },
+        "ports",
+    );
     reject(PlanOp::Unrelate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::later") }, "no calls relation");
     reject(PlanOp::Remove { id: id("sample::run") }, "isn't part of this plan");
 
-    r.service.apply(&pid("p"), PlanOp::Modify { id: id("sample::run"), description: Some("now validates".into()), signature: None, schemas: None, spec: None }).unwrap();
+    r.service
+        .apply(
+            &pid("p"),
+            PlanOp::Modify { id: id("sample::run"), description: Some("now validates".into()), signature: None, schemas: None, spec: None },
+        )
+        .unwrap();
     let plan = r.service.plan(&pid("p")).unwrap();
     let run = plan.component(&id("sample::run")).unwrap();
     assert_eq!((run.status, run.stage, run.description.as_str()), (Status::Modifying, Stage::Declared, "now validates"));
@@ -230,7 +279,12 @@ fn planned(symbol: &str, file: &str, parent: Option<&str>) -> arch_graph::Compon
         status: Status::New,
         stage: Stage::Declared,
         anchor: None,
-        proposed: Some(ProposedLocation { language: "rust".into(), file: RepoPath::new(file).unwrap(), parent: parent.map(id), symbol: symbol.into() }),
+        proposed: Some(ProposedLocation {
+            language: "rust".into(),
+            file: RepoPath::new(file).unwrap(),
+            parent: parent.map(id),
+            symbol: symbol.into(),
+        }),
         signature: Some(Signature::default()),
         schemas: Default::default(),
         spec: None,
@@ -248,7 +302,8 @@ fn dangling_references_are_reported_with_ids_and_referrers() {
     plan.references.push(arch_graph::Reference { id: id("sample::removed"), kinds: vec![], depth: 0 });
     save_raw(&r, &plan);
     let report = r.service.validate(&pid("raw")).unwrap();
-    let dangling: Vec<&str> = report.findings.iter().filter(|f| f.code == FindingCode::DanglingReference).map(|f| f.message.as_str()).collect();
+    let dangling: Vec<&str> =
+        report.findings.iter().filter(|f| f.code == FindingCode::DanglingReference).map(|f| f.message.as_str()).collect();
     assert_eq!(dangling.len(), 3, "{dangling:?}");
     assert!(dangling.iter().any(|m| m.contains("rust:sample::gone")));
     assert!(dangling.iter().any(|m| m.contains("rust:sample::ghost") && m.contains("rust:sample::run")));
@@ -307,7 +362,10 @@ fn only_users_approve_and_only_legal_checked_moves() {
     let err = r.service.approve(&pid("a"), &id("sample::validate"), Stage::ArchApproved, &agent).unwrap_err();
     assert!(matches!(err, ServiceError::Forbidden(_)));
     assert!(r.service.approve(&pid("a"), &id("sample::validate"), Stage::PlanApproved, &user()).is_err(), "can't skip arch approval");
-    assert!(r.service.approve(&pid("a"), &id("sample::validate"), Stage::Implemented, &user()).is_err(), "implemented comes from verification");
+    assert!(
+        r.service.approve(&pid("a"), &id("sample::validate"), Stage::Implemented, &user()).is_err(),
+        "implemented comes from verification"
+    );
     let approval = r.service.approve(&pid("a"), &id("sample::validate"), Stage::ArchApproved, &user()).unwrap();
     assert_eq!((approval.by.as_str(), approval.from, approval.to), ("izo", Stage::Declared, Stage::ArchApproved));
     assert!(approval.at.len() == 20 && approval.at.ends_with('Z'), "{}", approval.at);
@@ -330,7 +388,9 @@ fn new_work_must_touch_existing_code_unless_greenfield() {
     assert!(codes(&r).contains(&FindingCode::MissingTouchPoint), "containment alone isn't integration");
     relate(&r, "t", RelationKind::Calls, "sample::run", "sample::validate");
     assert!(!codes(&r).contains(&FindingCode::MissingTouchPoint));
-    r.service.apply(&pid("t"), PlanOp::Unrelate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::validate") }).unwrap();
+    r.service
+        .apply(&pid("t"), PlanOp::Unrelate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::validate") })
+        .unwrap();
     r.service.apply(&pid("t"), PlanOp::SetGreenfield { greenfield: true }).unwrap();
     assert!(!codes(&r).contains(&FindingCode::MissingTouchPoint));
 }
@@ -403,7 +463,11 @@ message = "log through the logger"
     assert_eq!(hit.at.as_ref().map(|a| (a.file.as_str(), a.span.start_line)), Some(("src/lib.rs", 30)));
     // Verification: the rule blocks Implemented until the code complies.
     approved_validate(&r, "v");
-    append(&r, "src/lib.rs", "\npub fn validate(input: &str) -> bool { crate::store::Store::new(); println!(\"{input}\"); !input.is_empty() }\n");
+    append(
+        &r,
+        "src/lib.rs",
+        "\npub fn validate(input: &str) -> bool { crate::store::Store::new(); println!(\"{input}\"); !input.is_empty() }\n",
+    );
     let v = r.service.verify(&pid("v"), &id("sample::validate"), Stage::Implemented).unwrap();
     assert_eq!(v.report.codes(), vec![FindingCode::ForbiddenPattern]);
     assert_eq!(v.advanced_to, None);
@@ -421,13 +485,22 @@ fn planned_calls_must_happen_inside_the_body() {
     assert_eq!(v.report.codes(), vec![FindingCode::MissingCallSite]);
     assert!(v.report.findings[0].message.contains("doesn't call rust:sample::store::Store::new"));
     assert!(v.report.findings[0].at.is_some(), "points at the code");
-    write(&r, "src/lib.rs", &std::fs::read_to_string(r.root.join("src/lib.rs")).unwrap().replace("log(input); !input", "crate::store::Store::new(); !input"));
+    write(
+        &r,
+        "src/lib.rs",
+        &std::fs::read_to_string(r.root.join("src/lib.rs")).unwrap().replace("log(input); !input", "crate::store::Store::new(); !input"),
+    );
     let v = r.service.verify(&pid("c"), &id("sample::validate"), Stage::Implemented).unwrap();
     assert!(!v.report.has_errors(), "{:?}", v.report);
     assert_eq!(v.advanced_to, Some(Stage::Implemented));
     let graph: std::sync::Arc<Graph> = r.service.graph(&arch_graph::Source::Plan(pid("c"))).unwrap();
     let calls: Vec<_> = graph.outgoing(&id("sample::validate"), Some(RelationKind::Calls)).collect();
-    assert!(calls.iter().any(|c| c.target == id("sample::store::Store::new") && (c.provenance.planned && c.provenance.observed) && !c.sites.is_empty()), "call site recorded");
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.target == id("sample::store::Store::new") && (c.provenance.planned && c.provenance.observed) && !c.sites.is_empty()),
+        "call site recorded"
+    );
 }
 
 #[test]
@@ -438,7 +511,12 @@ fn signatures_are_compared_with_the_plan() {
     let v = r.service.verify(&pid("s"), &id("sample::validate"), Stage::Implemented).unwrap();
     assert_eq!(v.report.codes(), vec![FindingCode::SignatureMismatch]);
     let msg = &v.report.findings[0].message;
-    assert!(msg.contains("named 'text'") && msg.contains("planned type &str, code has String") && msg.contains("returns: planned bool, code has u8"), "{msg}");
+    assert!(
+        msg.contains("named 'text'")
+            && msg.contains("planned type &str, code has String")
+            && msg.contains("returns: planned bool, code has u8"),
+        "{msg}"
+    );
 }
 
 #[test]
@@ -453,7 +531,11 @@ fn skeleton_verifies_with_placeholders_and_blocks_implemented_until_they_are_gon
     assert_eq!(v.report.codes(), vec![FindingCode::PlaceholderRemains]);
     assert_eq!(v.advanced_to, None);
     assert_eq!(r.service.plan(&pid("k")).unwrap().component(&id("sample::validate")).unwrap().stage, Stage::Skeleton);
-    write(&r, "src/lib.rs", &std::fs::read_to_string(r.root.join("src/lib.rs")).unwrap().replace("    todo!()\n", "    !input.is_empty()\n"));
+    write(
+        &r,
+        "src/lib.rs",
+        &std::fs::read_to_string(r.root.join("src/lib.rs")).unwrap().replace("    todo!()\n", "    !input.is_empty()\n"),
+    );
     let v = r.service.verify(&pid("k"), &id("sample::validate"), Stage::Implemented).unwrap();
     assert_eq!(v.advanced_to, Some(Stage::Implemented), "{:?}", v.report);
     let merged = r.service.graph(&arch_graph::Source::Plan(pid("k"))).unwrap();
@@ -465,10 +547,20 @@ fn view_requests_are_checked_and_announced() {
     let r = repo();
     use arch_graph::tree::{TreeRequest, ViewKind};
     assert!(r.service.request_view(ViewRequest { root: Some(id("sample::nonsense").0), ..Default::default() }, Requester::Agent).is_err());
-    assert!(r.service.request_view(ViewRequest { select: Some(id("sample::nonsense").0), ..Default::default() }, Requester::Agent).is_err());
-    r.service.request_view(ViewRequest { view: Some(ViewKind::Calls), select: Some(id("sample::run").0), ..Default::default() }, Requester::Agent).unwrap();
+    assert!(
+        r.service.request_view(ViewRequest { select: Some(id("sample::nonsense").0), ..Default::default() }, Requester::Agent).is_err()
+    );
+    r.service
+        .request_view(
+            ViewRequest { view: Some(ViewKind::Calls), select: Some(id("sample::run").0), ..Default::default() },
+            Requester::Agent,
+        )
+        .unwrap();
     assert!(matches!(r.events.lock().unwrap().last(), Some(ArchEvent::ViewRequested { by: Requester::Agent, .. })));
-    let view = r.service.tree(&TreeRequest { view: ViewKind::Calls, root: Some(id("sample::run").0), depth: Some(1), ..TreeRequest::default() }).unwrap();
+    let view = r
+        .service
+        .tree(&TreeRequest { view: ViewKind::Calls, root: Some(id("sample::run").0), depth: Some(1), ..TreeRequest::default() })
+        .unwrap();
     assert!(arch_graph::tree::render(&view, r.service.trees()).contains("run [function"));
     assert!(view.card(id("sample::run").as_str()).is_some());
     let found = r.service.search("store", arch_service::SearchKind::Symbols, &arch_graph::Source::Code, Some(10), None).unwrap();
@@ -494,7 +586,11 @@ fn str_fn(r: &Repo, plan: &str, name: &str, spec: Option<arch_graph::Implementat
                 description: format!("{name} the input."),
                 parent: Some(id("sample")),
                 file: None,
-                signature: Some(Signature { params: vec![Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] }),
+                signature: Some(Signature {
+                    params: vec![Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }],
+                    returns: Some("bool".into()),
+                    qualifiers: vec![],
+                }),
                 schemas: None,
                 spec,
             },
@@ -529,7 +625,11 @@ fn implemented_chain(r: &Repo, plan: &str) {
     // Dependencies first: validate calls check_all.
     approve_both(r, plan, "sample::check_all");
     approve_both(r, plan, "sample::validate");
-    append(r, "src/lib.rs", "\npub fn validate(input: &str) -> bool {\n    check_all(input)\n}\n\npub fn check_all(input: &str) -> bool {\n    crate::store::Store::new();\n    !input.is_empty()\n}\n");
+    append(
+        r,
+        "src/lib.rs",
+        "\npub fn validate(input: &str) -> bool {\n    check_all(input)\n}\n\npub fn check_all(input: &str) -> bool {\n    crate::store::Store::new();\n    !input.is_empty()\n}\n",
+    );
     for symbol in ["sample::check_all", "sample::validate"] {
         let v = r.service.verify(&pid(plan), &id(symbol), Stage::Implemented).unwrap();
         assert_eq!(v.advanced_to, Some(Stage::Implemented), "{symbol}: {:?}", v.report);
@@ -541,7 +641,8 @@ fn breaking_one_hop_of_a_chain_reports_exactly_that_hop() {
     let r = repo();
     implemented_chain(&r, "ch");
     let plan = r.service.plan(&pid("ch")).unwrap();
-    let hops: Vec<(String, String)> = arch_service::chain(&plan, &id("sample::validate")).iter().map(|h| (h.source.to_string(), h.target.to_string())).collect();
+    let hops: Vec<(String, String)> =
+        arch_service::chain(&plan, &id("sample::validate")).iter().map(|h| (h.source.to_string(), h.target.to_string())).collect();
     assert_eq!(hops.len(), 3, "the whole chain, upstream and downstream: {hops:?}");
     // Break the far hop (check_all -> Store::new) in code, then verify the
     // component at the top: the chain is re-checked and only that hop fails.
@@ -564,8 +665,18 @@ fn breaking_one_hop_of_a_chain_reports_exactly_that_hop() {
     assert!(codes.iter().any(|(_, m)| m.contains("sample::validate doesn't call rust:sample::check_all")));
     assert!(codes.iter().any(|(_, m)| m.contains("sample::check_all doesn't call rust:sample::store::Store::new")));
     // Restore both: clean again.
-    replace_in(&r, "src/lib.rs", "pub fn validate(input: &str) -> bool {\n    !input.is_empty()\n}", "pub fn validate(input: &str) -> bool {\n    check_all(input)\n}");
-    replace_in(&r, "src/lib.rs", "pub fn check_all(input: &str) -> bool {\n    !input", "pub fn check_all(input: &str) -> bool {\n    crate::store::Store::new();\n    !input");
+    replace_in(
+        &r,
+        "src/lib.rs",
+        "pub fn validate(input: &str) -> bool {\n    !input.is_empty()\n}",
+        "pub fn validate(input: &str) -> bool {\n    check_all(input)\n}",
+    );
+    replace_in(
+        &r,
+        "src/lib.rs",
+        "pub fn check_all(input: &str) -> bool {\n    !input",
+        "pub fn check_all(input: &str) -> bool {\n    crate::store::Store::new();\n    !input",
+    );
     let v = r.service.verify(&pid("ch"), &id("sample::validate"), Stage::Implemented).unwrap();
     assert!(!v.report.has_errors(), "{:?}", v.report);
 }
@@ -581,7 +692,11 @@ impl arch_service::ToolRunner for FakeRunner {
     fn run(&self, _cwd: &Path, program: &str, args: &[String], _timeout: std::time::Duration) -> Result<arch_service::ToolOutput, String> {
         self.calls.lock().unwrap().push((program.to_owned(), args.to_vec()));
         let fails = self.failing.iter().any(|f| args.iter().any(|a| a == f));
-        Ok(arch_service::ToolOutput { success: !fails, exit_code: Some(if fails { 1 } else { 0 }), output: if fails { "lint: bad\n".into() } else { String::new() } })
+        Ok(arch_service::ToolOutput {
+            success: !fails,
+            exit_code: Some(if fails { 1 } else { 0 }),
+            output: if fails { "lint: bad\n".into() } else { String::new() },
+        })
     }
 }
 
@@ -606,8 +721,13 @@ fn reviewers(text: &str) -> arch_service::ReviewerCatalog {
 #[test]
 fn only_a_clean_verification_moves_a_component_to_implemented() {
     let runner = Arc::new(FakeRunner { failing: vec!["--strict".into()], ..Default::default() });
-    let tools = arch_service::ToolCatalog::from_toml("[tools.lint]\nexecutable = \"lint\"\ndefault_args = [\"{files}\"]\napplies_to = [\"function\"]\n").unwrap();
-    let blocking = reviewers("[reviewers.tiny]\ncategory = \"anti_patterns\"\nkind = \"rule\"\nblocking = true\napplies_to = [\"function\"]\nrules = [{ rule = \"max_lines\", limit = 4 }]\n");
+    let tools = arch_service::ToolCatalog::from_toml(
+        "[tools.lint]\nexecutable = \"lint\"\ndefault_args = [\"{files}\"]\napplies_to = [\"function\"]\n",
+    )
+    .unwrap();
+    let blocking = reviewers(
+        "[reviewers.tiny]\ncategory = \"anti_patterns\"\nkind = \"rule\"\nblocking = true\napplies_to = [\"function\"]\nrules = [{ rule = \"max_lines\", limit = 4 }]\n",
+    );
     let shared = runner.clone();
     let r = repo_with("", move |s| s.with_tools(tools, shared).with_reviewers(blocking, None));
     approved_validate(&r, "g");
@@ -621,7 +741,12 @@ fn only_a_clean_verification_moves_a_component_to_implemented() {
     assert_eq!((v.advanced_to, v.report.codes()), (None, vec![FindingCode::MissingCallSite]));
     assert!(runner.calls.lock().unwrap().is_empty(), "tools wait for the code checks to pass");
     // Matching code, but a blocking reviewer finds it too long: no.
-    replace_in(&r, "src/lib.rs", "pub fn validate(input: &str) -> bool { !input.is_empty() }", "pub fn validate(input: &str) -> bool {\n    crate::store::Store::new();\n    let ok = !input.is_empty();\n    ok\n}");
+    replace_in(
+        &r,
+        "src/lib.rs",
+        "pub fn validate(input: &str) -> bool { !input.is_empty() }",
+        "pub fn validate(input: &str) -> bool {\n    crate::store::Store::new();\n    let ok = !input.is_empty();\n    ok\n}",
+    );
     let v = r.service.verify(&pid("g"), &id("sample::validate"), Stage::Implemented).unwrap();
     assert_eq!((v.advanced_to, v.report.codes()), (None, vec![FindingCode::ReviewFinding]), "{:?}", v.report);
     assert_eq!(stage_of(&r, "g", "sample::validate"), Stage::PlanApproved);
@@ -629,8 +754,14 @@ fn only_a_clean_verification_moves_a_component_to_implemented() {
     replace_in(&r, "src/lib.rs", "    let ok = !input.is_empty();\n    ok\n", "    !input.is_empty()\n");
     let failing = r.service.plan(&pid("g")).unwrap();
     let mut with_strict = failing.clone();
-    with_strict.component_mut(&id("sample::validate")).unwrap().spec =
-        Some(arch_graph::ImplementationSpec { validation: vec![arch_graph::ToolRef { tool: "lint".into(), targets: vec![], args: Some(vec!["--strict".into(), "{targets}".into()]) }], ..Default::default() });
+    with_strict.component_mut(&id("sample::validate")).unwrap().spec = Some(arch_graph::ImplementationSpec {
+        validation: vec![arch_graph::ToolRef {
+            tool: "lint".into(),
+            targets: vec![],
+            args: Some(vec!["--strict".into(), "{targets}".into()]),
+        }],
+        ..Default::default()
+    });
     save_raw(&r, &with_strict);
     let v = r.service.verify(&pid("g"), &id("sample::validate"), Stage::Implemented).unwrap();
     assert_eq!((v.advanced_to, v.report.codes()), (None, vec![FindingCode::ToolFailed]), "{:?}", v.report);
@@ -664,7 +795,11 @@ applies_to = ["function"]
     let r = repo_with("", move |s| s.with_tools(catalog, shared));
     r.service.create_plan("t", "Tools", "", arch_graph::PlanKind::Change).unwrap();
     let bind = |targets: Vec<&str>, args: Option<Vec<&str>>| arch_graph::ImplementationSpec {
-        validation: vec![arch_graph::ToolRef { tool: "has".into(), targets: targets.into_iter().map(String::from).collect(), args: args.map(|a| a.into_iter().map(String::from).collect()) }],
+        validation: vec![arch_graph::ToolRef {
+            tool: "has".into(),
+            targets: targets.into_iter().map(String::from).collect(),
+            args: args.map(|a| a.into_iter().map(String::from).collect()),
+        }],
         ..Default::default()
     };
     str_fn(&r, "t", "validate", Some(bind(vec!["src/lib.rs", "src/util.rs"], None)));
@@ -672,7 +807,14 @@ applies_to = ["function"]
     r.service.ingest(&r.root).unwrap();
     let report = r.service.run_tools(&pid("t"), Some(&id("sample::validate"))).unwrap();
     let ran: Vec<(String, Vec<String>)> = runner.0.lock().unwrap().clone();
-    assert_eq!(ran[0], ("sh".to_owned(), ["-c", "grep -q \"fn ${0##*::}\" \"$@\"", "sample::validate", "src/lib.rs", "src/util.rs"].map(String::from).to_vec()), "{{targets}} expands to one arg per target");
+    assert_eq!(
+        ran[0],
+        (
+            "sh".to_owned(),
+            ["-c", "grep -q \"fn ${0##*::}\" \"$@\"", "sample::validate", "src/lib.rs", "src/util.rs"].map(String::from).to_vec()
+        ),
+        "{{targets}} expands to one arg per target"
+    );
     assert_eq!(ran[1].1[3], "sample::validate in src/lib.rs", "placeholders inside an arg join; type-scoped tools run unbound");
     assert_eq!(report.runs.len(), 2);
     assert!(report.runs.iter().all(|run| run.passed), "{report:?}");
@@ -687,10 +829,14 @@ applies_to = ["function"]
     assert_eq!(failed[0].invocation.args, vec!["-c", "echo nope $0; exit 3", "src/lib.rs"], "no targets: the component's file");
     assert_eq!((failed[0].exit_code, failed[0].output.as_str()), (Some(3), "nope src/lib.rs"));
     assert_eq!(report.report.codes(), vec![FindingCode::ToolFailed]);
-    assert!(report.report.findings[0].message.contains("has failed (exit 3)") && report.report.findings[0].message.contains("nope src/lib.rs"));
+    assert!(
+        report.report.findings[0].message.contains("has failed (exit 3)") && report.report.findings[0].message.contains("nope src/lib.rs")
+    );
     // Binding a tool that doesn't exist is reported, not ignored.
-    plan.component_mut(&id("sample::validate")).unwrap().spec =
-        Some(arch_graph::ImplementationSpec { validation: vec![arch_graph::ToolRef { tool: "ghost".into(), targets: vec![], args: None }], ..Default::default() });
+    plan.component_mut(&id("sample::validate")).unwrap().spec = Some(arch_graph::ImplementationSpec {
+        validation: vec![arch_graph::ToolRef { tool: "ghost".into(), targets: vec![], args: None }],
+        ..Default::default()
+    });
     save_raw(&r, &plan);
     let report = r.service.run_tools(&pid("t"), None).unwrap();
     assert_eq!(report.report.codes(), vec![FindingCode::UnknownTool]);
@@ -727,7 +873,11 @@ fn changing_a_file_reverifies_only_the_components_it_affects() {
                 description: "Lowercases.".into(),
                 parent: Some(id("sample::util")),
                 file: None,
-                signature: Some(Signature { params: vec![Param { name: "s".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("String".into()), qualifiers: vec![] }),
+                signature: Some(Signature {
+                    params: vec![Param { name: "s".into(), ty: Some("&str".into()), optional: false, variadic: false }],
+                    returns: Some("String".into()),
+                    qualifiers: vec![],
+                }),
                 schemas: None,
                 spec: None,
             },
@@ -769,7 +919,13 @@ fn changing_a_file_reverifies_only_the_components_it_affects() {
     assert_eq!(ids, vec!["rust:sample::validate"]);
     assert_eq!(refresh.reverified[0].report.codes(), vec![FindingCode::MissingCallSite]);
     assert_eq!(refresh.reverified[0].stage, Stage::Implemented);
-    assert!(r.events.lock().unwrap().iter().any(|e| matches!(e, ArchEvent::Validated { component: Some(c), errors: 1, .. } if c == &id("sample::validate"))));
+    assert!(
+        r.events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, ArchEvent::Validated { component: Some(c), errors: 1, .. } if c == &id("sample::validate")))
+    );
     // It no longer holds up: Implemented is taken back (the code is still there).
     assert_eq!(refresh.reverified[0].demoted_to, Some(Stage::Skeleton));
     assert_eq!(stage_of(&r, "w", "sample::validate"), Stage::Skeleton);
@@ -786,7 +942,10 @@ fn changing_a_file_reverifies_only_the_components_it_affects() {
 
 #[test]
 fn reviewers_run_by_category_and_blocking_findings_block() {
-    let provider = Arc::new(FakeReviewer { notes: vec![arch_service::ReviewNote { message: "step 2 is skipped".into(), blocking: true, line: Some(9) }], ..Default::default() });
+    let provider = Arc::new(FakeReviewer {
+        notes: vec![arch_service::ReviewNote { message: "step 2 is skipped".into(), blocking: true, line: Some(9) }],
+        ..Default::default()
+    });
     let mut catalog = arch_service::ReviewerCatalog::defaults().unwrap();
     catalog.extend_with(reviewers(
         r#"
@@ -805,16 +964,27 @@ blocking = true
 rules = [{ rule = "max_lines", limit = 1 }]
 "#,
     ));
-    assert!(arch_service::ReviewerCatalog::from_toml("[reviewers.x]\ncategory = \"c\"\nkind = \"session\"\n").is_err(), "session reviewers need a brief");
+    assert!(
+        arch_service::ReviewerCatalog::from_toml("[reviewers.x]\ncategory = \"c\"\nkind = \"session\"\n").is_err(),
+        "session reviewers need a brief"
+    );
     let shared = provider.clone();
     let r = repo_with("", move |s| s.with_reviewers(catalog, Some(shared)));
     approved_validate(&r, "rv");
     // Calls log as well, which the plan doesn't mention.
-    append(&r, "src/lib.rs", "\npub fn validate(input: &str) -> bool {\n    crate::store::Store::new();\n    log(input);\n    !input.is_empty()\n}\n");
+    append(
+        &r,
+        "src/lib.rs",
+        "\npub fn validate(input: &str) -> bool {\n    crate::store::Store::new();\n    log(input);\n    !input.is_empty()\n}\n",
+    );
     r.service.ingest(&r.root).unwrap();
     let reviews = r.service.review(&pid("rv"), &id("sample::validate")).unwrap();
     let ran: Vec<(&str, &str, bool)> = reviews.runs.iter().map(|run| (run.reviewer.as_str(), run.category.as_str(), run.ran)).collect();
-    assert_eq!(ran, vec![("logic", "logic", true), ("scope", "faithfulness", true), ("size", "anti_patterns", true)], "class-only reviewers skip functions");
+    assert_eq!(
+        ran,
+        vec![("logic", "logic", true), ("scope", "faithfulness", true), ("size", "anti_patterns", true)],
+        "class-only reviewers skip functions"
+    );
     let rule = reviews.report.findings.iter().find(|f| f.message.starts_with("[faithfulness/scope]")).unwrap();
     assert_eq!(rule.severity, Severity::Warning, "non-blocking rule reviewer");
     assert!(rule.message.contains("calls rust:sample::log"), "{}", rule.message);
@@ -836,7 +1006,10 @@ rules = [{ rule = "max_lines", limit = 1 }]
     let v = r2.service.verify(&pid("rv"), &id("sample::validate"), Stage::Implemented).unwrap();
     assert_eq!((v.advanced_to, v.report.codes()), (None, vec![FindingCode::ReviewerUnavailable]));
     // Non-blocking points don't block.
-    let lenient = Arc::new(FakeReviewer { notes: vec![arch_service::ReviewNote { message: "name could be clearer".into(), blocking: false, line: None }], ..Default::default() });
+    let lenient = Arc::new(FakeReviewer {
+        notes: vec![arch_service::ReviewNote { message: "name could be clearer".into(), blocking: false, line: None }],
+        ..Default::default()
+    });
     let mut catalog = arch_service::ReviewerCatalog::default();
     catalog.extend_with(reviewers("[reviewers.logic]\ncategory = \"logic\"\nkind = \"session\"\nblocking = true\nbrief = \"Check it.\"\n"));
     let r3 = repo_with("", move |s| s.with_reviewers(catalog, Some(lenient)));
@@ -851,7 +1024,16 @@ rules = [{ rule = "max_lines", limit = 1 }]
 fn indexing_reports_progress_and_files_changed_since_they_were_read() {
     let r = repo();
     // The first ingest ran: indexing, progress, then a finished summary.
-    let statuses: Vec<arch_graph::IndexStatus> = r.events.lock().unwrap().iter().filter_map(|e| match e { ArchEvent::Index { status } => Some((**status).clone()), _ => None }).collect();
+    let statuses: Vec<arch_graph::IndexStatus> = r
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            ArchEvent::Index { status } => Some((**status).clone()),
+            _ => None,
+        })
+        .collect();
     assert_eq!(statuses.first().map(|s| s.state), Some(arch_graph::IndexState::Indexing), "announced when it starts");
     let done = r.service.index_status();
     assert_eq!(done.state, arch_graph::IndexState::Idle);
@@ -887,29 +1069,56 @@ fn code_shows_no_plan_and_a_plan_shows_only_itself() {
     add_validate(&r, "p");
     r.service.create_plan("other", "Other", "", arch_graph::PlanKind::Change).unwrap();
     r.service
-        .apply(&pid("other"), PlanOp::AddComponent { name: "audit".into(), type_name: "function".into(), description: "Logs.".into(), parent: Some(id("sample")), file: None, signature: None, schemas: None, spec: None })
+        .apply(
+            &pid("other"),
+            PlanOp::AddComponent {
+                name: "audit".into(),
+                type_name: "function".into(),
+                description: "Logs.".into(),
+                parent: Some(id("sample")),
+                file: None,
+                signature: None,
+                schemas: None,
+                spec: None,
+            },
+        )
         .unwrap();
     let code = arch_graph::Source::Code;
     let p = arch_graph::Source::Plan(pid("p"));
     // Code: nothing planned anywhere (views, search, details, file margins).
     assert!(r.service.graph(&code).unwrap().component(&id("sample::validate")).is_none());
     assert!(r.service.graph(&code).unwrap().component(&id("sample::audit")).is_none());
-    assert!(r.service.search("validate", arch_service::SearchKind::Symbols, &code, Some(10), None).unwrap().hits.is_empty(), "search under Code finds no planned component");
+    assert!(
+        r.service.search("validate", arch_service::SearchKind::Symbols, &code, Some(10), None).unwrap().hits.is_empty(),
+        "search under Code finds no planned component"
+    );
     assert!(r.service.component(&id("sample::validate"), &code).is_err());
     let planned_file = r.service.graph(&p).unwrap().component(&id("sample::validate")).unwrap().file().unwrap().as_str().to_owned();
     let margin = r.service.file_view(&planned_file, &code).unwrap();
-    assert!(margin.components.iter().all(|(c, a)| *a == arch_graph::Alignment::Observed && c.id != id("sample::validate")), "the code margin shows code only");
+    assert!(
+        margin.components.iter().all(|(c, a)| *a == arch_graph::Alignment::Observed && c.id != id("sample::validate")),
+        "the code margin shows code only"
+    );
     // A plan: itself and the code, not the other plan.
     let with_p = r.service.graph(&p).unwrap();
     assert!(with_p.component(&id("sample::validate")).is_some());
     assert!(with_p.component(&id("sample::audit")).is_none(), "one plan at a time");
-    assert_eq!(r.service.search("validate", arch_service::SearchKind::Symbols, &p, Some(10), None).unwrap().hits[0].key.as_deref(), Some(id("sample::validate").as_str()));
+    assert_eq!(
+        r.service.search("validate", arch_service::SearchKind::Symbols, &p, Some(10), None).unwrap().hits[0].key.as_deref(),
+        Some(id("sample::validate").as_str())
+    );
     assert!(r.service.file_view(&planned_file, &p).unwrap().components.iter().any(|(c, _)| c.id == id("sample::validate")));
     // An agent can switch the user back to the code.
     let request: ViewRequest = serde_json::from_value(serde_json::json!({ "source": "code" })).unwrap();
     assert_eq!(request.source, Some(code.clone()));
     r.service.request_view(request, Requester::Agent).unwrap();
-    assert!(r.events.lock().unwrap().iter().any(|e| matches!(e, ArchEvent::ViewRequested { request, .. } if request.source == Some(arch_graph::Source::Code))));
+    assert!(
+        r.events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, ArchEvent::ViewRequested { request, .. } if request.source == Some(arch_graph::Source::Code)))
+    );
     // A deleted plan is gone: reading it says so (the cockpit then shows the code).
     r.service.delete_plan(&pid("other")).unwrap();
     assert!(matches!(r.service.graph(&arch_graph::Source::Plan(pid("other"))), Err(ServiceError::NotFound(_))));
@@ -951,9 +1160,25 @@ fn a_walkthrough_explains_existing_code_and_changes_none_of_it() {
     let r = repo();
     let plan = r.service.create_plan("how-run-works", "How run works", "", PlanKind::Walkthrough).unwrap();
     assert_eq!(plan.kind, PlanKind::Walkthrough);
-    let spec = ImplementationSpec { logic_steps: vec![LogicStep { sequence: 1, name: "save".into(), description: "Stores what it was given.".into(), algorithm: None, complexity: None, check: None }], ..Default::default() };
-    for (name, text) in [("sample::run", "Runs one request end to end."), ("sample::store::Store::save", "Writes the value to the store.")] {
-        r.service.apply(&pid("how-run-works"), PlanOp::Modify { id: id(name), description: Some(text.into()), signature: None, schemas: None, spec: Some(spec.clone()) }).unwrap();
+    let spec = ImplementationSpec {
+        logic_steps: vec![LogicStep {
+            sequence: 1,
+            name: "save".into(),
+            description: "Stores what it was given.".into(),
+            algorithm: None,
+            complexity: None,
+            check: None,
+        }],
+        ..Default::default()
+    };
+    for (name, text) in [("sample::run", "Runs one request end to end."), ("sample::store::Store::save", "Writes the value to the store.")]
+    {
+        r.service
+            .apply(
+                &pid("how-run-works"),
+                PlanOp::Modify { id: id(name), description: Some(text.into()), signature: None, schemas: None, spec: Some(spec.clone()) },
+            )
+            .unwrap();
     }
     // Taken as they are in the code: existing, built, where they are.
     let source = Source::Plan(pid("how-run-works"));
@@ -967,13 +1192,40 @@ fn a_walkthrough_explains_existing_code_and_changes_none_of_it() {
         let err = r.service.apply(&pid("how-run-works"), op).unwrap_err().to_string();
         assert!(err.contains("is a walkthrough"), "{err}");
     };
-    reject(PlanOp::AddComponent { name: "extra".into(), type_name: "function".into(), description: String::new(), parent: Some(id("sample")), file: None, signature: None, schemas: None, spec: None });
-    reject(PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::log"), order: None, ports: None, note: None, expects: None });
+    reject(PlanOp::AddComponent {
+        name: "extra".into(),
+        type_name: "function".into(),
+        description: String::new(),
+        parent: Some(id("sample")),
+        file: None,
+        signature: None,
+        schemas: None,
+        spec: None,
+    });
+    reject(PlanOp::Relate {
+        kind: RelationKind::Calls,
+        source: id("sample::run"),
+        target: id("sample::log"),
+        order: None,
+        ports: None,
+        note: None,
+        expects: None,
+    });
     reject(PlanOp::Modify { id: id("sample::run"), description: None, signature: Some(Signature::default()), schemas: None, spec: None });
     reject(PlanOp::SetGreenfield { greenfield: true });
-    let approval = r.service.approve(&pid("how-run-works"), &id("sample::run"), Stage::ArchApproved, &Actor::User { name: "user".into() }).unwrap_err().to_string();
+    let approval = r
+        .service
+        .approve(&pid("how-run-works"), &id("sample::run"), Stage::ArchApproved, &Actor::User { name: "user".into() })
+        .unwrap_err()
+        .to_string();
     assert!(approval.contains("is a walkthrough"), "{approval}");
-    assert!(r.service.verify(&pid("how-run-works"), &id("sample::run"), Stage::Implemented).unwrap_err().to_string().contains("is a walkthrough"));
+    assert!(
+        r.service
+            .verify(&pid("how-run-works"), &id("sample::run"), Stage::Implemented)
+            .unwrap_err()
+            .to_string()
+            .contains("is a walkthrough")
+    );
     // Its checks find nothing wrong, and the calls view shows only its own
     // components walked (from run, the only one nothing in it calls).
     let report = r.service.validate(&pid("how-run-works")).unwrap();
@@ -981,7 +1233,11 @@ fn a_walkthrough_explains_existing_code_and_changes_none_of_it() {
     let tree = r.service.tree(&TreeRequest { view: ViewKind::Calls, source, ..Default::default() }).unwrap();
     assert_eq!(tree.roots, vec![id("sample::run").0]);
     let walked: Vec<&str> = tree.cards.iter().filter(|c| !c.outside_plan).map(|c| c.key.as_str()).collect();
-    assert_eq!(walked, vec![id("sample::run").0.as_str(), id("sample::store::Store::save").0.as_str()], "only the walkthrough's own components are walked");
+    assert_eq!(
+        walked,
+        vec![id("sample::run").0.as_str(), id("sample::store::Store::save").0.as_str()],
+        "only the walkthrough's own components are walked"
+    );
 }
 
 /// A review is a plan of items only: added, nested, moved, edited and set,
@@ -993,28 +1249,63 @@ fn a_review_plan_holds_nested_items_with_their_states_and_nothing_else() {
     let r = repo();
     let plan = pid("findings");
     r.service.create_plan("findings", "Tags findings", "", PlanKind::Review).unwrap();
-    let add = |title: &str, under: Option<&str>| r.service.apply(&plan, PlanOp::AddItem { title: title.into(), text: format!("about {title}"), under: under.map(|u| ItemId(u.into())) }).unwrap();
+    let add = |title: &str, under: Option<&str>| {
+        r.service
+            .apply(&plan, PlanOp::AddItem { title: title.into(), text: format!("about {title}"), under: under.map(|u| ItemId(u.into())) })
+            .unwrap()
+    };
     add("Decide", None);
     add("FFF skipped", Some("i1"));
     add("Open", None);
     add("Turns renumbered", Some("i3"));
     let after = r.service.apply(&plan, PlanOp::SetItem { id: ItemId("i2".into()), state: ItemState::Decided }).unwrap();
-    assert_eq!(after.items.iter().map(|i| (i.id.0.as_str(), i.parent.as_ref().map(|p| p.0.as_str()), i.state)).collect::<Vec<_>>(), [("i1", None, ItemState::Open), ("i2", Some("i1"), ItemState::Decided), ("i3", None, ItemState::Open), ("i4", Some("i3"), ItemState::Open)]);
+    assert_eq!(
+        after.items.iter().map(|i| (i.id.0.as_str(), i.parent.as_ref().map(|p| p.0.as_str()), i.state)).collect::<Vec<_>>(),
+        [
+            ("i1", None, ItemState::Open),
+            ("i2", Some("i1"), ItemState::Decided),
+            ("i3", None, ItemState::Open),
+            ("i4", Some("i3"), ItemState::Open)
+        ]
+    );
     r.service.apply(&plan, PlanOp::EditItem { id: ItemId("i4".into()), title: Some("Chat turns renumbered".into()), text: None }).unwrap();
     let moved = r.service.apply(&plan, PlanOp::MoveItem { id: ItemId("i4".into()), under: Some(ItemId("i1".into())) }).unwrap();
-    assert_eq!((moved.item(&ItemId("i4".into())).unwrap().title.as_str(), moved.items.last().unwrap().parent.as_ref().map(|p| p.0.as_str())), ("Chat turns renumbered", Some("i1")), "moved, last under its new parent");
+    assert_eq!(
+        (moved.item(&ItemId("i4".into())).unwrap().title.as_str(), moved.items.last().unwrap().parent.as_ref().map(|p| p.0.as_str())),
+        ("Chat turns renumbered", Some("i1")),
+        "moved, last under its new parent"
+    );
     // Never under itself, nor under what's under it; an item there is.
     let refused = |op: PlanOp| r.service.apply(&plan, op).unwrap_err().to_string();
     assert!(refused(PlanOp::MoveItem { id: ItemId("i1".into()), under: Some(ItemId("i4".into())) }).contains("under i1"));
     assert!(refused(PlanOp::SetItem { id: ItemId("i9".into()), state: ItemState::Done }).contains("no item i9"));
     assert!(refused(PlanOp::AddItem { title: " ".into(), text: String::new(), under: None }).contains("title"));
     // A review takes nothing but items.
-    assert!(refused(PlanOp::AddComponent { name: "x".into(), type_name: "function".into(), description: String::new(), parent: Some(id("sample")), file: None, signature: None, schemas: None, spec: None }).contains("is a review"));
+    assert!(
+        refused(PlanOp::AddComponent {
+            name: "x".into(),
+            type_name: "function".into(),
+            description: String::new(),
+            parent: Some(id("sample")),
+            file: None,
+            signature: None,
+            schemas: None,
+            spec: None
+        })
+        .contains("is a review")
+    );
     // Kept in the plan's file: read again, the same.
     let text = std::fs::read_to_string(r.root.join(".nah/plans/findings.json")).unwrap();
     let read = arch_graph::Plan::from_json(&text).unwrap();
     assert_eq!((read.kind, read.items), (PlanKind::Review, moved.items.clone()));
     // A change plan's to-dos.
     r.service.create_plan("v", "Validation", "", PlanKind::Change).unwrap();
-    assert_eq!(r.service.apply(&pid("v"), PlanOp::AddItem { title: "Write the tests".into(), text: String::new(), under: None }).unwrap().items.len(), 1);
+    assert_eq!(
+        r.service
+            .apply(&pid("v"), PlanOp::AddItem { title: "Write the tests".into(), text: String::new(), under: None })
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
 }

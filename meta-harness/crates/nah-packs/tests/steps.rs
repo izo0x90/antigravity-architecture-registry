@@ -53,7 +53,11 @@ fn zip_of(path: &Path, files: &[(&str, &str)], prefix: &[u8]) {
     file.write_all(prefix).unwrap();
     let mut w = zip::ZipWriter::new(file);
     for (name, text) in files {
-        w.start_file(*name, zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored).unix_permissions(0o755)).unwrap();
+        w.start_file(
+            *name,
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored).unix_permissions(0o755),
+        )
+        .unwrap();
         w.write_all(text.as_bytes()).unwrap();
     }
     w.finish().unwrap();
@@ -92,7 +96,11 @@ impl World {
             ("harness/t/pack.toml".to_owned(), pack.as_bytes().to_vec()),
         ];
         let at = |p: &str| self.at(p);
-        Catalog::load(&Distribution::new(files), &Places { project: at("project"), home: at("home"), config_home: at("config"), data_home: at("data") }).unwrap()
+        Catalog::load(
+            &Distribution::new(files),
+            &Places { project: at("project"), home: at("home"), config_home: at("config"), data_home: at("data") },
+        )
+        .unwrap()
     }
 }
 
@@ -126,7 +134,11 @@ fn pack(steps: &str) -> String {
 }
 
 fn download(url: &Path, unpack: &str, extra: &str) -> String {
-    format!("[[install.steps]]\ndownload = {{ url = \"file://{}\", sha256 = \"{}\", unpack = \"{unpack}\"{extra} }}\n", url.display(), sha256(url))
+    format!(
+        "[[install.steps]]\ndownload = {{ url = \"file://{}\", sha256 = \"{}\", unpack = \"{unpack}\"{extra} }}\n",
+        url.display(),
+        sha256(url)
+    )
 }
 
 #[test]
@@ -142,10 +154,18 @@ fn every_kind_of_step_installs_from_local_fixtures() {
     let proxy = certificate("Test Sandboxes Proxy CA");
     std::fs::write(w.at("store.pem"), format!("{}{proxy}{}", certificate("Some Root"), certificate("Other Root"))).unwrap();
     // An archive behind a launcher, with a CA bundle in it.
-    zip_of(&w.at("app.par"), &[("certs/cacert.pem", "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"), ("main.py", "print(1)\n")], b"#!/bin/sh\nexec python3 \"$0\" \"$@\"\n");
+    zip_of(
+        &w.at("app.par"),
+        &[("certs/cacert.pem", "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"), ("main.py", "print(1)\n")],
+        b"#!/bin/sh\nexec python3 \"$0\" \"$@\"\n",
+    );
     // The same, with the launcher put in front of a finished zip (its
     // offsets count from the zip's start, as the real one's do).
-    zip_of(&w.at("plain.zip"), &[("certs/cacert.pem", "-----BEGIN CERTIFICATE-----\nBBBB\n-----END CERTIFICATE-----\n"), ("main.py", "print(2)\n")], b"");
+    zip_of(
+        &w.at("plain.zip"),
+        &[("certs/cacert.pem", "-----BEGIN CERTIFICATE-----\nBBBB\n-----END CERTIFICATE-----\n"), ("main.py", "print(2)\n")],
+        b"",
+    );
     let mut catted = b"\x7fELF launcher bytes\n".to_vec();
     catted.extend(std::fs::read(w.at("plain.zip")).unwrap());
     std::fs::write(w.at("cat.par"), catted).unwrap();
@@ -181,7 +201,10 @@ fn every_kind_of_step_installs_from_local_fixtures() {
     // Only the members asked for.
     assert_eq!(read("bin/server"), "#!/bin/sh\necho server\n");
     assert!(!dest.join("bin/README").exists() && !dest.join("emu/usr/share").exists() && !dest.join("extra/docs.txt").exists());
-    assert_eq!((read("emu/usr/bin/emu"), read("sysroot/lib/x86_64-linux-gnu/libc.so.6"), read("extra/tool")), ("emu".into(), "libc".into(), "tool".into()));
+    assert_eq!(
+        (read("emu/usr/bin/emu"), read("sysroot/lib/x86_64-linux-gnu/libc.so.6"), read("extra/tool")),
+        ("emu".into(), "libc".into(), "tool".into())
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -205,9 +228,19 @@ fn every_kind_of_step_installs_from_local_fixtures() {
     assert!(text("certs/cacert.pem").starts_with("-----BEGIN CERTIFICATE-----\nAAAA") && text("certs/cacert.pem").ends_with(&proxy));
     assert_eq!(text("main.py"), "print(1)\n");
     // Python reads it as the launcher will.
-    let python = std::process::Command::new("python3").arg("-c").arg(format!("import zipfile; z = zipfile.ZipFile('{}'); assert z.testzip() is None; print(z.read('main.py').decode())", dest.join("bin/app.par").display())).output();
+    let python = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(format!(
+            "import zipfile; z = zipfile.ZipFile('{}'); assert z.testzip() is None; print(z.read('main.py').decode())",
+            dest.join("bin/app.par").display()
+        ))
+        .output();
     if let Ok(out) = python {
-        assert!(out.status.success() && String::from_utf8_lossy(&out.stdout).contains("print(1)"), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success() && String::from_utf8_lossy(&out.stdout).contains("print(1)"),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
     // Offsets counted from the zip's start: the launcher kept, the members read back.
     let cat = dest.join("bin/cat.par");
@@ -233,7 +266,12 @@ fn optional_steps_skip_and_others_fail_clearly() {
     std::fs::write(w.at("store.pem"), certificate("Some Root")).unwrap();
     zip_of(&w.at("server.zip"), &[("server", "s")], b"");
     let base = download(&w.at("server.zip"), "zip", ", into = \"bin\"");
-    let ca = |optional: bool| format!("[[install.steps]]\nsystem_ca = {{ store = \"{}\", subject = \"Proxy CA\", save_as = \"ca.pem\", optional = {optional} }}\n[[install.steps]]\npatch_archive = {{ file = \"bin/server\", members = [\"*\"], append = \"ca.pem\", optional = {optional} }}\n", w.at("store.pem").display());
+    let ca = |optional: bool| {
+        format!(
+            "[[install.steps]]\nsystem_ca = {{ store = \"{}\", subject = \"Proxy CA\", save_as = \"ca.pem\", optional = {optional} }}\n[[install.steps]]\npatch_archive = {{ file = \"bin/server\", members = [\"*\"], append = \"ca.pem\", optional = {optional} }}\n",
+            w.at("store.pem").display()
+        )
+    };
     let catalog = w.catalog(&pack(&format!("{base}{}", ca(true))));
     let platform = catalog.platforms.current().unwrap().clone();
     nah_packs::install(&catalog, "t", &platform).expect("no proxy CA: both steps skip");
@@ -250,8 +288,14 @@ fn optional_steps_skip_and_others_fail_clearly() {
         ("ensure_group = { name = \"no group\" }", "isn't a group name"),
         ("patch_archive = { file = \"a\", members = [], append = \"b\" }", "members is empty"),
         ("link = { path = \"bin/a\", target = \"../../../etc/passwd\" }", "leads out of the install folder"),
-        ("download = { url = \"file:///x\", sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\", unpack = \"zip\", into = \"../../escaped\" }", "inside the install folder"),
-        ("download = { url = \"file:///x\", sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\", save_as = \"../out.bin\" }", "inside the install folder"),
+        (
+            "download = { url = \"file:///x\", sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\", unpack = \"zip\", into = \"../../escaped\" }",
+            "inside the install folder",
+        ),
+        (
+            "download = { url = \"file:///x\", sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\", save_as = \"../out.bin\" }",
+            "inside the install folder",
+        ),
     ] {
         let files = vec![
             ("index.toml".to_owned(), shipped("index.toml").into_bytes()),
@@ -277,7 +321,9 @@ fn a_step_that_runs_too_long_is_stopped() {
 
 /// A harness that answers ACP `initialize` (or, `silent`, reads and never answers).
 fn acp_server(path: &Path, version: &str, silent: bool) -> String {
-    let answer = format!("echo '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1,\"agentInfo\":{{\"name\":\"fake\",\"version\":\"{version}\"}}}}}}'");
+    let answer = format!(
+        "echo '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1,\"agentInfo\":{{\"name\":\"fake\",\"version\":\"{version}\"}}}}}}'"
+    );
     let body = if silent { "sleep 60".to_owned() } else { answer };
     format!("#!/bin/sh\nread line\n{body}\n").replace("{path}", &path.display().to_string())
 }

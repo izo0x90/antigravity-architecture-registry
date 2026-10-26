@@ -91,7 +91,13 @@ impl Logs {
                 tracing::warn!("The logs ({}) couldn't be made the server user's only: {e}", dir.display());
             }
         }
-        let logs = Self { dir: dir.to_owned(), prefix: prefix.to_owned(), state: Mutex::new(State { next: 1, counted: HashMap::new(), touched: BTreeSet::new(), growing: BTreeMap::new() }), search: Mutex::default(), writers: Mutex::default() };
+        let logs = Self {
+            dir: dir.to_owned(),
+            prefix: prefix.to_owned(),
+            state: Mutex::new(State { next: 1, counted: HashMap::new(), touched: BTreeSet::new(), growing: BTreeMap::new() }),
+            search: Mutex::default(),
+            writers: Mutex::default(),
+        };
         let last = std::fs::read_dir(dir).into_iter().flatten().filter_map(|e| logs.number(&e.ok()?.file_name().to_string_lossy())).max();
         logs.lock().next = last.map_or(1, |n| n + 1);
         logs
@@ -128,7 +134,10 @@ impl Logs {
     /// user's only): where its piece starts, and the file to write it to.
     fn start(&self, header: &str) -> std::io::Result<(Kept, File)> {
         if self.linked() {
-            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("{} is a link, not a folder: nothing is written through it", self.dir.display())));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("{} is a link, not a folder: nothing is written through it", self.dir.display()),
+            ));
         }
         let mut folder = std::fs::DirBuilder::new();
         folder.recursive(true);
@@ -347,7 +356,14 @@ impl Logs {
         };
         // Every file of ours listed, whatever ignores it (a global ignore of `*.log`).
         if listed.len() < files.len() {
-            changed.extend(std::fs::read_dir(&self.dir).into_iter().flatten().flatten().filter(|e| self.is_log(&e.file_name().to_string_lossy())).map(|e| e.path()));
+            changed.extend(
+                std::fs::read_dir(&self.dir)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter(|e| self.is_log(&e.file_name().to_string_lossy()))
+                    .map(|e| e.path()),
+            );
         }
         if let Err(e) = listed.changed(&changed) {
             tracing::warn!("The logs couldn't be listed again to search: {e}");
@@ -438,7 +454,10 @@ mod tests {
             std::fs::remove_file(&link).unwrap();
         }
         // Opened again: a file from before is never written to again.
-        assert!(![a.file.clone(), b.file.clone(), growing.file.clone()].contains(&Logs::open(dir.path(), "tagged").write("x", "z").unwrap().file));
+        assert!(
+            ![a.file.clone(), b.file.clone(), growing.file.clone()]
+                .contains(&Logs::open(dir.path(), "tagged").write("x", "z").unwrap().file)
+        );
     }
 
     #[test]
@@ -449,7 +468,11 @@ mod tests {
         let b = logs.write("other", "build flaky too\n").unwrap();
         let only_a = BTreeSet::from([a.file.clone()]);
         let (found, partial) = logs.search("flaky build", &only_a, 10);
-        assert_eq!((found.iter().map(|(_, n, t)| (*n, t.as_str())).collect::<Vec<_>>(), partial), (vec![(2, "the build is flaky"), (3, "flaky, the build")], false), "every word, any order; only the files asked; the heading is no piece's");
+        assert_eq!(
+            (found.iter().map(|(_, n, t)| (*n, t.as_str())).collect::<Vec<_>>(), partial),
+            (vec![(2, "the build is flaky"), (3, "flaky, the build")], false),
+            "every word, any order; only the files asked; the heading is no piece's"
+        );
         assert!(logs.search("BUILD", &only_a, 10).0.is_empty(), "capitals heeded when there are some");
         assert_eq!(logs.search("flaky", &only_a, 1).0.len(), 1, "as many of a piece's as asked");
         let mut both = only_a.clone();
@@ -460,6 +483,10 @@ mod tests {
         // every word last: still found.
         let c = logs.write("many", "second\nsecond\nsecond\nline second\n").unwrap();
         let (found, _) = logs.search("line second", &BTreeSet::from([c.file]), 1);
-        assert_eq!(found.iter().map(|(_, n, t)| (*n, t.as_str())).collect::<Vec<_>>(), [(5, "line second")], "every word first, then how many");
+        assert_eq!(
+            found.iter().map(|(_, n, t)| (*n, t.as_str())).collect::<Vec<_>>(),
+            [(5, "line second")],
+            "every word first, then how many"
+        );
     }
 }

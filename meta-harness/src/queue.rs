@@ -12,8 +12,8 @@ use arch_graph::{ArchEvent, ComponentId, Finding, FindingCode, JobKind, PlanId, 
 use arch_service::{ArchitectureService, BriefContext, Outcome, Queue, QueueConfig, ServiceError, missing_details, render_brief};
 use async_trait::async_trait;
 use futures::StreamExt;
-use harness_contracts::{AdapterEvent, TurnInput, TurnStatus};
 use harness_contracts::Starter;
+use harness_contracts::{AdapterEvent, TurnInput, TurnStatus};
 use harness_core::{Open, SessionManager, SlotManager, SlotSettings};
 use tokio::sync::Notify;
 
@@ -56,14 +56,20 @@ impl JobRunner for SessionRunner {
         // The whole job (opening the session included) runs against the clock.
         let opened: std::sync::Mutex<Option<harness_contracts::ThreadId>> = std::sync::Mutex::new(None);
         let job = async {
-            let thread = self.slots.open_session(&slot, Open::New { resume: None }).await.map_err(|e| format!("couldn't open a session: {e}"))?.thread;
+            let thread = self
+                .slots
+                .open_session(&slot, Open::New { resume: None })
+                .await
+                .map_err(|e| format!("couldn't open a session: {e}"))?
+                .thread;
             *opened.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(thread.clone());
             attach(thread.to_string());
             let session = self.sessions.get(&thread).map_err(|e| e.to_string())?;
             let mut events = session.events();
             // A brief is plain text (agents write what it's made of: a plan's
             // contract); nothing in it is a link.
-            let turn = session.start_turn(TurnInput::of(ticket.brief.clone())).await.map_err(|e| format!("couldn't start the turn: {e}"))?;
+            let turn =
+                session.start_turn(TurnInput::of(ticket.brief.clone())).await.map_err(|e| format!("couldn't start the turn: {e}"))?;
             while let Some(event) = events.next().await {
                 if let AdapterEvent::TurnUpdated { turn: t } = event
                     && t.id == turn
@@ -142,7 +148,13 @@ impl QueueRunner {
     fn handle(&self, plan: &PlanId) -> Arc<Running> {
         lock(&self.queues)
             .entry(plan.clone())
-            .or_insert_with(|| Arc::new(Running { queue: Mutex::new(Queue::new(plan.clone(), self.config.queue.clone())), wake: Notify::new(), last: Mutex::new(None) }))
+            .or_insert_with(|| {
+                Arc::new(Running {
+                    queue: Mutex::new(Queue::new(plan.clone(), self.config.queue.clone())),
+                    wake: Notify::new(),
+                    last: Mutex::new(None),
+                })
+            })
             .clone()
     }
 
@@ -200,7 +212,9 @@ impl QueueRunner {
             lock(&handle.queue).stop();
             handle.wake.notify_one();
         }
-        (self.publish)(ArchEvent::QueueUpdated { snapshot: Box::new(QueueSnapshot { plan: plan.clone(), status: QueueStatus::Idle, jobs: Vec::new() }) });
+        (self.publish)(ArchEvent::QueueUpdated {
+            snapshot: Box::new(QueueSnapshot { plan: plan.clone(), status: QueueStatus::Idle, jobs: Vec::new() }),
+        });
     }
 
     /// Gives a job that ran out of attempts another round.
@@ -221,7 +235,8 @@ impl QueueRunner {
                 return Ok(());
             }
             let id = plan.clone();
-            let (current, graph) = blocking(&self.arch, move |a| Ok((a.plan(&id)?, a.graph(&arch_graph::Source::Plan(id.clone()))?))).await?;
+            let (current, graph) =
+                blocking(&self.arch, move |a| Ok((a.plan(&id)?, a.graph(&arch_graph::Source::Plan(id.clone()))?))).await?;
             let next = lock(&handle.queue).next(&current, &graph, self.arch.types());
             let Some((component, kind)) = next else {
                 let snapshot = self.announce(plan).await?;
@@ -238,7 +253,10 @@ impl QueueRunner {
             let findings = lock(&handle.queue).last_findings(&component).to_vec();
             let (p, c) = (plan.clone(), component.clone());
             let contract = blocking(&self.arch, move |a| Ok(a.contract(&p, &c)?.to_markdown())).await?;
-            let brief = render_brief(&self.config, &BriefContext { plan: &current, component: &planned, kind, attempt, contract: &contract, findings: &findings });
+            let brief = render_brief(
+                &self.config,
+                &BriefContext { plan: &current, component: &planned, kind, attempt, contract: &contract, findings: &findings },
+            );
             lock(&handle.queue).start(&component, kind);
             self.announce(plan).await?;
             let ticket = Ticket { plan: plan.clone(), component: component.clone(), kind, brief };
@@ -280,11 +298,18 @@ impl QueueRunner {
                     Target::Relation { id } => graph.relation(id).is_some_and(|r| r.source == c || r.target == c),
                     Target::Plan { .. } => true,
                 };
-                let mut problems: Vec<Finding> = report.findings.into_iter().filter(|f| f.severity == Severity::Error && touches(f)).collect();
-                if let (Some(component), Ok(ty)) = (graph.component(&c), a.types().resolve(&current.component(&c).map(|x| x.type_name.clone()).unwrap_or_default())) {
+                let mut problems: Vec<Finding> =
+                    report.findings.into_iter().filter(|f| f.severity == Severity::Error && touches(f)).collect();
+                if let (Some(component), Ok(ty)) =
+                    (graph.component(&c), a.types().resolve(&current.component(&c).map(|x| x.type_name.clone()).unwrap_or_default()))
+                {
                     let missing = missing_details(component, &ty);
                     if !missing.is_empty() {
-                        problems.push(Finding::error(FindingCode::SpecIncomplete, Target::Component { id: c.clone() }, format!("still missing: {}", missing.iter().map(|f| f.name()).collect::<Vec<_>>().join(", "))));
+                        problems.push(Finding::error(
+                            FindingCode::SpecIncomplete,
+                            Target::Component { id: c.clone() },
+                            format!("still missing: {}", missing.iter().map(|f| f.name()).collect::<Vec<_>>().join(", ")),
+                        ));
                     }
                 }
                 Ok(if problems.is_empty() { Outcome::Passed } else { Outcome::Failed(problems) })
@@ -337,7 +362,12 @@ struct StartBody {
 }
 
 /// The user starts the queue from the cockpit.
-async fn start(_: Needs<can::PlansApprove>, State(state): State<ProjectState>, Path(plan): Path<String>, Json(body): Json<StartBody>) -> ArchResult<QueueSnapshot> {
+async fn start(
+    _: Needs<can::PlansApprove>,
+    State(state): State<ProjectState>,
+    Path(plan): Path<String>,
+    Json(body): Json<StartBody>,
+) -> ArchResult<QueueSnapshot> {
     let plan = plan_id(&plan)?;
     let mut policy = body.policy;
     if policy.cwd.is_none() {
@@ -360,6 +390,11 @@ struct RetryBody {
     component: ComponentId,
 }
 
-async fn retry(_: Needs<can::PlansApprove>, State(state): State<ProjectState>, Path(plan): Path<String>, Json(body): Json<RetryBody>) -> ArchResult<QueueSnapshot> {
+async fn retry(
+    _: Needs<can::PlansApprove>,
+    State(state): State<ProjectState>,
+    Path(plan): Path<String>,
+    Json(body): Json<RetryBody>,
+) -> ArchResult<QueueSnapshot> {
     Ok(Json(state.queue.retry(&plan_id(&plan)?, &body.component).await?))
 }

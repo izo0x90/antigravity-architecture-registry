@@ -4,8 +4,8 @@
 use std::path::Path;
 
 use arch_graph::{ComponentId, RelationKind, TypeSystem};
-use code_analyzer::PackSet;
 use arch_service::{ArchitectureService, MemoryPlans};
+use code_analyzer::PackSet;
 
 mod common;
 
@@ -85,7 +85,8 @@ fn cached_extracts_from_another_pack_version_are_parsed_again() {
     std::fs::create_dir_all(&own).unwrap();
     std::fs::copy(shipped.join("language/rust/pack.toml"), own.join("pack.toml")).unwrap();
     std::fs::copy(shipped.join("language/rust/highlights.scm"), own.join("highlights.scm")).unwrap();
-    std::fs::write(own.join("syntax.toml"), std::fs::read_to_string(shipped.join("language/rust/syntax.toml")).unwrap() + "\n# edited\n").unwrap();
+    std::fs::write(own.join("syntax.toml"), std::fs::read_to_string(shipped.join("language/rust/syntax.toml")).unwrap() + "\n# edited\n")
+        .unwrap();
     let places = nah_packs::Places { project: root.clone(), ..nah_packs::Places::isolated(&dir.path().join("elsewhere")) };
     let catalog = nah_packs::Catalog::load(&nah_packs::Distribution::from_dir(&shipped).unwrap(), &places).unwrap();
     let edited = code_analyzer::PackSet::from_catalog(&catalog).unwrap();

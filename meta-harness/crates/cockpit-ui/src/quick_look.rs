@@ -10,9 +10,9 @@
 //! until Escape, the key again, a click outside it, or focus moving to a
 //! panel.
 
+use crate::keymap::Chord;
 use crate::kind::BufferKind;
 use crate::panels::BufferId;
-use crate::keymap::Chord;
 
 /// The number of the quick look's own buffer of a kind (never a panel's).
 pub const PANE: u32 = u32::MAX;

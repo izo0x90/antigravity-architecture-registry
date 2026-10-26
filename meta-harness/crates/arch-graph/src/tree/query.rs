@@ -12,7 +12,11 @@ pub const EXTRA: [&str; 2] = ["card", "levels"];
 impl TreeRequest {
     /// The request as (name, value) pairs, not yet percent-encoded.
     pub fn query_pairs(&self) -> Vec<(&'static str, String)> {
-        let mut out = vec![("view", self.view.name().to_owned()), ("source", String::from(self.source.clone())), ("way", way_name(self.way).to_owned())];
+        let mut out = vec![
+            ("view", self.view.name().to_owned()),
+            ("source", String::from(self.source.clone())),
+            ("way", way_name(self.way).to_owned()),
+        ];
         if let Some(root) = &self.root {
             out.push(("root", root.clone()));
         }
@@ -43,11 +47,13 @@ impl TreeRequest {
             match name.as_str() {
                 "view" => request.view = ViewKind::from_name(value).ok_or_else(|| bad("use contains, calls or data_flow"))?,
                 "source" => request.source = value.parse::<Source>()?,
-                "way" => request.way = match value.as_str() {
-                    "down" => Way::Down,
-                    "up" => Way::Up,
-                    _ => return Err(bad("use down or up")),
-                },
+                "way" => {
+                    request.way = match value.as_str() {
+                        "down" => Way::Down,
+                        "up" => Way::Up,
+                        _ => return Err(bad("use down or up")),
+                    }
+                }
                 "root" => request.root = Some(value.clone()),
                 "depth" => request.depth = Some(value.parse().map_err(|_| bad("a number of levels"))?),
                 "opened" => request.opened = serde_json::from_str::<Vec<Opened>>(value).map_err(|e| bad(&e.to_string()))?,

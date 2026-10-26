@@ -52,7 +52,8 @@ impl NotificationStore for MemoryStore {
 
     fn expire_waiting(&self) -> Result<usize, String> {
         let mut rows = self.rows();
-        let waiting: Vec<&mut Notification> = rows.iter_mut().filter(|n| n.state == NotificationState::Open && n.level == Level::Waiting).collect();
+        let waiting: Vec<&mut Notification> =
+            rows.iter_mut().filter(|n| n.state == NotificationState::Open && n.level == Level::Waiting).collect();
         let count = waiting.len();
         for n in waiting {
             n.state = NotificationState::Expired;

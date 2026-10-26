@@ -9,9 +9,9 @@ use std::cell::Ref;
 
 use egui::{Color32, Frame, Pos2, Rect, RichText, Stroke, Vec2};
 use harness_contracts::{
-    ConfigKind, McpServer, McpTransport, NativeId, OptionValue, ContentBlock, InstanceId, ItemBody, ItemStatus, ModelSelection, NoticeLevel, PlanBody,
-    PlanStep, ProviderSnapshot, ProviderStatus, RuntimeMode, RuntimePolicy, SessionKey, Slot, SlotId,
-    StepStatus, SteerInput, ThreadId, TurnItem, TurnStatus, LEAD,
+    ConfigKind, ContentBlock, InstanceId, ItemBody, ItemStatus, LEAD, McpServer, McpTransport, ModelSelection, NativeId, NoticeLevel,
+    OptionValue, PlanBody, PlanStep, ProviderSnapshot, ProviderStatus, RuntimeMode, RuntimePolicy, SessionKey, Slot, SlotId, SteerInput,
+    StepStatus, ThreadId, TurnItem, TurnStatus,
 };
 
 use egui_phosphor::regular as icon;
@@ -30,11 +30,10 @@ mod nav;
 mod render;
 mod rows;
 mod session;
+pub(crate) mod slots;
 pub(crate) mod subagents;
 pub(crate) mod things;
-pub(crate) mod slots;
 mod words;
-
 
 use crate::agents::block_summary;
 use render::mcp_label;
@@ -309,7 +308,14 @@ impl ChatStreamState {
     /// look all answer so.)
     fn answer(&mut self, thread: &ThreadId, request: &harness_contracts::RequestId, option: &str) -> Result<(), String> {
         let Some(pending) = self.agents().store().threads.get(thread).and_then(|t| t.request(request)).cloned() else { return Ok(()) };
-        let says_yes = pending.options.iter().find(|o| o.id == option).is_some_and(|o| matches!(o.decision, harness_contracts::ApprovalDecision::Accept | harness_contracts::ApprovalDecision::AcceptForSession | harness_contracts::ApprovalDecision::AcceptAlways));
+        let says_yes = pending.options.iter().find(|o| o.id == option).is_some_and(|o| {
+            matches!(
+                o.decision,
+                harness_contracts::ApprovalDecision::Accept
+                    | harness_contracts::ApprovalDecision::AcceptForSession
+                    | harness_contracts::ApprovalDecision::AcceptAlways
+            )
+        });
         if says_yes && !self.drafts.complete(&pending) {
             return Err("Answer the questions it needs first.".into());
         }
@@ -328,7 +334,11 @@ impl ChatStreamState {
     /// its way, as it was asked (the first asked first), with its item's
     /// place in the stream (none: its item isn't there yet). Alone, a
     /// sub-agent's: what waits in its work. (Read where they're kept.)
-    pub(crate) fn pending_in<'a>(&self, view: &'a ThreadView, agents: &Agents) -> Vec<(Option<usize>, &'a harness_contracts::RuntimeRequest)> {
+    pub(crate) fn pending_in<'a>(
+        &self,
+        view: &'a ThreadView,
+        agents: &Agents,
+    ) -> Vec<(Option<usize>, &'a harness_contracts::RuntimeRequest)> {
         let here = self.shown();
         view.pending_requests()
             .filter(|r| agents.waits(r))
@@ -404,17 +414,22 @@ impl ChatStreamState {
             ItemBody::ProposedPlan { markdown, .. } => markdown.clone(),
             _ => return Vec::new(),
         };
-        crate::conversation::parts(&text).into_iter().filter_map(|p| match p {
-            crate::conversation::Part::Code { code, .. } => Some(code.to_owned()),
-            _ => None,
-        }).collect()
+        crate::conversation::parts(&text)
+            .into_iter()
+            .filter_map(|p| match p {
+                crate::conversation::Part::Code { code, .. } => Some(code.to_owned()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// What your message you're on links, in order: each chip's words, and
     /// where it goes.
     pub(crate) fn chips_here(&self) -> Vec<(String, Target)> {
         let Some(view) = self.thread() else { return Vec::new() };
-        let Some(ItemBody::UserMessage { text: shown, pieces }) = self.ui.cursor.and_then(|at| view.in_stream(at)).map(|i| &i.body) else { return Vec::new() };
+        let Some(ItemBody::UserMessage { text: shown, pieces }) = self.ui.cursor.and_then(|at| view.in_stream(at)).map(|i| &i.body) else {
+            return Vec::new();
+        };
         harness_contracts::links_of(pieces)
             .iter()
             .filter_map(|link| {
@@ -518,7 +533,9 @@ impl ChatStreamState {
             return;
         }
         match (self.sign_in_box(), self.active_instance()) {
-            (Some(now), _) if now.pasted.as_ref().is_some_and(|p| p.finishing) => *note = Some("What you pasted is being checked: send again once it's answered.".into()),
+            (Some(now), _) if now.pasted.as_ref().is_some_and(|p| p.finishing) => {
+                *note = Some("What you pasted is being checked: send again once it's answered.".into())
+            }
             (Some(_), Some(instance)) => {
                 let answer = self.ui.input.take().text;
                 self.act(Act::FinishSignIn { instance, answer });

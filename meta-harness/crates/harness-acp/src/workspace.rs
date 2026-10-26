@@ -27,7 +27,9 @@ impl WorkspaceFs {
         let resolved = workspace_fs::resolve_client_file_path(&self.roots, path).map_err(rejected)?;
         let private = |dir: &PathBuf| dir.canonicalize().is_ok_and(|dir| resolved.starts_with(dir)) || resolved.starts_with(dir);
         if self.private.iter().any(private) {
-            return Err(HarnessError::InvalidConfig { reason: format!("{path} is the server's own (its state, the harnesses' logins): it isn't shared") });
+            return Err(HarnessError::InvalidConfig {
+                reason: format!("{path} is the server's own (its state, the harnesses' logins): it isn't shared"),
+            });
         }
         Ok(())
     }

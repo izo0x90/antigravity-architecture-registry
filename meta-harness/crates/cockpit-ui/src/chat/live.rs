@@ -87,7 +87,11 @@ impl ChatStreamState {
         match activity.liveness {
             Liveness::Receiving => (format!("{}…", activity.doing), colors().info, Next::In(self.settings.receiving_s - since)),
             Liveness::Waiting if activity.since_last.is_none() => (format!("{}…", activity.doing), colors().muted, Next::OnChange),
-            Liveness::Waiting => (format!("{}… {} since anything", activity.doing, span_words(since)), colors().muted, Next::In(span_changes(since).min(self.settings.quiet_after_s - since))),
+            Liveness::Waiting => (
+                format!("{}… {} since anything", activity.doing, span_words(since)),
+                colors().muted,
+                Next::In(span_changes(since).min(self.settings.quiet_after_s - since)),
+            ),
             Liveness::Asking => ("Waiting on you".to_owned(), colors().info, Next::OnChange),
             Liveness::Quiet => {
                 let reach = self.reach().map(|r| format!(" · {r}")).unwrap_or_default();

@@ -48,7 +48,10 @@ fn passed_headers(from: &HeaderMap, secret: &str) -> Result<HeaderMap, String> {
     for name in HOP_BY_HOP.iter().chain(&[header::COOKIE, header::HOST, header::AUTHORIZATION]) {
         headers.remove(name);
     }
-    headers.insert(header::AUTHORIZATION, HeaderValue::from_str(&format!("Bearer {secret}")).map_err(|_| "its secret isn't a header value".to_owned())?);
+    headers.insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {secret}")).map_err(|_| "its secret isn't a header value".to_owned())?,
+    );
     Ok(headers)
 }
 

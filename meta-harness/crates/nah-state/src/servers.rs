@@ -29,7 +29,8 @@ pub fn check_name(name: &str) -> Result<(), StateError> {
 }
 
 fn check_url(url: &str) -> Result<(), StateError> {
-    let rest = url.strip_prefix("http://").ok_or_else(|| StateError::Invalid(format!("a server's address is http://host:port: {url:?}")))?;
+    let rest =
+        url.strip_prefix("http://").ok_or_else(|| StateError::Invalid(format!("a server's address is http://host:port: {url:?}")))?;
     let host = rest.trim_end_matches('/');
     if host.is_empty() || host.contains('/') {
         return Err(StateError::Invalid(format!("a server's address is http://host:port, with no path: {url:?}")));
@@ -42,16 +43,22 @@ impl StateDb {
     pub fn servers(&self) -> Result<Vec<ServerEntry>, StateError> {
         self.transaction(|tx| {
             let mut stmt = tx.prepare("SELECT name, url, secret, added_at FROM servers ORDER BY added_at, name").map_err(failed)?;
-            let rows = stmt.query_map([], |r| Ok(ServerEntry { name: r.get(0)?, url: r.get(1)?, secret: r.get(2)?, added_at_ms: r.get::<_, i64>(3)? as u64 })).map_err(failed)?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok(ServerEntry { name: r.get(0)?, url: r.get(1)?, secret: r.get(2)?, added_at_ms: r.get::<_, i64>(3)? as u64 })
+                })
+                .map_err(failed)?;
             rows.collect::<Result<_, _>>().map_err(failed)
         })
     }
 
     pub fn server(&self, name: &str) -> Result<Option<ServerEntry>, StateError> {
         self.transaction(|tx| {
-            tx.query_row("SELECT name, url, secret, added_at FROM servers WHERE name = ?1", params![name], |r| Ok(ServerEntry { name: r.get(0)?, url: r.get(1)?, secret: r.get(2)?, added_at_ms: r.get::<_, i64>(3)? as u64 }))
-                .optional()
-                .map_err(failed)
+            tx.query_row("SELECT name, url, secret, added_at FROM servers WHERE name = ?1", params![name], |r| {
+                Ok(ServerEntry { name: r.get(0)?, url: r.get(1)?, secret: r.get(2)?, added_at_ms: r.get::<_, i64>(3)? as u64 })
+            })
+            .optional()
+            .map_err(failed)
         })
     }
 
@@ -60,14 +67,22 @@ impl StateDb {
         check_name(&entry.name)?;
         check_url(&entry.url)?;
         if entry.secret.trim().is_empty() {
-            return Err(StateError::Invalid(format!("{}: its secret is empty (`meta-harness token` on that server prints it)", entry.name)));
+            return Err(StateError::Invalid(format!(
+                "{}: its secret is empty (`meta-harness token` on that server prints it)",
+                entry.name
+            )));
         }
         self.transaction(|tx| {
-            let taken: bool = tx.query_row("SELECT EXISTS (SELECT 1 FROM servers WHERE name = ?1)", params![entry.name], |r| r.get(0)).map_err(failed)?;
+            let taken: bool =
+                tx.query_row("SELECT EXISTS (SELECT 1 FROM servers WHERE name = ?1)", params![entry.name], |r| r.get(0)).map_err(failed)?;
             if taken {
                 return Err(StateError::Invalid(format!("there's a server named {:?} already: remove it first", entry.name)));
             }
-            tx.execute("INSERT INTO servers (name, url, secret, added_at) VALUES (?1, ?2, ?3, ?4)", params![entry.name, entry.url.trim_end_matches('/'), entry.secret.trim(), entry.added_at_ms as i64]).map_err(failed)?;
+            tx.execute(
+                "INSERT INTO servers (name, url, secret, added_at) VALUES (?1, ?2, ?3, ?4)",
+                params![entry.name, entry.url.trim_end_matches('/'), entry.secret.trim(), entry.added_at_ms as i64],
+            )
+            .map_err(failed)?;
             Ok(())
         })
     }

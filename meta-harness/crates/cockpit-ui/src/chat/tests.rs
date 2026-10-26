@@ -1,7 +1,9 @@
 use super::*;
 use crate::net::NetClient;
 use crate::shared::Shared;
-use harness_contracts::{AdapterEvent, ClientEvent, FileLocation, InstanceId, ItemId, RuntimePolicy, Thread, ThreadStatus, ToolKind, Turn, TurnId, TurnStatus};
+use harness_contracts::{
+    AdapterEvent, ClientEvent, FileLocation, InstanceId, ItemId, RuntimePolicy, Thread, ThreadStatus, ToolKind, Turn, TurnId, TurnStatus,
+};
 
 /// A chat over agents of its own: the server's events applied to them,
 /// the chat reading them as it does each frame.
@@ -66,7 +68,12 @@ pub(crate) fn lead(thread: Option<&str>) -> harness_contracts::Slot {
         instance_id: Some(InstanceId::new("i")),
         policy: RuntimePolicy::default(),
         model: None,
-        sessions: vec![harness_contracts::SlotSession { key: key.clone(), native_id: None, title: None, thread: thread.map(ThreadId::new) }],
+        sessions: vec![harness_contracts::SlotSession {
+            key: key.clone(),
+            native_id: None,
+            title: None,
+            thread: thread.map(ThreadId::new),
+        }],
         current: Some(key),
         started_by: harness_contracts::Starter::User,
         status: harness_contracts::SlotStatus::Ready,
@@ -77,13 +84,36 @@ pub(crate) fn lead(thread: Option<&str>) -> harness_contracts::Slot {
 /// file change: the server's events.
 pub(crate) fn conversation_events() -> Vec<ClientEvent> {
     let mut chat = Vec::new();
-    let thread = Thread { id: ThreadId::new("t"), instance_id: InstanceId::new("i"), native_id: None, title: None, status: ThreadStatus::Idle, policy: RuntimePolicy::default(), model: None, controls: Default::default(), mcp_servers: Vec::new() };
+    let thread = Thread {
+        id: ThreadId::new("t"),
+        instance_id: InstanceId::new("i"),
+        native_id: None,
+        title: None,
+        status: ThreadStatus::Idle,
+        policy: RuntimePolicy::default(),
+        model: None,
+        controls: Default::default(),
+        mcp_servers: Vec::new(),
+    };
     chat.push(session(AdapterEvent::ThreadUpdated { thread }));
     chat.push(ClientEvent::SlotUpdated { slot: lead(Some("t")) });
-    chat.push(session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn"), thread_id: ThreadId::new("t"), ordinal: 1, status: TurnStatus::Completed, failure: None, usage: None } }));
+    chat.push(session(AdapterEvent::TurnUpdated {
+        turn: Turn {
+            id: TurnId::new("turn"),
+            thread_id: ThreadId::new("t"),
+            ordinal: 1,
+            status: TurnStatus::Completed,
+            failure: None,
+            usage: None,
+        },
+    }));
     chat.push(item(0, ItemBody::UserMessage { text: "fix the parser".into(), pieces: Vec::new() }));
-    chat.push(item(1, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Looking at it.".into() }], streaming: false }));
-    let locations = vec![FileLocation { path: "src/parse.rs".into(), line: Some(12) }, FileLocation { path: "src/lex.rs".into(), line: None }];
+    chat.push(item(
+        1,
+        ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Looking at it.".into() }], streaming: false },
+    ));
+    let locations =
+        vec![FileLocation { path: "src/parse.rs".into(), line: Some(12) }, FileLocation { path: "src/lex.rs".into(), line: None }];
     chat.push(item(2, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations }));
     chat.push(item(3, ItemBody::FileChange { path: "src/parse.rs".into(), diff: None }));
     // (All of it the state as it was: what comes after is news.)
@@ -136,14 +166,27 @@ fn messages_take_a_cursor_and_their_links_open() {
     let net = NetClient::new("http://127.0.0.1:9");
     let mut feedback = FeedbackInspectorState::default();
     for _ in 0..2 {
-        let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 900.0))), ..Default::default() }, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let mut mode = crate::keymap::InputMode::Normal;
-                let mut note = None;
-                let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut None };
-                chat.draw(ui, &mut feedback, false, &mut cx);
-            });
-        });
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 900.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut mode = crate::keymap::InputMode::Normal;
+                    let mut note = None;
+                    let mut cx = RunCx {
+                        net: &net,
+                        ctx,
+                        input_mode: &mut mode,
+                        at: crate::keymap::Host::Panel(0),
+                        note: &mut note,
+                        asked: &mut None,
+                    };
+                    chat.draw(ui, &mut feedback, false, &mut cx);
+                });
+            },
+        );
     }
     let keys: Vec<String> = chat.spots().into_iter().map(|s| s.key).collect();
     for key in ["0", "1", "2", "2:0", "2:1", "3", "3:0"] {
@@ -158,15 +201,35 @@ fn its_skills_tool_servers_and_adding_to_the_running_turn_are_actions() {
     assert!(!ids(&chat).iter().any(|a| a == "mcp.add" || a == "harness.skills" || a == "chat.inject"), "nothing known yet");
     let mut snapshot = ProviderSnapshot {
         status: ProviderStatus::Ready,
-        auth: harness_contracts::AuthState { status: harness_contracts::AuthStatus::SignedIn, account: None, methods: Vec::new(), waiting: None, ended: None },
-        skills: vec![harness_contracts::Skill { name: "review".into(), description: Some("Review".into()), path: None, scope: harness_contracts::Scope::User }],
+        auth: harness_contracts::AuthState {
+            status: harness_contracts::AuthStatus::SignedIn,
+            account: None,
+            methods: Vec::new(),
+            waiting: None,
+            ended: None,
+        },
+        skills: vec![harness_contracts::Skill {
+            name: "review".into(),
+            description: Some("Review".into()),
+            path: None,
+            scope: harness_contracts::Scope::User,
+        }],
         ..ProviderSnapshot::new(InstanceId::new("i"), harness_contracts::DriverKind::new("acp"), "Claude Code")
     };
     snapshot.capabilities.turns.active_steering = true;
     chat.apply(ClientEvent::InstanceUpdated { snapshot });
     chat.shared.agents.get_mut().take_tools_for_test(harness_contracts::ToolServers::default());
     chat.read();
-    chat.apply(session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn"), thread_id: ThreadId::new("t"), ordinal: 1, status: TurnStatus::Running, failure: None, usage: None } }));
+    chat.apply(session(AdapterEvent::TurnUpdated {
+        turn: Turn {
+            id: TurnId::new("turn"),
+            thread_id: ThreadId::new("t"),
+            ordinal: 1,
+            status: TurnStatus::Running,
+            failure: None,
+            usage: None,
+        },
+    }));
     chat.ui.input.text = "also".into();
     let ids = ids(&chat);
     for id in ["mcp.add", "harness.skills", "chat.inject"] {
@@ -184,7 +247,8 @@ fn a_view_shows_the_slot_picked_and_the_lead_when_its_slot_closes() {
     let ctx = egui::Context::default();
     let net = NetClient::new("http://127.0.0.1:9");
     let (mut mode, mut note) = (crate::keymap::InputMode::Normal, None);
-    let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut None };
+    let mut cx =
+        RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut None };
     chat.run(&pick, Some("sub-1".into()), &mut cx);
     assert_eq!((chat.ui.slot.as_str(), chat.active_thread()), ("sub-1", None));
     chat.run(&pick, Some("gone".into()), &mut cx);
@@ -206,7 +270,8 @@ fn next_and_previous_go_through_the_slots_in_order_and_say_the_ends() {
     let ctx = egui::Context::default();
     let net = NetClient::new("http://127.0.0.1:9");
     let (mut mode, mut note) = (crate::keymap::InputMode::Normal, None);
-    let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut None };
+    let mut cx =
+        RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut None };
     let mut seen = vec![chat.ui.slot.to_string()];
     for _ in 0..3 {
         chat.run(&next, None, &mut cx);
@@ -224,7 +289,10 @@ fn next_and_previous_go_through_the_slots_in_order_and_say_the_ends() {
 fn a_long_chat_moves_by_the_shared_rules() {
     let mut chat = conversation();
     for n in 4..40 {
-        chat.apply(item(n, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: format!("answer {n}") }], streaming: false }));
+        chat.apply(item(
+            n,
+            ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: format!("answer {n}") }], streaming: false },
+        ));
     }
     let ctx = egui::Context::default();
     let net = NetClient::new("http://127.0.0.1:9");
@@ -233,14 +301,28 @@ fn a_long_chat_moves_by_the_shared_rules() {
     let mut draw = |chat: &mut Fed, frames: usize| {
         for _ in 0..frames {
             now += 0.05;
-            let _ = ctx.run(egui::RawInput { time: Some(now), screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 500.0))), ..Default::default() }, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let mut mode = crate::keymap::InputMode::Normal;
-                    let mut note = None;
-                    let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut None };
-                    chat.draw(ui, &mut feedback, false, &mut cx);
-                });
-            });
+            let _ = ctx.run(
+                egui::RawInput {
+                    time: Some(now),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 500.0))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let mut mode = crate::keymap::InputMode::Normal;
+                        let mut note = None;
+                        let mut cx = RunCx {
+                            net: &net,
+                            ctx,
+                            input_mode: &mut mode,
+                            at: crate::keymap::Host::Panel(0),
+                            note: &mut note,
+                            asked: &mut None,
+                        };
+                        chat.draw(ui, &mut feedback, false, &mut cx);
+                    });
+                },
+            );
         }
         chat.ui.scrolling.viewport.offset.y
     };
@@ -264,7 +346,10 @@ fn a_long_chat_moves_by_the_shared_rules() {
     // Backspace: to the latest, and following it again.
     chat.leave();
     assert_eq!(draw(&mut chat, 5), bottom, "Backspace: at the latest");
-    chat.apply(item(40, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "a new answer".into() }], streaming: false }));
+    chat.apply(item(
+        40,
+        ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "a new answer".into() }], streaming: false },
+    ));
     assert!(draw(&mut chat, 3) > bottom, "and following it: a new message shows");
 }
 
@@ -277,7 +362,12 @@ pub(crate) fn signed_out_harness(waiting: Option<harness_contracts::SignInWaitin
         auth: harness_contracts::AuthState {
             status: harness_contracts::AuthStatus::SignedOut,
             account: None,
-            methods: vec![harness_contracts::AuthMethod { id: "oauth-personal".into(), name: "Google".into(), description: None, kind: harness_contracts::AuthMethodKind::Agent }],
+            methods: vec![harness_contracts::AuthMethod {
+                id: "oauth-personal".into(),
+                name: "Google".into(),
+                description: None,
+                kind: harness_contracts::AuthMethodKind::Agent,
+            }],
             waiting,
             ended: None,
         },
@@ -315,11 +405,19 @@ fn signing_in_shows_the_servers_sign_in_and_a_paste_that_was_not_taken() {
     let mut chat = conversation();
     chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(None) });
     let status: Vec<(String, Option<String>)> = crate::hosted::Hosted::status(&chat.chat).into_iter().map(|s| (s.text, s.detail)).collect();
-    assert!(status.iter().any(|(_, detail)| detail.as_deref().is_some_and(|d| d.contains("/work/p/.nah/harness/i"))), "where its home is: {status:?}");
+    assert!(
+        status.iter().any(|(_, detail)| detail.as_deref().is_some_and(|d| d.contains("/work/p/.nah/harness/i"))),
+        "where its home is: {status:?}"
+    );
     assert!(on_banners(&chat).contains(&"auth.login".to_owned()), "signed out: Sign in");
 
     // Asked for: not again until it's answered.
-    chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::SignIn { instance: InstanceId::new("i"), method: "oauth-personal".into() }, &net, &ctx);
+    chat.shared.agents.get_mut().act(
+        SlotId::new(LEAD),
+        Act::SignIn { instance: InstanceId::new("i"), method: "oauth-personal".into() },
+        &net,
+        &ctx,
+    );
     chat.read();
     assert!(!on_banners(&chat).contains(&"auth.login".to_owned()), "one sign-in at a time");
     assert!(chat.agents().signing_in(&InstanceId::new("i")), "said while it starts");
@@ -329,26 +427,51 @@ fn signing_in_shows_the_servers_sign_in_and_a_paste_that_was_not_taken() {
     assert!(net.answer("POST /api/instances/i/auth/oauth-personal", 200, &serde_json::json!(waiting(7, 300))));
     tick(&mut chat, &ctx, &net);
     let top = on_banners(&chat);
-    assert!(top.contains(&"auth.page".to_owned()) && top.contains(&"auth.copy".to_owned()) && top.contains(&"auth.cancel".to_owned()), "{top:?}");
+    assert!(
+        top.contains(&"auth.page".to_owned()) && top.contains(&"auth.copy".to_owned()) && top.contains(&"auth.cancel".to_owned()),
+        "{top:?}"
+    );
 
     // Pasted: being checked, then refused while it still waits.
-    chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::FinishSignIn { instance: InstanceId::new("i"), answer: "4/abc".into() }, &net, &ctx);
+    chat.shared.agents.get_mut().act(
+        SlotId::new(LEAD),
+        Act::FinishSignIn { instance: InstanceId::new("i"), answer: "4/abc".into() },
+        &net,
+        &ctx,
+    );
     chat.read();
-    assert_eq!(net.bodies.lock().unwrap().last().map(|(_, body)| body["id"].clone()), Some(serde_json::json!(7)), "the paste names its sign-in");
+    assert_eq!(
+        net.bodies.lock().unwrap().last().map(|(_, body)| body["id"].clone()),
+        Some(serde_json::json!(7)),
+        "the paste names its sign-in"
+    );
     assert!(net.answer("POST /api/instances/i/auth/complete", 400, &serde_json::json!({ "error": "that isn't the address" })));
     tick(&mut chat, &ctx, &net);
     assert!(chat.agents().pasted(&InstanceId::new("i"), 7).is_some_and(|p| p.refused.is_some() && !p.finishing));
     assert!(chat.error().is_none());
 
     // A new sign-in meanwhile: a late answer about the old one doesn't touch it.
-    chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::FinishSignIn { instance: InstanceId::new("i"), answer: "http://127.0.0.1:4000/?code=x".into() }, &net, &ctx);
+    chat.shared.agents.get_mut().act(
+        SlotId::new(LEAD),
+        Act::FinishSignIn { instance: InstanceId::new("i"), answer: "http://127.0.0.1:4000/?code=x".into() },
+        &net,
+        &ctx,
+    );
     chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(8, 300))) });
     assert!(net.answer("POST /api/instances/i/auth/complete", 200, &serde_json::Value::Null));
     tick(&mut chat, &ctx, &net);
-    assert!(chat.agents().waiting(&InstanceId::new("i")).is_some_and(|w| w.id == 8) && chat.agents().pasted(&InstanceId::new("i"), 8).is_none(), "the new one still waits, untouched");
+    assert!(
+        chat.agents().waiting(&InstanceId::new("i")).is_some_and(|w| w.id == 8) && chat.agents().pasted(&InstanceId::new("i"), 8).is_none(),
+        "the new one still waits, untouched"
+    );
 
     // Over on the server (taken, or ended): its answer is said as an error.
-    chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::FinishSignIn { instance: InstanceId::new("i"), answer: "http://127.0.0.1:4000/?code=y".into() }, &net, &ctx);
+    chat.shared.agents.get_mut().act(
+        SlotId::new(LEAD),
+        Act::FinishSignIn { instance: InstanceId::new("i"), answer: "http://127.0.0.1:4000/?code=y".into() },
+        &net,
+        &ctx,
+    );
     chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(None) });
     assert!(net.answer("POST /api/instances/i/auth/complete", 502, &serde_json::json!({ "error": "the sign-in failed: bad code" })));
     tick(&mut chat, &ctx, &net);
@@ -361,7 +484,10 @@ fn a_sign_in_that_stopped_waiting_offers_a_new_one_and_says_how_it_ended() {
     let mut chat = conversation();
     chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(3, -1))) });
     let top = on_banners(&chat);
-    assert!(top.contains(&"auth.login".to_owned()) && !top.contains(&"auth.complete".to_owned()) && !top.contains(&"auth.page".to_owned()), "{top:?}");
+    assert!(
+        top.contains(&"auth.login".to_owned()) && !top.contains(&"auth.complete".to_owned()) && !top.contains(&"auth.page".to_owned()),
+        "{top:?}"
+    );
     // The server ends it, saying how: every device reads the same.
     let mut over = signed_out_harness(None);
     over.auth.ended = Some(Box::new(harness_contracts::SignInEnded { id: 3, how: harness_contracts::SignInEnd::RanOut }));
@@ -371,10 +497,14 @@ fn a_sign_in_that_stopped_waiting_offers_a_new_one_and_says_how_it_ended() {
     // Said whatever the status (signed in, switching account, say), until put away.
     let mut unknown = signed_out_harness(None);
     unknown.auth.status = harness_contracts::AuthStatus::Unknown;
-    unknown.auth.ended = Some(Box::new(harness_contracts::SignInEnded { id: 5, how: harness_contracts::SignInEnd::Failed { reason: "bad code".into() } }));
+    unknown.auth.ended =
+        Some(Box::new(harness_contracts::SignInEnded { id: 5, how: harness_contracts::SignInEnd::Failed { reason: "bad code".into() } }));
     chat.apply(ClientEvent::InstanceUpdated { snapshot: unknown.clone() });
     let top = on_banners(&chat);
-    assert!(chat.sign_in_end_to_say().is_some() && top.contains(&"auth.end.dismiss".to_owned()) && top.contains(&"auth.login".to_owned()), "{top:?}");
+    assert!(
+        chat.sign_in_end_to_say().is_some() && top.contains(&"auth.end.dismiss".to_owned()) && top.contains(&"auth.login".to_owned()),
+        "{top:?}"
+    );
     // Signed in since (another way): nothing to say.
     let mut since = unknown.clone();
     since.auth.status = harness_contracts::AuthStatus::SignedIn;
@@ -412,7 +542,6 @@ fn a_run_of_calls_and_a_calls_output_fold_with_the_shared_keys() {
     assert_eq!((rows(&chat), open(&chat)), (5, true));
 }
 
-
 /// `event` (an item's) in turn `turn`.
 fn in_turn(mut event: ClientEvent, turn: &str) -> ClientEvent {
     if let ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } } = &mut event {
@@ -428,7 +557,11 @@ fn in_turn(mut event: ClientEvent, turn: &str) -> ClientEvent {
 #[test]
 fn the_cursor_stays_on_its_item_and_what_was_opened_through_a_reconnect() {
     let mut chat = conversation();
-    let turn = |id: &str, ordinal, status| session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new(id), thread_id: ThreadId::new("t"), ordinal, status, failure: None, usage: None } });
+    let turn = |id: &str, ordinal, status| {
+        session(AdapterEvent::TurnUpdated {
+            turn: Turn { id: TurnId::new(id), thread_id: ThreadId::new("t"), ordinal, status, failure: None, usage: None },
+        })
+    };
     chat.apply(turn("turn", 1, TurnStatus::Running));
     chat.apply(turn("next", 2, TurnStatus::Queued));
     chat.apply(in_turn(item(10, ItemBody::UserMessage { text: "then the lexer".into(), pieces: Vec::new() }), "next"));
@@ -469,7 +602,10 @@ fn quiet_too_long_says_whether_the_agent_can_be_reached() {
     };
     assert_eq!(said(&mut chat, harness_contracts::ProviderStatus::Ready), "No word for 2 min · the server still reaches it");
     assert_eq!(said(&mut chat, harness_contracts::ProviderStatus::Starting), "No word for 2 min · its harness is starting");
-    assert_eq!(said(&mut chat, harness_contracts::ProviderStatus::Error { message: "it crashed".into() }), "No word for 2 min · its harness failed: it crashed");
+    assert_eq!(
+        said(&mut chat, harness_contracts::ProviderStatus::Error { message: "it crashed".into() }),
+        "No word for 2 min · its harness failed: it crashed"
+    );
     let mut slot = lead(Some("t"));
     slot.status = harness_contracts::SlotStatus::Unavailable { reason: "no claude on the PATH".into(), fix: None };
     chat.apply(ClientEvent::SlotUpdated { slot });
@@ -483,7 +619,10 @@ fn a_chat_starts_as_the_config_says() {
     let config = crate::config::UiConfig::with_overrides("[chat]\nshows = \"quiet\"\nindicator = \"none\"").unwrap();
     chat.shared.settings.set(crate::shared::Settings::of(&config));
     chat.read();
-    assert_eq!((chat.ui.folds.verbosity(), chat.ui.indicator.kind()), (crate::config::Verbosity::Quiet, crate::config::IndicatorKind::None));
+    assert_eq!(
+        (chat.ui.folds.verbosity(), chat.ui.indicator.kind()),
+        (crate::config::Verbosity::Quiet, crate::config::IndicatorKind::None)
+    );
 }
 
 /// A place restored before its thread's all here (the layout comes before
@@ -496,7 +635,8 @@ fn a_place_restored_before_the_thread_is_all_here_lands_once_it_is() {
     let mut events = conversation_events();
     let replayed = events.pop();
     // (Its sub-agent's step, last to come, shown after its call: second.)
-    let mut sub = item(9, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "the helper's".into() }], streaming: false });
+    let mut sub =
+        item(9, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "the helper's".into() }], streaming: false });
     if let ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } } = &mut sub {
         item.parent_id = Some(ItemId::new("i1"));
     }
@@ -521,7 +661,20 @@ fn an_agent_silent_since_it_became_known_reads_quiet() {
     assert_eq!(activity.liveness, crate::indicator::Liveness::Quiet);
     assert!(chat.live_words(&activity).0.starts_with("No word for 2 min"), "{:?}", chat.live_words(&activity).0);
     // A sub-agent of its at work: it waits on it, not gone quiet.
-    let sub = harness_contracts::Subagent { id: harness_contracts::SubagentId::new("a1"), thread_id: ThreadId::new("t"), item_id: ItemId::new("i9"), title: "Helper".into(), kind: None, description: None, prompt: None, answer: None, status: harness_contracts::SubagentStatus::Running, started_ms: 0, ended_ms: None, can_cancel: false };
+    let sub = harness_contracts::Subagent {
+        id: harness_contracts::SubagentId::new("a1"),
+        thread_id: ThreadId::new("t"),
+        item_id: ItemId::new("i9"),
+        title: "Helper".into(),
+        kind: None,
+        description: None,
+        prompt: None,
+        answer: None,
+        status: harness_contracts::SubagentStatus::Running,
+        started_ms: 0,
+        ended_ms: None,
+        can_cancel: false,
+    };
     chat.apply(session(AdapterEvent::SubagentUpdated { subagent: sub }));
     let view = chat.thread().unwrap().clone();
     let activity = chat.activity(&view, 130.0);
@@ -537,7 +690,9 @@ fn an_update_is_as_of_when_it_happened() {
     let mut chat = Fed::default();
     chat.shared.socket.set(crate::net::WsState::Open);
     let now = crate::attention::now_ms();
-    let mut take = |event: ClientEvent, ago_s: u64| chat.shared.agents.get_mut().apply_stamped(harness_contracts::Stamped { at_ms: now - ago_s * 1000, event }, now);
+    let mut take = |event: ClientEvent, ago_s: u64| {
+        chat.shared.agents.get_mut().apply_stamped(harness_contracts::Stamped { at_ms: now - ago_s * 1000, event }, now)
+    };
     // (The stream starts so: said now, on the server's clock.)
     take(ClientEvent::Resync, 0);
     for event in conversation_events() {

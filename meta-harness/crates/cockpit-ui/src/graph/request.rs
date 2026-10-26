@@ -6,7 +6,6 @@
 use arch_graph::tree::{Opened, TreeRequest, ViewKind, Way};
 use arch_graph::{Source, ViewRequest};
 
-
 /// What the graph shows: one view, over the code or one plan, from a root
 /// (or the view's starting points), one way, to a depth, with the cards
 /// opened or closed by hand. Two equal `Nav`s ask for the same tree.
@@ -298,7 +297,8 @@ mod tests {
     #[test]
     fn the_agent_can_send_the_user_to_the_code_a_plan_a_view_or_a_root() {
         let mut n = Nav { source: Source::Plan(PlanId::new("p").unwrap()), ..nav() };
-        let request: ViewRequest = serde_json::from_value(serde_json::json!({ "source": "code", "view": "data_flow", "root": "type:Plan", "way": "up" })).unwrap();
+        let request: ViewRequest =
+            serde_json::from_value(serde_json::json!({ "source": "code", "view": "data_flow", "root": "type:Plan", "way": "up" })).unwrap();
         apply(&mut n, NavChange::Request(Box::new(request)));
         assert_eq!((&n.source, n.view, n.root.as_deref(), n.way), (&Source::Code, ViewKind::DataFlow, Some("type:Plan"), Way::Up));
         // Nothing asked: nothing changes.

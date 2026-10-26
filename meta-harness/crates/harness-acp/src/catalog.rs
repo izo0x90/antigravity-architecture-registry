@@ -29,7 +29,8 @@ impl SessionCatalog for AcpSessionCatalog {
         // As the agent saved it: no `.` parts (Antigravity matches the text).
         let cwd: std::path::PathBuf = self.profile.project.join(cwd).components().collect();
         let request = acp::ListSessionsRequest::new().cwd(cwd).cursor(cursor.map(str::to_owned));
-        let response = with_connection(&self.launcher, &self.profile, async move |cx, _| cx.send_request(request).block_task().await).await?;
+        let response =
+            with_connection(&self.launcher, &self.profile, async move |cx, _| cx.send_request(request).block_task().await).await?;
         Ok(SavedSessionPage {
             sessions: response
                 .sessions

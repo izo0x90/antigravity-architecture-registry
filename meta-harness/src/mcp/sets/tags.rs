@@ -40,7 +40,12 @@ impl Tags {
             "delete": { "type": "boolean", "description": "Delete the tag (from everything it's on)" }
         }, "required": ["tag"] });
         vec![
-            tool(Capability::ViewRead, "tags", "The project's tags (names given to things to find them again): each one's name, how many things it's on, and its note.", json!({ "type": "object", "properties": {} })),
+            tool(
+                Capability::ViewRead,
+                "tags",
+                "The project's tags (names given to things to find them again): each one's name, how many things it's on, and its note.",
+                json!({ "type": "object", "properties": {} }),
+            ),
             tool(
                 Capability::ViewRead,
                 "tag_read",
@@ -131,11 +136,17 @@ impl ToolSet for Tags {
         let reach = Reach::of(&self.slots, &self.access, &self.discussions, caller);
         // Owners say what subjects say (a terminal's lines), and tags are
         // kept in the state database: off the async threads.
-        let blocking = |f: Box<dyn FnOnce(&nah_tags::Tags) -> Result<String, ServiceError> + Send>| async move { tokio::task::spawn_blocking(move || f(&tags)).await.map_err(|e| ServiceError::InvalidOp(e.to_string()))? };
+        let blocking = |f: Box<dyn FnOnce(&nah_tags::Tags) -> Result<String, ServiceError> + Send>| async move {
+            tokio::task::spawn_blocking(move || f(&tags)).await.map_err(|e| ServiceError::InvalidOp(e.to_string()))?
+        };
         match name {
             "tags" => {
                 let list = self.tags.list();
-                Ok(if list.is_empty() { "No tags yet (`tag` makes one).".into() } else { list.iter().map(said).collect::<Vec<_>>().join("\n") })
+                Ok(if list.is_empty() {
+                    "No tags yet (`tag` makes one).".into()
+                } else {
+                    list.iter().map(said).collect::<Vec<_>>().join("\n")
+                })
             }
             "tag_read" => {
                 let tag = tag?;
@@ -151,7 +162,8 @@ impl ToolSet for Tags {
                             Some(range) => range,
                             None => (1, READ_MOST),
                         };
-                        let (tagged, held, read) = t.thing_lines(&tag, n.saturating_sub(1) as usize, from as u64, to as u64).map_err(refused)?;
+                        let (tagged, held, read) =
+                            t.thing_lines(&tag, n.saturating_sub(1) as usize, from as u64, to as u64).map_err(refused)?;
                         if !reach.reaches(&tagged.subject) {
                             return Err(ServiceError::Forbidden(format!("{} is {NOT_YOURS}", tagged.what)));
                         }
@@ -168,12 +180,18 @@ impl ToolSet for Tags {
                             out.push(match &on.text {
                                 _ if !reach.reaches(&on.tagged.subject) => format!("{}. {NOT_YOURS} ({when})", n + 1),
                                 // Its owner isn't here (no shells run here), and nothing was kept.
-                                _ if what.is_empty() && on.held != Held::Kept => format!("{}. something nothing here can show ({when})", n + 1),
+                                _ if what.is_empty() && on.held != Held::Kept => {
+                                    format!("{}. something nothing here can show ({when})", n + 1)
+                                }
                                 None => format!("{}. {what} ({when}): gone, nothing kept of it", n + 1),
                                 Some(text) => {
                                     let text = if full { text.clone() } else { t.fold(&on.tagged.subject, text) };
                                     let head: Vec<&str> = text.lines().take(SHOWN_LINES).collect();
-                                    let more = if on.lines > head.len() as u64 { format!("\n  ({} lines in all: tag_read with `thing` {} for all of it)", on.lines, n + 1) } else { String::new() };
+                                    let more = if on.lines > head.len() as u64 {
+                                        format!("\n  ({} lines in all: tag_read with `thing` {} for all of it)", on.lines, n + 1)
+                                    } else {
+                                        String::new()
+                                    };
                                     format!("{}. {what} ({when}; {}):\n{}{more}", n + 1, on.held.words(), head.join("\n"))
                                 }
                             });
@@ -184,7 +202,9 @@ impl ToolSet for Tags {
                 .await
             }
             "tag_find" => {
-                let query = text("query").filter(|q| !q.trim().is_empty()).ok_or_else(|| ServiceError::InvalidOp("`query` (what to find) is needed".into()))?;
+                let query = text("query")
+                    .filter(|q| !q.trim().is_empty())
+                    .ok_or_else(|| ServiceError::InvalidOp("`query` (what to find) is needed".into()))?;
                 let only = text("tag");
                 blocking(Box::new(move |t| {
                     let (found, partial) = t.find_text(&query, only.as_deref(), FOUND_MOST, &|s| reach.reaches(s)).map_err(refused)?;
@@ -192,13 +212,25 @@ impl ToolSet for Tags {
                     if found.is_empty() {
                         return Ok(format!("Nothing tagged says {query:?}.{cut}"));
                     }
-                    let more = if found.len() == FOUND_MOST { format!("\n(the first {FOUND_MOST}: `tag` narrows it){cut}") } else { cut.to_owned() };
-                    Ok(found.iter().map(|f| format!("{} · {}. {} · line {}: {}", f.tag, f.thing, f.what, f.line, f.text)).collect::<Vec<_>>().join("\n") + &more)
+                    let more = if found.len() == FOUND_MOST {
+                        format!("\n(the first {FOUND_MOST}: `tag` narrows it){cut}")
+                    } else {
+                        cut.to_owned()
+                    };
+                    Ok(found
+                        .iter()
+                        .map(|f| format!("{} · {}. {} · line {}: {}", f.tag, f.thing, f.what, f.line, f.text))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        + &more)
                 }))
                 .await
             }
             "tag" | "untag" => {
-                let (tag, words) = (tag?, text("subject").ok_or_else(|| ServiceError::InvalidOp("`subject` (what to tag, by its name) is needed".into()))?);
+                let (tag, words) = (
+                    tag?,
+                    text("subject").ok_or_else(|| ServiceError::InvalidOp("`subject` (what to tag, by its name) is needed".into()))?,
+                );
                 let tagging = name == "tag";
                 blocking(Box::new(move |t| {
                     let subject = t.named(&words).map_err(refused)?;

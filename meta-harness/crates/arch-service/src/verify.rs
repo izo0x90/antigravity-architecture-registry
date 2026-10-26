@@ -3,7 +3,9 @@
 //! planned calls happen inside its body, compares its signature with the
 //! plan, and tracks placeholder bodies for the skeleton stage.
 
-use arch_graph::{Component, ComponentId, Finding, FindingCode, Graph, Plan, Relation, RelationKind, Report, Signature, Stage, Target, TypeSystem};
+use arch_graph::{
+    Component, ComponentId, Finding, FindingCode, Graph, Plan, Relation, RelationKind, Report, Signature, Stage, Target, TypeSystem,
+};
 use code_analyzer::PackSet;
 
 fn target(id: &ComponentId) -> Target {
@@ -38,9 +40,8 @@ fn normalize(ty: &str) -> String {
 /// plan lists one too.
 pub fn signature_diff(planned: &Signature, observed: &Signature, receivers: &[String]) -> Vec<String> {
     let mut diff = Vec::new();
-    let is_receiver = |p: &arch_graph::Param| {
-        p.name.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|w| receivers.iter().any(|r| r == w))
-    };
+    let is_receiver =
+        |p: &arch_graph::Param| p.name.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|w| receivers.iter().any(|r| r == w));
     let observed = &match planned.params.iter().any(is_receiver) {
         true => observed.clone(),
         false => Signature { params: observed.params.iter().filter(|p| !is_receiver(p)).cloned().collect(), ..observed.clone() },
@@ -99,7 +100,11 @@ pub(crate) fn check_planned_call(relation: &Relation, observed: &Graph) -> Optio
     Some(if similar.is_empty() {
         Finding::error(FindingCode::MissingCallSite, Target::Relation { id: relation.id() }, format!("{source} doesn't call {target}"))
     } else {
-        Finding::error(FindingCode::WrongCallTarget, Target::Relation { id: relation.id() }, format!("{source} calls {} instead of {target}", similar.join(", ")))
+        Finding::error(
+            FindingCode::WrongCallTarget,
+            Target::Relation { id: relation.id() },
+            format!("{source} calls {} instead of {target}", similar.join(", ")),
+        )
     })
 }
 
@@ -118,7 +123,8 @@ pub fn verify_component(plan: &Plan, planned: &Component, observed: &Graph, goal
                     .suggest("implement it at its proposed location, then verify again"),
             );
         } else {
-            let found: Vec<String> = elsewhere.iter().map(|c| c.anchor.as_ref().map(|a| format!("{} ({})", a.symbol, a.file)).unwrap_or_default()).collect();
+            let found: Vec<String> =
+                elsewhere.iter().map(|c| c.anchor.as_ref().map(|a| format!("{} ({})", a.symbol, a.file)).unwrap_or_default()).collect();
             let mut finding = Finding::error(FindingCode::Moved, target(id), format!("expected {at}, found {}", found.join(", ")));
             if let Some(anchor) = elsewhere[0].anchor.as_ref() {
                 finding = finding.at(anchor.file.clone(), anchor.span);
@@ -137,7 +143,8 @@ pub fn verify_component(plan: &Plan, planned: &Component, observed: &Graph, goal
     // produces (a project's `handler extends function` is seen as a function;
     // a type the pack can't produce at all isn't judged).
     let pack = anchor.as_ref().and_then(|a| packs.by_name(&a.language));
-    let observable = |t: &str| pack.is_some_and(|p| p.spec.language.module_type == t || p.spec.definitions.iter().any(|d| d.type_name == t));
+    let observable =
+        |t: &str| pack.is_some_and(|p| p.spec.language.module_type == t || p.spec.definitions.iter().any(|d| d.type_name == t));
     let expected = types.resolve(&planned.type_name).ok().and_then(|t| t.lineage.into_iter().find(|t| observable(t)));
     let same_kind = match &expected {
         Some(expected) => types.resolve(&code.type_name).is_ok_and(|t| t.is_a(expected)),
@@ -151,7 +158,8 @@ pub fn verify_component(plan: &Plan, planned: &Component, observed: &Graph, goal
         )
         .suggest("write it as planned, or change the plan's type")));
     }
-    let receivers: Vec<String> = anchor.as_ref().and_then(|a| packs.by_name(&a.language)).map(|p| p.spec.language.self_names.clone()).unwrap_or_default();
+    let receivers: Vec<String> =
+        anchor.as_ref().and_then(|a| packs.by_name(&a.language)).map(|p| p.spec.language.self_names.clone()).unwrap_or_default();
 
     // Planned calls from this component must happen inside its body.
     for relation in plan.relations.iter().filter(|r| r.kind == RelationKind::Calls && &r.source == id) {
@@ -178,7 +186,9 @@ pub fn verify_component(plan: &Plan, planned: &Component, observed: &Graph, goal
     if !code.placeholders.is_empty() {
         let message = format!("{} placeholder bodies remain", code.placeholders.len());
         let finding = match goal {
-            Stage::Implemented => Finding::error(FindingCode::PlaceholderRemains, target(id), message).suggest("implement the bodies, then verify again"),
+            Stage::Implemented => {
+                Finding::error(FindingCode::PlaceholderRemains, target(id), message).suggest("implement the bodies, then verify again")
+            }
             _ => Finding { severity: arch_graph::Severity::Info, ..Finding::error(FindingCode::PlaceholderRemains, target(id), message) },
         };
         let finding = match (&anchor, code.placeholders.first()) {
@@ -203,11 +213,16 @@ fn unit(id: &ComponentId) -> &str {
 pub fn hidden_reach(plan: &Plan, id: &ComponentId, observed: &Graph) -> Vec<(ComponentId, Vec<ComponentId>)> {
     let mut out = Vec::new();
     let mut seen: std::collections::BTreeSet<ComponentId> = std::collections::BTreeSet::from([id.clone()]);
-    let mut queue: std::collections::VecDeque<(ComponentId, Vec<ComponentId>)> = std::collections::VecDeque::from([(id.clone(), Vec::new())]);
+    let mut queue: std::collections::VecDeque<(ComponentId, Vec<ComponentId>)> =
+        std::collections::VecDeque::from([(id.clone(), Vec::new())]);
     while let Some((at, via)) = queue.pop_front() {
         for r in observed.outgoing(&at, Some(RelationKind::Calls)) {
             let callee = &r.target;
-            if !seen.insert(callee.clone()) || plan.component(callee).is_some() || unit(callee) != unit(id) || observed.component(callee).is_none() {
+            if !seen.insert(callee.clone())
+                || plan.component(callee).is_some()
+                || unit(callee) != unit(id)
+                || observed.component(callee).is_none()
+            {
                 continue;
             }
             let mut path = via.clone();
@@ -265,13 +280,21 @@ pub fn planned_flows(plan: &Plan, id: &ComponentId, observed: &Graph, unverified
         let target = Target::Relation { id: flow.id() };
         match unverified.iter().find(|u| u.source == flow.source && u.target == flow.target) {
             Some(u) => out.push(
-                Finding::warning(FindingCode::DataFlowUnverifiable, target, format!("{} -> {}{ports} is handed over but can't be confirmed: {}", flow.source, flow.target, u.reason))
-                    .at(u.file.clone(), u.span)
-                    .suggest("declare the types involved so the flow can be checked"),
+                Finding::warning(
+                    FindingCode::DataFlowUnverifiable,
+                    target,
+                    format!("{} -> {}{ports} is handed over but can't be confirmed: {}", flow.source, flow.target, u.reason),
+                )
+                .at(u.file.clone(), u.span)
+                .suggest("declare the types involved so the flow can be checked"),
             ),
             None => out.push(
-                Finding::error(FindingCode::DataFlowMissing, target, format!("the code doesn't pass {}'s output into {}{ports}", flow.source, flow.target))
-                    .suggest("call the target with the source's result, or update the plan"),
+                Finding::error(
+                    FindingCode::DataFlowMissing,
+                    target,
+                    format!("the code doesn't pass {}'s output into {}{ports}", flow.source, flow.target),
+                )
+                .suggest("call the target with the source's result, or update the plan"),
             ),
         }
     }

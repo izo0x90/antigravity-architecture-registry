@@ -13,9 +13,9 @@
 //! list, with the cursor on it). The view only says where its items are.
 
 use super::super::*;
-use crate::keymap::Host;
 use crate::actions::At;
 use crate::hosted::ItemButtons;
+use crate::keymap::Host;
 
 impl CockpitApp {
     /// Draws the view where `here` is (the one in use): its top line, then
@@ -29,7 +29,8 @@ impl CockpitApp {
         let shown = self.shown_at(here);
         // A panel not focused says no keys (they don't run it until it is).
         let groups: Vec<_> = self.groups(&shown, here).into_iter().map(|g| if is_focused { g } else { g.unkeyed() }).collect();
-        let mine: Vec<Bound> = shown.into_iter().filter(|b| b.layer == Layer::Panel).map(|b| if is_focused { b } else { b.unkeyed() }).collect();
+        let mine: Vec<Bound> =
+            shown.into_iter().filter(|b| b.layer == Layer::Panel).map(|b| if is_focused { b } else { b.unkeyed() }).collect();
         let buttons = self.item_buttons_now();
         let tagged = self.notes_named(here);
         let number = match here.at {
@@ -37,7 +38,14 @@ impl CockpitApp {
             Host::Look => None,
         };
         let top = crate::hosted::TopLine { number, focused: is_focused, groups: &groups };
-        let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, at: here.at, note: &mut self.note, asked: &mut self.asked };
+        let mut cx = RunCx {
+            net: &self.desk.net,
+            ctx: &ctx,
+            input_mode: &mut self.input_mode,
+            at: here.at,
+            note: &mut self.note,
+            asked: &mut self.asked,
+        };
         let line = crate::hosted::header(ui, self.desk.view(kind), &top, &mine, &tagged, &mut cx);
         self.feedback.register_inspectable(ui, &format!("{}:top_line", here.at.name()), line);
         ui.separator();
@@ -69,7 +77,14 @@ impl CockpitApp {
             ItemButtons::Floating => ui.spacing().interact_size.y + crate::theme::look().space_s * 3.0,
             ItemButtons::Bar => 0.0,
         };
-        let mut drawing = crate::buffer::Drawing { feedback: &mut self.feedback, focused: is_focused, leader_held, typing, fingers: self.fingers, room_under_waiting };
+        let mut drawing = crate::buffer::Drawing {
+            feedback: &mut self.feedback,
+            focused: is_focused,
+            leader_held,
+            typing,
+            fingers: self.fingers,
+            room_under_waiting,
+        };
         let drawn = self.desk.in_use(kind);
         self.desk.on_screen(drawn);
         let (buffer, net) = self.desk.view_with_net(kind);
@@ -97,7 +112,12 @@ impl CockpitApp {
     /// shows (a component).
     fn others_say(&self, kind: BufferKind) -> Vec<crate::hosted::Status> {
         let Some(id) = self.desk.view(kind).target().and_then(|t| t.component().cloned()) else { return Vec::new() };
-        BufferKind::ALL.into_iter().filter(|k| *k != kind).filter_map(|k| self.desk.view(k).knows(&id)).flat_map(|known| known.says).collect()
+        BufferKind::ALL
+            .into_iter()
+            .filter(|k| *k != kind)
+            .filter_map(|k| self.desk.view(k).knows(&id))
+            .flat_map(|known| known.says)
+            .collect()
     }
 
     /// Where the buttons of what you're on show now: as changed here, else
@@ -112,8 +132,13 @@ impl CockpitApp {
         if self.desk.view(kind).own_pointer() {
             return;
         }
-        let (clicked, double, at) = ui.input(|i| (i.pointer.primary_clicked(), i.pointer.button_double_clicked(egui::PointerButton::Primary), i.pointer.interact_pos()));
-        let Some(at) = at.filter(|at| (clicked || double) && content.contains(*at) && ui.ctx().layer_id_at(*at) == Some(ui.layer_id())) else { return };
+        let (clicked, double, at) = ui.input(|i| {
+            (i.pointer.primary_clicked(), i.pointer.button_double_clicked(egui::PointerButton::Primary), i.pointer.interact_pos())
+        });
+        let Some(at) = at.filter(|at| (clicked || double) && content.contains(*at) && ui.ctx().layer_id_at(*at) == Some(ui.layer_id()))
+        else {
+            return;
+        };
         let Some(key) = self.desk.view(kind).spots().into_iter().find(|s| s.rect.contains(at)).map(|s| s.key) else { return };
         self.desk.view_mut(kind).move_to(&key);
         if double {
@@ -124,7 +149,14 @@ impl CockpitApp {
     /// A host's own controls: those of `bound` that have one.
     pub(in crate::app) fn host_controls(&mut self, ui: &mut egui::Ui, bound: &[Bound], host: Host) {
         let ctx = ui.ctx().clone();
-        let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, at: host, note: &mut self.note, asked: &mut self.asked };
+        let mut cx = RunCx {
+            net: &self.desk.net,
+            ctx: &ctx,
+            input_mode: &mut self.input_mode,
+            at: host,
+            note: &mut self.note,
+            asked: &mut self.asked,
+        };
         crate::actions::controls(ui, bound, &mut cx);
     }
 
@@ -147,7 +179,11 @@ impl CockpitApp {
         };
         let typing = matches!(self.input_mode, InputMode::Insert { .. });
         let where_ = self.here();
-        let bound: Vec<Bound> = self.bound_actions().into_iter().filter(|b| b.layer == Layer::On && b.action.at().is_some_and(At::under_something) && self.applies(b, where_)).collect();
+        let bound: Vec<Bound> = self
+            .bound_actions()
+            .into_iter()
+            .filter(|b| b.layer == Layer::On && b.action.at().is_some_and(At::under_something) && self.applies(b, where_))
+            .collect();
         // What waits, each under its own place (none said: what you're on).
         let mine = |b: &Bound| b.action.control.as_ref().is_none_or(|c| c.under.is_none() || c.under == here_key);
         let (yours, waiting): (Vec<Bound>, Vec<Bound>) = bound.into_iter().partition(|b| b.action.at() != Some(At::Waiting) || mine(b));
@@ -155,10 +191,16 @@ impl CockpitApp {
             // Typing: the box's own under it, what waits on you where you
             // are still under that.
             true => {
-                let (box_, here): (Vec<Bound>, Vec<Bound>) = yours.into_iter().filter(|b| b.action.at() != Some(At::Item)).partition(|b| b.action.at() == Some(At::Typing));
-                vec![(egui::Id::new("item_controls"), self.desk.view(kind).typing_rect(), box_), (egui::Id::new("waiting_controls"), item, here)]
+                let (box_, here): (Vec<Bound>, Vec<Bound>) =
+                    yours.into_iter().filter(|b| b.action.at() != Some(At::Item)).partition(|b| b.action.at() == Some(At::Typing));
+                vec![
+                    (egui::Id::new("item_controls"), self.desk.view(kind).typing_rect(), box_),
+                    (egui::Id::new("waiting_controls"), item, here),
+                ]
             }
-            false => vec![(egui::Id::new("item_controls"), item, yours.into_iter().filter(|b| b.action.at() != Some(At::Typing)).collect())],
+            false => {
+                vec![(egui::Id::new("item_controls"), item, yours.into_iter().filter(|b| b.action.at() != Some(At::Typing)).collect())]
+            }
         };
         // The rest of what waits: each under its own. In a bar (one row
         // says what it's for), what you're on's; you're on none: the
@@ -180,7 +222,8 @@ impl CockpitApp {
             }
         }
         let look = crate::theme::look();
-        let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, at: host, note: &mut self.note, asked: &mut self.asked };
+        let mut cx =
+            RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, at: host, note: &mut self.note, asked: &mut self.asked };
         // In a bar: its host's row, the buttons then what they act on
         // (whether or not the item is on screen), all in the one row.
         if let Some(bar) = self.item_bars.iter().find(|(h, _)| *h == host).map(|(_, rect)| *rect) {
@@ -215,10 +258,15 @@ impl CockpitApp {
             let below = anchor.bottom() + look.space_s;
             let y = if below + size.y <= bounds.bottom() { below } else { (anchor.top() - look.space_s - size.y).max(bounds.top()) };
             let shown = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(egui::pos2(anchor.left(), y)).show(ctx, |ui| {
-                Frame::NONE.fill(colors().overlay_raised).stroke(Stroke::new(look.line_thin, colors().border)).corner_radius(look.radius_m).inner_margin(crate::theme::margin(look.space_s)).show(ui, |ui| {
-                    ui.set_max_width(anchor.width().max(look.quick_look_width / 3.0).min(bounds.width()));
-                    ui.horizontal_wrapped(|ui| crate::actions::controls(ui, &here, &mut cx));
-                });
+                Frame::NONE
+                    .fill(colors().overlay_raised)
+                    .stroke(Stroke::new(look.line_thin, colors().border))
+                    .corner_radius(look.radius_m)
+                    .inner_margin(crate::theme::margin(look.space_s))
+                    .show(ui, |ui| {
+                        ui.set_max_width(anchor.width().max(look.quick_look_width / 3.0).min(bounds.width()));
+                        ui.horizontal_wrapped(|ui| crate::actions::controls(ui, &here, &mut cx));
+                    });
             });
             drawn.push(shown.response.rect);
         }
@@ -243,10 +291,14 @@ impl CockpitApp {
     /// graph). Taps, drags and two fingers are the pointer's.
     pub(in crate::app) fn touch_tick(&mut self, ctx: &egui::Context) {
         let (events, pointed, time) = ctx.input(|i| {
-            let touches: Vec<(u64, crate::touch::Phase, egui::Pos2)> = i.events.iter().filter_map(|e| match e {
-                egui::Event::Touch { id, phase, pos, .. } => Some((id.0, crate::touch::Phase::from(*phase), *pos)),
-                _ => None,
-            }).collect();
+            let touches: Vec<(u64, crate::touch::Phase, egui::Pos2)> = i
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Touch { id, phase, pos, .. } => Some((id.0, crate::touch::Phase::from(*phase), *pos)),
+                    _ => None,
+                })
+                .collect();
             (touches, i.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. })), i.time)
         });
         // A finger's pointer comes with its touches; a mouse's alone.
@@ -279,7 +331,11 @@ impl CockpitApp {
         if let Some(look) = &self.quick_look
             && ctx.memory(|m| m.area_rect(egui::Id::new("quick_look"))).is_some_and(|r| r.contains(pos))
         {
-            return (ctx.layer_id_at(pos).map(|l| l.id) == Some(egui::Id::new("quick_look"))).then_some((Host::Look, look.panel, look.kind()));
+            return (ctx.layer_id_at(pos).map(|l| l.id) == Some(egui::Id::new("quick_look"))).then_some((
+                Host::Look,
+                look.panel,
+                look.kind(),
+            ));
         }
         if ctx.layer_id_at(pos).is_some_and(|l| l.order != egui::Order::Background) {
             return None;
@@ -313,7 +369,8 @@ impl CockpitApp {
                 let here = self.here();
                 // Where the view moves sideways, the finger moved it.
                 let sideways = [Move::Motion(Motion::HalfLeft), Move::Motion(Motion::HalfRight)].map(|m| m.id());
-                if bound.iter().any(|b| b.origin == Origin::View(kind) && sideways.contains(&b.action.id.as_str()) && self.applies(b, here)) {
+                if bound.iter().any(|b| b.origin == Origin::View(kind) && sideways.contains(&b.action.id.as_str()) && self.applies(b, here))
+                {
                     return;
                 }
                 let runs = |b: &&Bound| b.runs_on(way.name()) && self.applies(b, here);
@@ -325,7 +382,8 @@ impl CockpitApp {
             }
             // On a mark in the gutter: its notes, said.
             Gesture::LongPress(p) if self.note_marks.iter().any(|(_, mark, _)| mark.contains(p)) => {
-                let said: Vec<&str> = self.note_marks.iter().filter(|(_, mark, _)| mark.contains(p)).map(|(_, _, said)| said.as_str()).collect();
+                let said: Vec<&str> =
+                    self.note_marks.iter().filter(|(_, mark, _)| mark.contains(p)).map(|(_, _, said)| said.as_str()).collect();
                 self.note = Some(said.join("\n"));
             }
             Gesture::LongPress(p) if !own => {

@@ -12,7 +12,10 @@ fn shipped(name: &str) -> String {
 }
 
 fn distribution(packs: &[(&str, &str)]) -> Distribution {
-    let mut files = vec![("index.toml".to_owned(), shipped("index.toml").into_bytes()), ("platforms.toml".to_owned(), shipped("platforms.toml").into_bytes())];
+    let mut files = vec![
+        ("index.toml".to_owned(), shipped("index.toml").into_bytes()),
+        ("platforms.toml".to_owned(), shipped("platforms.toml").into_bytes()),
+    ];
     files.extend(packs.iter().map(|(p, t)| ((*p).to_owned(), t.as_bytes().to_vec())));
     Distribution::new(files)
 }
@@ -69,10 +72,16 @@ fn a_server_manifest_is_checked_strictly() {
     let bad = |from: &str, to: &str| load(dir.path(), &[("server/fake/pack.toml", &SERVER.replacen(from, to, 1))]).unwrap_err();
     let without_server = SERVER.split("[server]").next().unwrap().to_owned();
     assert!(load(dir.path(), &[("server/fake/pack.toml", &without_server)]).unwrap_err().contains("server packs need [server]"));
-    assert!(bad("requires = [\"textDocument/definition\"]", "requires = [\"textDocument/hover\"]").contains("textDocument/definition"), "a server must answer definitions");
+    assert!(
+        bad("requires = [\"textDocument/definition\"]", "requires = [\"textDocument/hover\"]").contains("textDocument/definition"),
+        "a server must answer definitions"
+    );
     assert!(bad("{cache}/data", "{root}/.cache").contains("outside the project"), "caches never go into the project");
     assert!(bad("args = [\"--stdio\"]", "args = [\"--cache={root}/.cache\"]").contains("outside it"), "nor through an argument");
-    assert!(load(dir.path(), &[("server/fake/pack.toml", &SERVER.replacen("args = [\"--stdio\"]", "args = [\"--root={root}\"]", 1))]).is_ok(), "naming the project itself is fine");
+    assert!(
+        load(dir.path(), &[("server/fake/pack.toml", &SERVER.replacen("args = [\"--stdio\"]", "args = [\"--root={root}\"]", 1))]).is_ok(),
+        "naming the project itself is fine"
+    );
     assert!(bad("{cache}/data", "{nope}").contains("unknown placeholder {nope}"));
     assert!(bad("ready_timeout_s = 120", "ready_timeout_s = 0").contains("ready_timeout_s"));
     assert!(bad("request_timeout_s = 30", "request_timeout_s = 0").contains("request_timeout_s"));
@@ -83,13 +92,15 @@ fn a_server_manifest_is_checked_strictly() {
 #[test]
 fn the_shipped_servers_load_and_every_language_names_one() {
     let dir = tempfile::tempdir().unwrap();
-    let catalog = Catalog::load(&Distribution::new(walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs"))), &places(dir.path())).unwrap();
+    let catalog =
+        Catalog::load(&Distribution::new(walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs"))), &places(dir.path())).unwrap();
     let servers: Vec<&str> = catalog.of_kind(Kind::Server).map(|p| p.name()).collect();
     for wanted in ["rust-analyzer", "typescript-server", "basedpyright"] {
         assert!(servers.contains(&wanted), "{wanted} is shipped: {servers:?}");
     }
     for language in catalog.of_kind(Kind::Language) {
-        let named = language.manifest.language.as_ref().unwrap().server.as_deref().unwrap_or_else(|| panic!("{} names no server", language.name()));
+        let named =
+            language.manifest.language.as_ref().unwrap().server.as_deref().unwrap_or_else(|| panic!("{} names no server", language.name()));
         assert_eq!(catalog.get(named).unwrap().kind(), Kind::Server, "{} names {named}", language.name());
     }
 }

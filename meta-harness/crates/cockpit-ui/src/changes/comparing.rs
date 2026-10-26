@@ -215,13 +215,27 @@ mod tests {
         assert_eq!(asked(&net), 2, "the new comparison asked for at once, not after the old answer");
         // The old answer comes late: dropped; the new one is read, and with
         // it the components it touches and the timeline are asked for.
-        push(&desk.inbox, Reply::List(Comparison::default(), Ok(ChangeList { comparison: Comparison::default(), files: vec![], offset: 0, total: 0 })));
+        push(
+            &desk.inbox,
+            Reply::List(Comparison::default(), Ok(ChangeList { comparison: Comparison::default(), files: vec![], offset: 0, total: 0 })),
+        );
         desk.tick(&net, &ctx, false, 5.0);
         assert!(desk.loading() && desk.list().is_none() && desk.read() == 0, "still waiting for the new one");
-        let file = ChangedFile { path: "a.rs".into(), old_path: None, status: FileStatus::Modified, group: Group::Staged, added: 1, removed: 0, binary: false };
+        let file = ChangedFile {
+            path: "a.rs".into(),
+            old_path: None,
+            status: FileStatus::Modified,
+            group: Group::Staged,
+            added: 1,
+            removed: 0,
+            binary: false,
+        };
         push(&desk.inbox, Reply::List(staged.clone(), Ok(ChangeList { comparison: staged, files: vec![file], offset: 0, total: 1 })));
         desk.tick(&net, &ctx, false, 5.0);
         assert_eq!((desk.loading(), desk.list().map(|l| l.total), desk.read()), (false, Some(1), 1));
-        assert!(net.sent.lock().unwrap().iter().any(|s| s.contains("/api/changes/components")) && net.sent.lock().unwrap().iter().any(|s| s.contains("/api/changes/timeline")));
+        assert!(
+            net.sent.lock().unwrap().iter().any(|s| s.contains("/api/changes/components"))
+                && net.sent.lock().unwrap().iter().any(|s| s.contains("/api/changes/timeline"))
+        );
     }
 }

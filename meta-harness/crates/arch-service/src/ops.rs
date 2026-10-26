@@ -2,9 +2,8 @@
 //! against the code and the plan, and rejects what can't be right.
 
 use arch_graph::{
-    Component, ComponentId, Graph, ImplementationSpec, Item, ItemId, ItemState, Plan, PlanKind, Provenance, ProposedLocation, Reference, Relation, RelationKind,
-    RepoPath, Schemas, Signature, Stage, Status, TypeSystem,
-    schema::Dsl,
+    Component, ComponentId, Graph, ImplementationSpec, Item, ItemId, ItemState, Plan, PlanKind, ProposedLocation, Provenance, Reference,
+    Relation, RelationKind, RepoPath, Schemas, Signature, Stage, Status, TypeSystem, schema::Dsl,
 };
 use code_analyzer::{PackSet, module_symbol};
 use serde::{Deserialize, Serialize};
@@ -70,10 +69,18 @@ pub enum PlanOp {
         #[serde(default)]
         expects: Option<Schemas>,
     },
-    Unrelate { kind: RelationKind, source: ComponentId, target: ComponentId },
+    Unrelate {
+        kind: RelationKind,
+        source: ComponentId,
+        target: ComponentId,
+    },
     /// Remove a component this plan added (or its planned changes).
-    Remove { id: ComponentId },
-    SetGreenfield { greenfield: bool },
+    Remove {
+        id: ComponentId,
+    },
+    SetGreenfield {
+        greenfield: bool,
+    },
     Describe {
         #[serde(default)]
         title: Option<String>,
@@ -104,7 +111,10 @@ pub enum PlanOp {
         under: Option<ItemId>,
     },
     /// Where an item stands now.
-    SetItem { id: ItemId, state: ItemState },
+    SetItem {
+        id: ItemId,
+        state: ItemState,
+    },
 }
 
 impl PlanOp {
@@ -117,14 +127,24 @@ impl PlanOp {
                 RelationKind::Calls | RelationKind::Implements => Some(source),
                 RelationKind::DataFlow | RelationKind::Contains => Some(target),
             },
-            PlanOp::AddComponent { .. } | PlanOp::Reference { .. } | PlanOp::SetGreenfield { .. } | PlanOp::Describe { .. } | PlanOp::AddItem { .. } | PlanOp::EditItem { .. } | PlanOp::MoveItem { .. } | PlanOp::SetItem { .. } => None,
+            PlanOp::AddComponent { .. }
+            | PlanOp::Reference { .. }
+            | PlanOp::SetGreenfield { .. }
+            | PlanOp::Describe { .. }
+            | PlanOp::AddItem { .. }
+            | PlanOp::EditItem { .. }
+            | PlanOp::MoveItem { .. }
+            | PlanOp::SetItem { .. } => None,
         }
     }
 
     /// Whether it's about the plan's items or its words (all a review plan
     /// takes).
     fn on_items(&self) -> bool {
-        matches!(self, PlanOp::AddItem { .. } | PlanOp::EditItem { .. } | PlanOp::MoveItem { .. } | PlanOp::SetItem { .. } | PlanOp::Describe { .. })
+        matches!(
+            self,
+            PlanOp::AddItem { .. } | PlanOp::EditItem { .. } | PlanOp::MoveItem { .. } | PlanOp::SetItem { .. } | PlanOp::Describe { .. }
+        )
     }
 }
 
@@ -137,7 +157,14 @@ impl PlanOp {
             PlanOp::Modify { signature: Some(_), .. } => Some("change a signature"),
             PlanOp::Relate { .. } | PlanOp::Unrelate { .. } => Some("plan relations"),
             PlanOp::SetGreenfield { .. } => Some("be greenfield"),
-            PlanOp::Modify { .. } | PlanOp::Reference { .. } | PlanOp::Remove { .. } | PlanOp::Describe { .. } | PlanOp::AddItem { .. } | PlanOp::EditItem { .. } | PlanOp::MoveItem { .. } | PlanOp::SetItem { .. } => None,
+            PlanOp::Modify { .. }
+            | PlanOp::Reference { .. }
+            | PlanOp::Remove { .. }
+            | PlanOp::Describe { .. }
+            | PlanOp::AddItem { .. }
+            | PlanOp::EditItem { .. }
+            | PlanOp::MoveItem { .. }
+            | PlanOp::SetItem { .. } => None,
         }
     }
 }
@@ -149,19 +176,37 @@ fn invalid(msg: impl Into<String>) -> ServiceError {
 /// Applies `op` to `plan`. `graph` is the code merged with this plan.
 /// Schemas are stored compiled: the DSL is only an input format.
 fn compile(schemas: Schemas, dsl: &Dsl) -> Result<Schemas, ServiceError> {
-    let one = |s: Option<serde_json::Value>, what: &str| s.map(|v| dsl.compile(&v).map_err(|e| invalid(format!("{what}: {e}")))).transpose();
-    Ok(Schemas { properties: one(schemas.properties, "properties")?, inputs: one(schemas.inputs, "inputs")?, outputs: one(schemas.outputs, "outputs")?, side_effects: schemas.side_effects })
+    let one =
+        |s: Option<serde_json::Value>, what: &str| s.map(|v| dsl.compile(&v).map_err(|e| invalid(format!("{what}: {e}")))).transpose();
+    Ok(Schemas {
+        properties: one(schemas.properties, "properties")?,
+        inputs: one(schemas.inputs, "inputs")?,
+        outputs: one(schemas.outputs, "outputs")?,
+        side_effects: schemas.side_effects,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path, ignores: &code_analyzer::Ignores, packs: &PackSet, types: &TypeSystem, dsl: &Dsl) -> Result<Vec<ComponentId>, ServiceError> {
+pub fn apply(
+    plan: &mut Plan,
+    op: PlanOp,
+    graph: &Graph,
+    root: &std::path::Path,
+    ignores: &code_analyzer::Ignores,
+    packs: &PackSet,
+    types: &TypeSystem,
+    dsl: &Dsl,
+) -> Result<Vec<ComponentId>, ServiceError> {
     if plan.kind == PlanKind::Walkthrough
         && let Some(what) = op.code_change()
     {
         return Err(invalid(format!("{} is a walkthrough: it explains the code as it is, so it can't {what}", plan.id)));
     }
     if plan.kind == PlanKind::Review && !op.on_items() {
-        return Err(invalid(format!("{} is a review: a list of items, with no components (add_item, edit_item, move_item, set_item)", plan.id)));
+        return Err(invalid(format!(
+            "{} is a review: a list of items, with no components (add_item, edit_item, move_item, set_item)",
+            plan.id
+        )));
     }
     match op {
         PlanOp::AddComponent { name, type_name, description, parent, file, signature, schemas, spec } => {
@@ -194,7 +239,9 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
                 None => {
                     let file = file.ok_or_else(|| invalid("a component needs a parent or a file"))?;
                     let file = RepoPath::new(&file).map_err(|e| invalid(e.to_string()))?;
-                    let pack = packs.for_path(std::path::Path::new(file.as_str())).ok_or_else(|| invalid(format!("no language pack handles {file}")))?;
+                    let pack = packs
+                        .for_path(std::path::Path::new(file.as_str()))
+                        .ok_or_else(|| invalid(format!("no language pack handles {file}")))?;
                     let module = module_symbol(root, &file, pack);
                     let parent = Some(ComponentId::for_symbol(pack.name(), &module)).filter(|m| graph.component(m).is_some());
                     (pack.name().to_owned(), file, format!("{module}{}{name}", pack.spec.language.separator), parent)
@@ -204,7 +251,9 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
                 pack.spec.language.check_name(&name).map_err(|e| invalid(format!("component name: {e}")))?;
             }
             if ignores.is_ignored(&root.join(file.as_str())) {
-                return Err(invalid(format!("{file} is git-ignored or hidden: ingestion never reads it, so code there could never be verified")));
+                return Err(invalid(format!(
+                    "{file} is git-ignored or hidden: ingestion never reads it, so code there could never be verified"
+                )));
             }
             let id = ComponentId::for_symbol(&language, &symbol);
             if graph.component(&id).is_some() {
@@ -372,7 +421,10 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
             let mut above = under.clone();
             while let Some(a) = above {
                 if a == id {
-                    return Err(invalid(format!("{id} can't go under {}: it's under {id}", under.as_ref().map_or_else(String::new, ToString::to_string))));
+                    return Err(invalid(format!(
+                        "{id} can't go under {}: it's under {id}",
+                        under.as_ref().map_or_else(String::new, ToString::to_string)
+                    )));
                 }
                 above = plan.item(&a).ok_or_else(|| invalid(format!("{} has no item {a}", plan.id)))?.parent.clone();
             }

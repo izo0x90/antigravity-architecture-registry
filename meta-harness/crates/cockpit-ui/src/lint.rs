@@ -60,7 +60,11 @@ fn code() -> Vec<(String, String)> {
             let text = std::fs::read_to_string(&file).unwrap();
             // Its own tests make input as a user would: the code is what
             // comes before its test module.
-            let code = text.match_indices("#[cfg(test)]\n").find(|(at, cut)| text[at + cut.len()..].trim_start_matches("pub(crate) ").starts_with("mod ")).map_or(text.as_str(), |(at, _)| &text[..at]).to_owned();
+            let code = text
+                .match_indices("#[cfg(test)]\n")
+                .find(|(at, cut)| text[at + cut.len()..].trim_start_matches("pub(crate) ").starts_with("mod "))
+                .map_or(text.as_str(), |(at, _)| &text[..at])
+                .to_owned();
             (name, code)
         })
         .collect()
@@ -79,11 +83,37 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     ("app/keys.rs", "egui::Key::Backspace", "a typed prompt's own erasing"),
 ];
 
-const FORBIDDEN: &[&str] = &["egui::Key::", "Key::from_name", "key_pressed(egui", "key_released(egui", "key_down(egui", "modifiers.ctrl", "modifiers.command", "modifiers.shift", "modifiers.alt", "modifiers.mac_cmd"];
+const FORBIDDEN: &[&str] = &[
+    "egui::Key::",
+    "Key::from_name",
+    "key_pressed(egui",
+    "key_released(egui",
+    "key_down(egui",
+    "modifiers.ctrl",
+    "modifiers.command",
+    "modifiers.shift",
+    "modifiers.alt",
+    "modifiers.mac_cmd",
+];
 
 /// Key names, as words in text (not those that are also plain words:
 /// Return, Delete, Home, End).
-const KEY_WORDS: &[&str] = &["Enter", "Esc", "Escape", "Backspace", "Tab", "Space", "SPC", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Up/Down"];
+const KEY_WORDS: &[&str] = &[
+    "Enter",
+    "Esc",
+    "Escape",
+    "Backspace",
+    "Tab",
+    "Space",
+    "SPC",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "PageUp",
+    "PageDown",
+    "Up/Down",
+];
 
 /// The string literals on a line (their text, escapes left as written).
 fn literals(line: &str) -> Vec<String> {
@@ -139,7 +169,11 @@ fn no_code_reads_or_names_a_key_the_keymap_doesnt_give_it() {
             }
         }
     }
-    assert!(found.is_empty(), "keys read or named outside the keymap (bind them in [keymap], and say them by their labels):\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "keys read or named outside the keymap (bind them in [keymap], and say them by their labels):\n{}",
+        found.join("\n")
+    );
 }
 
 /// Where key text is made from bound actions.
@@ -150,12 +184,19 @@ fn only_the_hosts_say_keys_and_only_from_a_bound_action() {
     let mut found = Vec::new();
     for (name, code) in code().iter().filter(|(name, _)| !KEY_TEXT_MAKERS.iter().any(|h| name.starts_with(h))) {
         for (n, line) in lines(code) {
-            for token in ["key_hint(", ".ways(", "leader_hint(", "input.label(", "pick_label(", ".label()", ".keys(&"].iter().filter(|t| line.contains(*t)) {
+            for token in ["key_hint(", ".ways(", "leader_hint(", "input.label(", "pick_label(", ".label()", ".keys(&"]
+                .iter()
+                .filter(|t| line.contains(*t))
+            {
                 found.push(format!("{name}:{n}: {token}"));
             }
         }
     }
-    assert!(found.is_empty(), "key text made outside the hosts (a view says no keys; a control or the key bar shows them):\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "key text made outside the hosts (a view says no keys; a control or the key bar shows them):\n{}",
+        found.join("\n")
+    );
 }
 
 /// Where controls are drawn: the hosts, the one control, the palette; and
@@ -163,7 +204,20 @@ fn only_the_hosts_say_keys_and_only_from_a_bound_action() {
 const HOSTS: &[&str] = &["app/draw/", "actions.rs", "hosted.rs", "palette.rs", "pick_list.rs", "feedback.rs"];
 
 /// What draws a control, or reads a click.
-const CONTROLS: &[&str] = &[".button(", "small_button(", "selectable_label(", ".link(", ".hyperlink(", "hyperlink_to(", ".checkbox(", "ComboBox::", "egui::Button::", "Sense::click", "radio", "toggle_value("];
+const CONTROLS: &[&str] = &[
+    ".button(",
+    "small_button(",
+    "selectable_label(",
+    ".link(",
+    ".hyperlink(",
+    "hyperlink_to(",
+    ".checkbox(",
+    "ComboBox::",
+    "egui::Button::",
+    "Sense::click",
+    "radio",
+    "toggle_value(",
+];
 
 /// Outside the hosts, allowed by name, and why.
 const CONTROLS_ALLOWED: &[(&str, &str, &str)] = &[
@@ -179,7 +233,14 @@ const CONTROLS_ALLOWED: &[(&str, &str, &str)] = &[
 /// shell, the desk's service, and the Tags buffer that manages them.
 #[test]
 fn no_buffer_tags_or_draws_tags_but_the_tags_own() {
-    let tags_own = |name: &str| name.starts_with("app/") || name == "tags.rs" || name == "tag_list.rs" || name == "shared.rs" || name == "nav.rs" || name == "lib.rs";
+    let tags_own = |name: &str| {
+        name.starts_with("app/")
+            || name == "tags.rs"
+            || name == "tag_list.rs"
+            || name == "shared.rs"
+            || name == "nav.rs"
+            || name == "lib.rs"
+    };
     let mut found = Vec::new();
     for (name, code) in code().iter().filter(|(name, _)| !tags_own(name)) {
         for (n, line) in lines(code) {
@@ -188,7 +249,11 @@ fn no_buffer_tags_or_draws_tags_but_the_tags_own() {
             }
         }
     }
-    assert!(found.is_empty(), "tagging outside the shell (a buffer says what an item is, `Navigable::subject`, and where, `drawn_at`):\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "tagging outside the shell (a buffer says what an item is, `Navigable::subject`, and where, `drawn_at`):\n{}",
+        found.join("\n")
+    );
 }
 
 #[test]
@@ -203,7 +268,11 @@ fn views_draw_no_controls_the_hosts_draw_them() {
             }
         }
     }
-    assert!(found.is_empty(), "controls drawn outside the hosts (give the view an action with a Control, the host draws it):\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "controls drawn outside the hosts (give the view an action with a Control, the host draws it):\n{}",
+        found.join("\n")
+    );
 }
 
 /// The levels around a view, as written: each one's function in
@@ -211,7 +280,16 @@ fn views_draw_no_controls_the_hosts_draw_them() {
 const LEVELS: &[&str] = &["fn panel_actions(", "fn host_actions(", "fn shell_actions("];
 
 /// The views' state, by its name on the desk.
-const VIEWS: &[&str] = &["self.desk.chat", "self.desk.code", "self.desk.graph", "self.desk.tree", "self.desk.spec", "self.desk.queue", "self.desk.inbox", "self.desk.changes"];
+const VIEWS: &[&str] = &[
+    "self.desk.chat",
+    "self.desk.code",
+    "self.desk.graph",
+    "self.desk.tree",
+    "self.desk.spec",
+    "self.desk.queue",
+    "self.desk.inbox",
+    "self.desk.changes",
+];
 
 /// Allowed in a level, by what it says, and why.
 const LEVELS_ALLOWED: &[(&str, &str)] = &[
@@ -238,14 +316,19 @@ fn the_levels_around_a_view_never_decide_about_a_kind_of_view() {
         let body = body(&commands, level);
         assert!(!body.is_empty(), "{level} is gone: say where that level's actions are made");
         for (n, line) in lines(body) {
-            let named = line.match_indices("BufferKind::").any(|(at, _)| !line[at..].starts_with("BufferKind::ALL")) || line.contains(" K::");
+            let named =
+                line.match_indices("BufferKind::").any(|(at, _)| !line[at..].starts_with("BufferKind::ALL")) || line.contains(" K::");
             let read = VIEWS.iter().any(|v| line.contains(v));
             if (named || read) && !LEVELS_ALLOWED.iter().any(|(allowed, _)| line.contains(allowed)) {
                 found.push(format!("{level}…) line {n}: {}", line.trim()));
             }
         }
     }
-    assert!(found.is_empty(), "a level around a view decides about a kind of view (let the view offer it, or answer as a destination):\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "a level around a view decides about a kind of view (let the view offer it, or answer as a destination):\n{}",
+        found.join("\n")
+    );
 }
 
 #[test]
@@ -260,11 +343,25 @@ fn buffers_reach_past_themselves_only_by_asking() {
             }
         }
     }
-    assert!(found.is_empty(), "the shell polls a buffer outside app/asks.rs, or a buffer keeps fields for it to poll (push an Ask):\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "the shell polls a buffer outside app/asks.rs, or a buffer keeps fields for it to poll (push an Ask):\n{}",
+        found.join("\n")
+    );
 }
 
 /// The buffers' types.
-const BUFFER_TYPES: &[&str] = &["ChatStreamState", "CodeViewerState", "GraphState", "TreeBuffer", "CodeOutline", "SpecState", "QueueState", "InboxView", "ChangesView"];
+const BUFFER_TYPES: &[&str] = &[
+    "ChatStreamState",
+    "CodeViewerState",
+    "GraphState",
+    "TreeBuffer",
+    "CodeOutline",
+    "SpecState",
+    "QueueState",
+    "InboxView",
+    "ChangesView",
+];
 
 #[test]
 fn the_shell_names_no_buffer_type() {
@@ -276,7 +373,11 @@ fn the_shell_names_no_buffer_type() {
             }
         }
     }
-    assert!(found.is_empty(), "the shell names a buffer's type or looks behind the trait (drive it through `Buffer`):\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "the shell names a buffer's type or looks behind the trait (drive it through `Buffer`):\n{}",
+        found.join("\n")
+    );
 }
 
 /// The buffers, by their modules.
@@ -300,7 +401,14 @@ fn a_buffer_names_neither_the_shell_nor_another_buffer() {
 #[test]
 fn the_tree_buffer_knows_rows_not_code() {
     let tree = code().into_iter().find(|(name, _)| name == "tree/mod.rs").map(|(_, code)| code).unwrap();
-    let found: Vec<String> = lines(&tree).filter(|(_, l)| ["TreeRequest", "Card", "ViewKind", "Source::", "arch_graph::Source", "crate::graph", "arch_graph::tree"].iter().any(|w| l.contains(w))).map(|(n, l)| format!("tree/mod.rs:{n}: {}", l.trim())).collect();
+    let found: Vec<String> = lines(&tree)
+        .filter(|(_, l)| {
+            ["TreeRequest", "Card", "ViewKind", "Source::", "arch_graph::Source", "crate::graph", "arch_graph::tree"]
+                .iter()
+                .any(|w| l.contains(w))
+        })
+        .map(|(n, l)| format!("tree/mod.rs:{n}: {}", l.trim()))
+        .collect();
     assert!(found.is_empty(), "the tree buffer names the code outline's terms (they're its source's):\n{}", found.join("\n"));
 }
 
@@ -317,7 +425,11 @@ fn only_the_browsers_start_up_knows_it_runs_in_a_browser() {
             }
         }
     }
-    assert_eq!(found, ["lib.rs: #[cfg(target_arch = \"wasm32\")]"], "a platform asked for outside web/ (only the gate on `mod web`; hand in what differs instead)");
+    assert_eq!(
+        found,
+        ["lib.rs: #[cfg(target_arch = \"wasm32\")]"],
+        "a platform asked for outside web/ (only the gate on `mod web`; hand in what differs instead)"
+    );
 }
 
 #[test]

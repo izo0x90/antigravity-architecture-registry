@@ -86,7 +86,16 @@ impl Feed {
     /// Keeping `kept` lines; the shell's command marks are those with
     /// `mark` (`Scan`).
     pub fn new(kept: usize, mark: &str) -> Self {
-        Self { processor: Processor::new(), scan: Scan::new(mark), kept, dropped: 0, history: 0, held: Vec::new(), cuts: Vec::new(), since: None }
+        Self {
+            processor: Processor::new(),
+            scan: Scan::new(mark),
+            kept,
+            dropped: 0,
+            history: 0,
+            held: Vec::new(),
+            cuts: Vec::new(),
+            since: None,
+        }
     }
 
     /// The emulator's scrollback for `kept` lines kept here.
@@ -356,10 +365,19 @@ mod tests {
             term.resize(Size(cols, 5));
             feed.resized(&mut term, end, true);
             assert!(feed.oldest() >= end, "{cols} wide: none of the numbers before given again");
-            assert_eq!(line(&term, &feed, feed.top() - 1).as_deref(), Some("line 25"), "the lines are there, laid out again (the screen: 26 to 29 and the cursor's row)");
+            assert_eq!(
+                line(&term, &feed, feed.top() - 1).as_deref(),
+                Some("line 25"),
+                "the lines are there, laid out again (the screen: 26 to 29 and the cursor's row)"
+            );
         }
         // Only taller: lines move between the screen and the scrollback, each keeping its number.
-        let numbered = |feed: &Feed, term: &Term<VoidListener>| (feed.oldest()..feed.top() + term.screen_lines() as u64).filter_map(|n| line(term, feed, n).map(|l| (n, l))).filter(|(_, l)| l.starts_with("line")).collect::<Vec<_>>();
+        let numbered = |feed: &Feed, term: &Term<VoidListener>| {
+            (feed.oldest()..feed.top() + term.screen_lines() as u64)
+                .filter_map(|n| line(term, feed, n).map(|l| (n, l)))
+                .filter(|(_, l)| l.starts_with("line"))
+                .collect::<Vec<_>>()
+        };
         let before = numbered(&feed, &term);
         let end = feed.top() + term.screen_lines() as u64;
         term.resize(Size(20, 9));

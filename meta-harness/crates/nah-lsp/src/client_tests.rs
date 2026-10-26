@@ -81,7 +81,11 @@ fn it_starts_in_the_background_and_answers_definitions() {
     assert_eq!(places.len(), at.len());
     for (offset, place) in at.iter().zip(&places) {
         let place = place.place().unwrap();
-        assert_eq!((place.file.as_path(), place.start), (f.root.join("src/main.rs").as_path(), *offset), "the server's answer comes back as bytes");
+        assert_eq!(
+            (place.file.as_path(), place.start),
+            (f.root.join("src/main.rs").as_path(), *offset),
+            "the server's answer comes back as bytes"
+        );
     }
     assert_eq!(logged(&f).iter().filter(|m| *m == "textDocument/definition").count(), at.len());
 }
@@ -189,7 +193,10 @@ fn dropping_the_client_stops_the_server() {
     let pid = client.pid().unwrap();
     drop(client);
     // Gone (or a zombie no one waits for): signal 0 can't reach it.
-    let alive = || std::process::Command::new("kill").args(["-0", &pid.to_string()]).status().is_ok_and(|s| s.success()) && !std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default().contains(") Z ");
+    let alive = || {
+        std::process::Command::new("kill").args(["-0", &pid.to_string()]).status().is_ok_and(|s| s.success())
+            && !std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default().contains(") Z ")
+    };
     let deadline = Instant::now() + Duration::from_secs(5);
     while alive() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
@@ -278,7 +285,11 @@ fn a_server_without_what_it_must_answer_fails_and_isnt_restarted() {
     while !matches!(client.state(), ServerState::Failed { .. }) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
-    assert!(matches!(client.state(), ServerState::Failed { ref reason } if reason.contains("doesn't offer textDocument/definition")), "{:?}", client.state());
+    assert!(
+        matches!(client.state(), ServerState::Failed { ref reason } if reason.contains("doesn't offer textDocument/definition")),
+        "{:?}",
+        client.state()
+    );
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(client.restarts(), 0);
 }

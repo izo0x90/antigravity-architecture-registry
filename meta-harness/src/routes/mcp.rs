@@ -9,9 +9,7 @@ use axum::{
 use crate::modules::ProjectState;
 
 pub(crate) fn routes() -> Router<ProjectState> {
-    Router::new()
-        .route("/api/mcp/sse", get(mcp_sse_proxy).post(mcp_messages_proxy))
-        .route("/api/mcp/messages", post(mcp_messages_proxy))
+    Router::new().route("/api/mcp/sse", get(mcp_sse_proxy).post(mcp_messages_proxy)).route("/api/mcp/messages", post(mcp_messages_proxy))
 }
 
 async fn mcp_sse_proxy(

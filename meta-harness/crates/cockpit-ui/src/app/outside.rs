@@ -31,14 +31,19 @@ impl CockpitApp {
     pub(super) fn serve_calls_away(&mut self, ctx: &egui::Context) {
         use crate::remote::Call;
         for (call, respond) in self.desk.remote.take(ctx, &self.home) {
-            let elsewhere = || format!("the screen shows another server: this one ({}) isn't on it; server.switch shows it", self.desk.server);
+            let elsewhere =
+                || format!("the screen shows another server: this one ({}) isn't on it; server.switch shows it", self.desk.server);
             match call {
                 Call::Read => {
                     let status = self.remote_status();
-                    respond(Ok(serde_json::json!({ "shown": false, "server": self.desk.server, "panels": status.panels, "note": elsewhere() })));
+                    respond(Ok(
+                        serde_json::json!({ "shown": false, "server": self.desk.server, "panels": status.panels, "note": elsewhere() }),
+                    ));
                 }
                 Call::Actions => respond(Ok(self.actions_listed())),
-                Call::Run { id, value } => respond(self.run_named(&id, value, ctx).map(|()| serde_json::json!({ "ran": id, "shown": false }))),
+                Call::Run { id, value } => {
+                    respond(self.run_named(&id, value, ctx).map(|()| serde_json::json!({ "ran": id, "shown": false })))
+                }
                 Call::Click { .. } | Call::Type { .. } | Call::Keys { .. } => respond(Err(elsewhere())),
             }
         }
@@ -76,7 +81,11 @@ impl CockpitApp {
     /// Runs an action by id as its key would, with the value given (a
     /// choice by value or label); says why not if it can't.
     pub(super) fn run_named(&mut self, id: &str, value: Option<String>, ctx: &egui::Context) -> Result<(), String> {
-        let bound = self.palette_actions().into_iter().find(|b| b.action.id == id).ok_or_else(|| format!("no action {id:?} now (actions lists them)"))?;
+        let bound = self
+            .palette_actions()
+            .into_iter()
+            .find(|b| b.action.id == id)
+            .ok_or_else(|| format!("no action {id:?} now (actions lists them)"))?;
         if !bound.action.when.holds(&self.situation()) {
             return Err(format!("{id:?} doesn't apply here now"));
         }
@@ -90,8 +99,13 @@ impl CockpitApp {
                     "off" => "false",
                     other => other,
                 };
-                let found = choices.iter().find(|c| c.value == wanted).or_else(|| choices.iter().find(|c| c.label.eq_ignore_ascii_case(wanted)));
-                Some(found.map(|c| c.value.clone()).ok_or_else(|| format!("{id:?}: {v:?} isn't one of {:?}", choices.iter().map(|c| &c.value).collect::<Vec<_>>()))?)
+                let found =
+                    choices.iter().find(|c| c.value == wanted).or_else(|| choices.iter().find(|c| c.label.eq_ignore_ascii_case(wanted)));
+                Some(
+                    found
+                        .map(|c| c.value.clone())
+                        .ok_or_else(|| format!("{id:?}: {v:?} isn't one of {:?}", choices.iter().map(|c| &c.value).collect::<Vec<_>>()))?,
+                )
             }
             (_, None) => return Err(format!("{id:?} needs a value (actions shows what)")),
         };

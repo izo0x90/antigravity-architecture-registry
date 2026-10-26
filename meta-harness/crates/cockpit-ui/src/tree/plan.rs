@@ -59,7 +59,13 @@ fn waiting(on: &[&Discussion], said: &Whose) -> Option<String> {
 /// A discussion's row: its id, what it is and asks, whose move it is.
 fn discussion_row(d: &Discussion, parent: Option<&str>, said: &Whose) -> RowData {
     let asking: String = d.asking().lines().next().unwrap_or_default().chars().take(80).collect();
-    RowData { key: format!("discussion:{}", d.id), label: format!("{} {}: {asking}", d.id, d.kind.words()), kind: whose(d, said), parent: parent.map(str::to_owned), more: 0 }
+    RowData {
+        key: format!("discussion:{}", d.id),
+        label: format!("{} {}: {asking}", d.id, d.kind.words()),
+        kind: whose(d, said),
+        parent: parent.map(str::to_owned),
+        more: 0,
+    }
 }
 
 /// The rows of `plan`: its own discussions, items (nested), then
@@ -82,16 +88,29 @@ pub(crate) fn rows_of(plan: &Plan, discussions: &[Discussion], said: &Whose) -> 
     };
     let mut rows: Vec<RowData> = on(&Subject::Plan { plan: plan.id.clone() }).into_iter().map(|d| discussion_row(d, None, said)).collect();
     for i in &plan.items {
-        let row = RowData { key: format!("item:{}", i.id), label: i.title.clone(), kind: i.state.name().to_owned(), parent: i.parent.as_ref().map(|p| format!("item:{p}")), more: 0 };
+        let row = RowData {
+            key: format!("item:{}", i.id),
+            label: i.title.clone(),
+            kind: i.state.name().to_owned(),
+            parent: i.parent.as_ref().map(|p| format!("item:{p}")),
+            more: 0,
+        };
         part(&mut rows, row, Subject::PlanItem { plan: plan.id.clone(), item: i.id.0.clone() }, &[]);
     }
     for c in &plan.components {
         let key = format!("component:{}", c.id);
         // Its relations' discussions (those from it), under it, and counted on it.
-        let related: Vec<&Discussion> = discussions.iter().filter(|d| matches!(&d.on.subject, Subject::PlanRelation { source, .. } if *source == c.id)).collect();
-        part(&mut rows, RowData { key: key.clone(), label: c.name.clone(), kind: c.type_name.clone(), parent: None, more: 0 }, Subject::PlanComponent { plan: plan.id.clone(), id: c.id.clone() }, &related);
+        let related: Vec<&Discussion> =
+            discussions.iter().filter(|d| matches!(&d.on.subject, Subject::PlanRelation { source, .. } if *source == c.id)).collect();
+        part(
+            &mut rows,
+            RowData { key: key.clone(), label: c.name.clone(), kind: c.type_name.clone(), parent: None, more: 0 },
+            Subject::PlanComponent { plan: plan.id.clone(), id: c.id.clone() },
+            &related,
+        );
         for s in harness_contracts::CARD_SECTIONS {
-            let row = RowData { key: format!("section:{}:{s}", c.id), label: titled(s), kind: String::new(), parent: Some(key.clone()), more: 0 };
+            let row =
+                RowData { key: format!("section:{}:{s}", c.id), label: titled(s), kind: String::new(), parent: Some(key.clone()), more: 0 };
             part(&mut rows, row, Subject::PlanSection { plan: plan.id.clone(), id: c.id.clone(), section: s.to_owned() }, &[]);
         }
         rows.extend(related.into_iter().map(|d| discussion_row(d, Some(&key), said)));
@@ -209,7 +228,6 @@ impl TreeSource for PlanTree {
         };
         Some((Some(crate::nav::GoTo::Spec), format!("Open {title}'s card")))
     }
-
 
     /// A discussion: what it's on; a section: its card; then the plan.
     fn holders(&self, key: &str) -> Vec<Subject> {

@@ -4,7 +4,6 @@
 
 use serde::Deserialize;
 
-
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct GraphUi {
     /// Actions under the selected card, in order (those that apply).
@@ -57,7 +56,14 @@ impl Default for GraphUi {
 
 impl GraphUi {
     pub fn check(&self) -> Result<(), String> {
-        if self.readable_zoom.is_nan() || self.readable_zoom <= 0.0 || self.zoom_step.is_nan() || self.zoom_step <= 1.0 || self.min_text_px.is_nan() || self.min_text_px < 0.0 || self.details_kept == 0 {
+        if self.readable_zoom.is_nan()
+            || self.readable_zoom <= 0.0
+            || self.zoom_step.is_nan()
+            || self.zoom_step <= 1.0
+            || self.min_text_px.is_nan()
+            || self.min_text_px < 0.0
+            || self.details_kept == 0
+        {
             return Err("graph: readable_zoom > 0, zoom_step > 1, min_text_px >= 0 and details_kept >= 1".into());
         }
         Ok(())

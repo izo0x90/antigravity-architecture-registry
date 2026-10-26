@@ -1,8 +1,8 @@
 pub mod arch;
 pub mod chats;
+pub mod cockpit;
 pub mod code_tags;
 pub mod discussing;
-pub mod cockpit;
 pub mod graph;
 pub mod home;
 pub mod linking;

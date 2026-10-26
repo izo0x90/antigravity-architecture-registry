@@ -1,0 +1,4 @@
+# rustfmt: every Rust file formatted the one way, checked on each commit.
+# Lines up to 140 wide, and as much on one line as fits within that.
+max_width = 140
+use_small_heuristics = "Max"

@@ -2,11 +2,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ewebsock::{WsEvent, WsMessage, WsSender};
-use harness_contracts::{
-    HomeEvent, InstanceId, ModelSelection, NativeId, NotificationId, RequestId, RequestResponse, RuntimePolicy, SavedSessionPage, SessionKey,
-    SlotId, SteerInput, ThreadId,
-};
 use harness_contracts::home::HERE;
+use harness_contracts::{
+    HomeEvent, InstanceId, ModelSelection, NativeId, NotificationId, RequestId, RequestResponse, RuntimePolicy, SavedSessionPage,
+    SessionKey, SlotId, SteerInput, ThreadId,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -263,7 +263,10 @@ impl NetClient {
         // Tests answer for the server themselves (what was asked is in
         // `sent`; `answer`): nothing goes out, so no real answer races theirs.
         #[cfg(test)]
-        self.waiting.lock().unwrap().push((format!("{} {}", request.method, request.url.strip_prefix(&self.base_url).unwrap_or(&request.url)), Box::new(on_done)));
+        self.waiting
+            .lock()
+            .unwrap()
+            .push((format!("{} {}", request.method, request.url.strip_prefix(&self.base_url).unwrap_or(&request.url)), Box::new(on_done)));
         #[cfg(not(test))]
         {
             self.activity.fetch_add(1, Ordering::Relaxed);
@@ -312,7 +315,15 @@ impl NetClient {
 
     /// The same, the answer's bytes as they came (a font, say), `accept`
     /// saying what's wanted.
-    fn call_bytes(&self, method: &str, path: &str, body: Option<serde_json::Value>, accept: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<u8>>) + Send + 'static) {
+    fn call_bytes(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<serde_json::Value>,
+        accept: &str,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<Vec<u8>>) + Send + 'static,
+    ) {
         #[cfg(test)]
         {
             self.sent.lock().unwrap().push(format!("{method} {path}"));
@@ -358,7 +369,14 @@ impl NetClient {
         let Some(at) = waiting.iter().position(|(c, _)| c == call) else { return false };
         let (_, on_done) = waiting.remove(at);
         drop(waiting);
-        on_done(Ok(ehttp::Response { url: call.into(), ok: (200..300).contains(&status), status, status_text: String::new(), headers: ehttp::Headers::default(), bytes }));
+        on_done(Ok(ehttp::Response {
+            url: call.into(),
+            ok: (200..300).contains(&status),
+            status,
+            status_text: String::new(),
+            headers: ehttp::Headers::default(),
+            bytes,
+        }));
         true
     }
 
@@ -477,7 +495,14 @@ impl NetClient {
         self.call::<()>("PUT", "/api/ui/shell", Some(state), ctx, on_done);
     }
 
-    pub fn add_server(&self, name: &str, url: &str, secret: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+    pub fn add_server(
+        &self,
+        name: &str,
+        url: &str,
+        secret: &str,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<()>) + Send + 'static,
+    ) {
         let body = serde_json::json!({ "name": name, "url": url, "secret": secret });
         self.call::<serde_json::Value>("POST", "/api/home/servers", Some(body), ctx, move |r| on_done(r.map(|_| ())));
     }
@@ -500,23 +525,48 @@ impl NetClient {
     // ---- notifications ----
 
     /// The user saw terminal `terminal`: its updates are put away.
-    pub fn terminal_seen(&self, terminal: &harness_contracts::TerminalId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
-        self.call::<serde_json::Value>("POST", "/api/notifications/seen", Some(serde_json::json!({ "terminal": terminal })), ctx, move |r| on_done(r.map(|_| ())));
+    pub fn terminal_seen(
+        &self,
+        terminal: &harness_contracts::TerminalId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<()>) + Send + 'static,
+    ) {
+        self.call::<serde_json::Value>(
+            "POST",
+            "/api/notifications/seen",
+            Some(serde_json::json!({ "terminal": terminal })),
+            ctx,
+            move |r| on_done(r.map(|_| ())),
+        );
     }
 
     /// The user saw `slot`'s chat: its updates are put away.
     pub fn notifications_seen(&self, slot: &SlotId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
-        self.call::<serde_json::Value>("POST", "/api/notifications/seen", Some(serde_json::json!({ "slot": slot })), ctx, move |r| on_done(r.map(|_| ())));
+        self.call::<serde_json::Value>("POST", "/api/notifications/seen", Some(serde_json::json!({ "slot": slot })), ctx, move |r| {
+            on_done(r.map(|_| ()))
+        });
     }
 
     pub fn dismiss_notification(&self, id: &NotificationId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
-        self.call::<serde_json::Value>("POST", &format!("/api/notifications/{}/dismiss", urlencoding::encode(id.as_str())), None, ctx, move |r| on_done(r.map(|_| ())));
+        self.call::<serde_json::Value>(
+            "POST",
+            &format!("/api/notifications/{}/dismiss", urlencoding::encode(id.as_str())),
+            None,
+            ctx,
+            move |r| on_done(r.map(|_| ())),
+        );
     }
 
     // ---- slots ----
 
     /// Opens a session in a slot (setting its harness and settings first, if given).
-    pub fn open_slot_session(&self, slot: &SlotId, body: &OpenSlotSession, ctx: egui::Context, on_done: impl FnOnce(NetResult<SlotOpened>) + Send + 'static) {
+    pub fn open_slot_session(
+        &self,
+        slot: &SlotId,
+        body: &OpenSlotSession,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<SlotOpened>) + Send + 'static,
+    ) {
         let json = serde_json::to_value(body).unwrap_or_default();
         self.call::<SlotOpened>("POST", &format!("/api/slots/{slot}/sessions"), Some(json), ctx, on_done);
     }
@@ -524,31 +574,71 @@ impl NetClient {
     /// A prompt to a slot (its session resumed or opened first if it isn't
     /// running); `add_to_running`: into the turn it's running.
     /// Sends a prompt (its text and links).
-    pub fn prompt_slot(&self, slot: &SlotId, message: &harness_contracts::Message, add_to_running: bool, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+    pub fn prompt_slot(
+        &self,
+        slot: &SlotId,
+        message: &harness_contracts::Message,
+        add_to_running: bool,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<()>) + Send + 'static,
+    ) {
         let mut json = serde_json::json!(message);
         json["addToRunning"] = add_to_running.into();
         self.call::<serde_json::Value>("POST", &format!("/api/slots/{slot}/prompt"), Some(json), ctx, move |r| on_done(r.map(|_| ())));
     }
 
-    pub fn close_slot_session(&self, slot: &SlotId, session: &SessionKey, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+    pub fn close_slot_session(
+        &self,
+        slot: &SlotId,
+        session: &SessionKey,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<()>) + Send + 'static,
+    ) {
         self.call::<()>("DELETE", &format!("/api/slots/{slot}/sessions/{session}"), None, ctx, on_done);
     }
 
-    pub fn switch_slot_session(&self, slot: &SlotId, session: &SessionKey, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+    pub fn switch_slot_session(
+        &self,
+        slot: &SlotId,
+        session: &SessionKey,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<()>) + Send + 'static,
+    ) {
         self.call::<()>("POST", &format!("/api/slots/{slot}/current"), Some(serde_json::json!({ "session": session })), ctx, on_done);
     }
 
-    pub fn set_slot_harness(&self, slot: &SlotId, instance: &InstanceId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+    pub fn set_slot_harness(
+        &self,
+        slot: &SlotId,
+        instance: &InstanceId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<()>) + Send + 'static,
+    ) {
         self.call::<()>("POST", &format!("/api/slots/{slot}/harness"), Some(serde_json::json!({ "instanceId": instance })), ctx, on_done);
     }
 
-    pub fn set_slot_settings(&self, slot: &SlotId, policy: &RuntimePolicy, model: Option<&ModelSelection>, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
-        self.call::<()>("POST", &format!("/api/slots/{slot}/settings"), Some(serde_json::json!({ "policy": policy, "model": model })), ctx, on_done);
+    pub fn set_slot_settings(
+        &self,
+        slot: &SlotId,
+        policy: &RuntimePolicy,
+        model: Option<&ModelSelection>,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<()>) + Send + 'static,
+    ) {
+        self.call::<()>(
+            "POST",
+            &format!("/api/slots/{slot}/settings"),
+            Some(serde_json::json!({ "policy": policy, "model": model })),
+            ctx,
+            on_done,
+        );
     }
 
     /// Starts a sub-slot on a harness.
     pub fn new_slot(&self, instance: &InstanceId, ctx: egui::Context, on_done: impl FnOnce(NetResult<SlotId>) + Send + 'static) {
-        self.call::<SlotCreated>("POST", "/api/slots", Some(serde_json::json!({ "instanceId": instance })), ctx, move |r| on_done(r.map(|c| c.slot_id)));
+        self.call::<SlotCreated>("POST", "/api/slots", Some(serde_json::json!({ "instanceId": instance })), ctx, move |r| {
+            on_done(r.map(|c| c.slot_id))
+        });
     }
 
     pub fn close_slot(&self, slot: &SlotId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
@@ -562,8 +652,20 @@ impl NetClient {
         self.call::<()>("POST", &format!("/api/threads/{thread}/steer"), Some(json), ctx, on_done);
     }
 
-    pub fn cancel_subagent(&self, thread: &ThreadId, id: &harness_contracts::SubagentId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
-        self.call::<()>("POST", &format!("/api/threads/{thread}/subagents/{}/cancel", urlencoding::encode(id.as_str())), Some(serde_json::json!({})), ctx, on_done);
+    pub fn cancel_subagent(
+        &self,
+        thread: &ThreadId,
+        id: &harness_contracts::SubagentId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<()>) + Send + 'static,
+    ) {
+        self.call::<()>(
+            "POST",
+            &format!("/api/threads/{thread}/subagents/{}/cancel", urlencoding::encode(id.as_str())),
+            Some(serde_json::json!({})),
+            ctx,
+            on_done,
+        );
     }
 
     pub fn interrupt(&self, thread: &ThreadId, ctx: egui::Context) {
@@ -603,31 +705,59 @@ impl NetClient {
     }
 
     /// Each slot's unsent chat text, as last saved.
-    pub fn drafts(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<std::collections::BTreeMap<String, harness_contracts::Message>>) + Send + 'static) {
+    pub fn drafts(
+        &self,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<std::collections::BTreeMap<String, harness_contracts::Message>>) + Send + 'static,
+    ) {
         self.call("GET", "/api/ui/drafts", None, ctx, on_done);
     }
 
     /// Saves a slot's unsent chat text (empty: none).
-    pub fn save_draft(&self, slot: &SlotId, draft: &harness_contracts::Message, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+    pub fn save_draft(
+        &self,
+        slot: &SlotId,
+        draft: &harness_contracts::Message,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<()>) + Send + 'static,
+    ) {
         self.call("PUT", &format!("/api/ui/drafts/{slot}"), Some(serde_json::json!(draft)), ctx, on_done);
     }
 
     /// What a message's links come to before it's sent (what sending it
     /// would say: linked whole, past the budget).
-    pub fn check_links(&self, message: &harness_contracts::Message, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<String>>) + Send + 'static) {
+    pub fn check_links(
+        &self,
+        message: &harness_contracts::Message,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<Vec<String>>) + Send + 'static,
+    ) {
         self.call::<serde_json::Value>("POST", "/api/links/check", Some(serde_json::json!(message)), ctx, move |r| {
-            on_done(r.map(|v| v["notes"].as_array().map(|n| n.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect()).unwrap_or_default()))
+            on_done(r.map(|v| {
+                v["notes"].as_array().map(|n| n.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+            }))
         });
     }
 
     // ---- instances ----
 
     /// The harness's saved sessions in the project.
-    pub fn list_saved_sessions(&self, instance: &InstanceId, ctx: egui::Context, on_done: impl FnOnce(NetResult<SavedSessionPage>) + Send + 'static) {
+    pub fn list_saved_sessions(
+        &self,
+        instance: &InstanceId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<SavedSessionPage>) + Send + 'static,
+    ) {
         self.call("GET", &format!("/api/instances/{instance}/sessions"), None, ctx, on_done);
     }
 
-    pub fn delete_saved_session(&self, instance: &InstanceId, native: &NativeId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+    pub fn delete_saved_session(
+        &self,
+        instance: &InstanceId,
+        native: &NativeId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<()>) + Send + 'static,
+    ) {
         let path = format!("/api/instances/{instance}/sessions/{}", urlencoding::encode(native.as_str()));
         self.call::<()>("DELETE", &path, None, ctx, on_done);
     }
@@ -642,7 +772,13 @@ impl NetClient {
 
     /// Starts signing in: what's to be done (the instance's snapshot says it
     /// too), or nothing when it's signed in at once.
-    pub fn begin_auth(&self, instance: &InstanceId, method: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<Option<harness_contracts::SignInWaiting>>) + Send + 'static) {
+    pub fn begin_auth(
+        &self,
+        instance: &InstanceId,
+        method: &str,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<Option<harness_contracts::SignInWaiting>>) + Send + 'static,
+    ) {
         let path = format!("/api/instances/{instance}/auth/{}", urlencoding::encode(method));
         self.call("POST", &path, Some(serde_json::json!({})), ctx, on_done);
     }
@@ -654,7 +790,14 @@ impl NetClient {
     }
 
     /// Pastes what the sign-in page gave back to sign-in `id`.
-    pub fn complete_auth(&self, instance: &InstanceId, id: u64, response: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+    pub fn complete_auth(
+        &self,
+        instance: &InstanceId,
+        id: u64,
+        response: &str,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<()>) + Send + 'static,
+    ) {
         let path = format!("/api/instances/{instance}/auth/complete");
         self.call::<()>("POST", &path, Some(serde_json::json!({ "id": id, "response": response })), ctx, on_done);
     }
@@ -682,7 +825,11 @@ impl NetClient {
 
     /// Where this desk's server's socket `path` is (through home).
     pub fn socket_url(&self, path: &str) -> String {
-        let base = if self.base_url.starts_with("https://") { self.base_url.replacen("https://", "wss://", 1) } else { self.base_url.replacen("http://", "ws://", 1) };
+        let base = if self.base_url.starts_with("https://") {
+            self.base_url.replacen("https://", "wss://", 1)
+        } else {
+            self.base_url.replacen("http://", "ws://", 1)
+        };
         format!("{base}{}{path}", self.prefix)
     }
 
@@ -696,25 +843,65 @@ impl NetClient {
         self.call("POST", "/api/terminals", Some(serde_json::json!({})), ctx, on_done);
     }
 
-    pub fn restart_terminal(&self, id: &harness_contracts::TerminalId, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Terminal>) + Send + 'static) {
-        self.call("POST", &format!("/api/terminals/{}/restart", urlencoding::encode(id.as_str())), Some(serde_json::json!({})), ctx, on_done);
+    pub fn restart_terminal(
+        &self,
+        id: &harness_contracts::TerminalId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<harness_contracts::Terminal>) + Send + 'static,
+    ) {
+        self.call(
+            "POST",
+            &format!("/api/terminals/{}/restart", urlencoding::encode(id.as_str())),
+            Some(serde_json::json!({})),
+            ctx,
+            on_done,
+        );
     }
 
-    pub fn close_terminal(&self, id: &harness_contracts::TerminalId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+    pub fn close_terminal(
+        &self,
+        id: &harness_contracts::TerminalId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<()>) + Send + 'static,
+    ) {
         self.call("DELETE", &format!("/api/terminals/{}", urlencoding::encode(id.as_str())), None, ctx, on_done);
     }
 
     /// Tags `subject` with `tag` (a tag's id, or a new tag's name).
-    pub fn tag(&self, tag: &str, subject: &harness_contracts::Subject, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Tag>) + Send + 'static) {
+    pub fn tag(
+        &self,
+        tag: &str,
+        subject: &harness_contracts::Subject,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<harness_contracts::Tag>) + Send + 'static,
+    ) {
         self.call("POST", "/api/tags", Some(serde_json::json!({ "tag": tag, "subject": subject })), ctx, on_done);
     }
 
-    pub fn untag(&self, tag: &harness_contracts::TagId, subject: &harness_contracts::Subject, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Tag>) + Send + 'static) {
-        self.call("POST", &format!("/api/tags/{}/untag", urlencoding::encode(tag.as_str())), Some(serde_json::json!({ "subject": subject })), ctx, on_done);
+    pub fn untag(
+        &self,
+        tag: &harness_contracts::TagId,
+        subject: &harness_contracts::Subject,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<harness_contracts::Tag>) + Send + 'static,
+    ) {
+        self.call(
+            "POST",
+            &format!("/api/tags/{}/untag", urlencoding::encode(tag.as_str())),
+            Some(serde_json::json!({ "subject": subject })),
+            ctx,
+            on_done,
+        );
     }
 
     /// Renames, recolours or notes a tag (what's given).
-    pub fn edit_tag(&self, tag: &harness_contracts::TagId, edit: serde_json::Value, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Tag>) + Send + 'static) {
+    pub fn edit_tag(
+        &self,
+        tag: &harness_contracts::TagId,
+        edit: serde_json::Value,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<harness_contracts::Tag>) + Send + 'static,
+    ) {
         self.call("POST", &format!("/api/tags/{}/edit", urlencoding::encode(tag.as_str())), Some(edit), ctx, on_done);
     }
 
@@ -723,7 +910,12 @@ impl NetClient {
     }
 
     /// A tag and what each thing it's on says now.
-    pub fn read_tag(&self, tag: &harness_contracts::TagId, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::TagRead>) + Send + 'static) {
+    pub fn read_tag(
+        &self,
+        tag: &harness_contracts::TagId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<harness_contracts::TagRead>) + Send + 'static,
+    ) {
         self.call("GET", &format!("/api/tags/{}", urlencoding::encode(tag.as_str())), None, ctx, on_done);
     }
 
@@ -732,7 +924,12 @@ impl NetClient {
     }
 
     /// Replaces the project's list.
-    pub fn set_tool_servers(&self, project: &[harness_contracts::McpServer], ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::ToolServers>) + Send + 'static) {
+    pub fn set_tool_servers(
+        &self,
+        project: &[harness_contracts::McpServer],
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<harness_contracts::ToolServers>) + Send + 'static,
+    ) {
         let json = serde_json::to_value(project).unwrap_or_default();
         self.call("PUT", "/api/mcp/servers", Some(json), ctx, on_done);
     }
@@ -745,21 +942,39 @@ impl NetClient {
     }
 
     /// One of the three views as a laid-out tree.
-    pub fn graph_tree(&self, request: &arch_graph::tree::TreeRequest, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::tree::Tree>) + Send + 'static) {
+    pub fn graph_tree(
+        &self,
+        request: &arch_graph::tree::TreeRequest,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::tree::Tree>) + Send + 'static,
+    ) {
         self.call("GET", &format!("/api/graph/tree?{}", query(request.query_pairs())), None, ctx, on_done);
     }
 
     /// What opening `card` `levels` further changes in the tree `request`
     /// was answered with (the one held): new cards, every card's place, the
     /// lines, all laid out by the server.
-    pub fn graph_expand(&self, request: &arch_graph::tree::TreeRequest, card: &str, levels: u32, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::tree::Expanded>) + Send + 'static) {
+    pub fn graph_expand(
+        &self,
+        request: &arch_graph::tree::TreeRequest,
+        card: &str,
+        levels: u32,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::tree::Expanded>) + Send + 'static,
+    ) {
         let mut pairs = request.query_pairs();
         pairs.extend([("card", card.to_owned()), ("levels", levels.to_string())]);
         self.call("GET", &format!("/api/graph/expand?{}", query(pairs)), None, ctx, on_done);
     }
 
     /// Everything about one card (its component's detail).
-    pub fn graph_card(&self, key: &str, source: &arch_graph::Source, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::ComponentDetail>) + Send + 'static) {
+    pub fn graph_card(
+        &self,
+        key: &str,
+        source: &arch_graph::Source,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::ComponentDetail>) + Send + 'static,
+    ) {
         self.call("GET", &format!("/api/graph/details/{}?source={}", urlencoding::encode(key), source_param(source)), None, ctx, on_done);
     }
 
@@ -777,31 +992,75 @@ impl NetClient {
         on_done: impl FnOnce(NetResult<arch_search::Found>) + Send + 'static,
     ) {
         let changed = changed.map(|c| format!("&changed={}", urlencoding::encode(&c.range()))).unwrap_or_default();
-        self.call("GET", &format!("/api/search?q={}&kind={}&limit={limit}&source={}{changed}", urlencoding::encode(query), kind.name(), source_param(source)), None, ctx, on_done);
+        self.call(
+            "GET",
+            &format!(
+                "/api/search?q={}&kind={}&limit={limit}&source={}{changed}",
+                urlencoding::encode(query),
+                kind.name(),
+                source_param(source)
+            ),
+            None,
+            ctx,
+            on_done,
+        );
     }
 
     /// The files `comparison` changes (a page), with their counts.
-    pub fn changes(&self, comparison: &harness_contracts::changes::Comparison, offset: usize, limit: usize, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::changes::ChangeList>) + Send + 'static) {
-        let path = format!("/api/changes?from={}&to={}&offset={offset}&limit={limit}", urlencoding::encode(&comparison.from.to_string()), urlencoding::encode(&comparison.to.to_string()));
+    pub fn changes(
+        &self,
+        comparison: &harness_contracts::changes::Comparison,
+        offset: usize,
+        limit: usize,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<harness_contracts::changes::ChangeList>) + Send + 'static,
+    ) {
+        let path = format!(
+            "/api/changes?from={}&to={}&offset={offset}&limit={limit}",
+            urlencoding::encode(&comparison.from.to_string()),
+            urlencoding::encode(&comparison.to.to_string())
+        );
         self.call("GET", &path, None, ctx, on_done);
     }
 
     /// Stages (or, `stage` false, unstages) `path`, or one change in it
     /// (where it starts on each side, and the context it was shown with).
-    pub fn change_stage(&self, stage: bool, path: &str, hunk: Option<(u32, u32, u32)>, ctx: egui::Context, on_done: impl FnOnce(NetResult<serde_json::Value>) + Send + 'static) {
-        let hunk = hunk.map(|(old_start, new_start, context)| serde_json::json!({ "old_start": old_start, "new_start": new_start, "context": context }));
+    pub fn change_stage(
+        &self,
+        stage: bool,
+        path: &str,
+        hunk: Option<(u32, u32, u32)>,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<serde_json::Value>) + Send + 'static,
+    ) {
+        let hunk = hunk.map(
+            |(old_start, new_start, context)| serde_json::json!({ "old_start": old_start, "new_start": new_start, "context": context }),
+        );
         let route = if stage { "/api/changes/stage" } else { "/api/changes/unstage" };
         self.call("POST", route, Some(serde_json::json!({ "path": path, "hunk": hunk })), ctx, on_done);
     }
 
     /// When the files changed and who was working, and each turn's changes.
-    pub fn change_timeline(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::changes::Timeline>) + Send + 'static) {
+    pub fn change_timeline(
+        &self,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<harness_contracts::changes::Timeline>) + Send + 'static,
+    ) {
         self.call("GET", "/api/changes/timeline", None, ctx, on_done);
     }
 
     /// Which components `comparison` changed (where the index knows them).
-    pub fn change_components(&self, comparison: &harness_contracts::changes::Comparison, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::changes::ComponentChangeList>) + Send + 'static) {
-        let path = format!("/api/changes/components?from={}&to={}", urlencoding::encode(&comparison.from.to_string()), urlencoding::encode(&comparison.to.to_string()));
+    pub fn change_components(
+        &self,
+        comparison: &harness_contracts::changes::Comparison,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<harness_contracts::changes::ComponentChangeList>) + Send + 'static,
+    ) {
+        let path = format!(
+            "/api/changes/components?from={}&to={}",
+            urlencoding::encode(&comparison.from.to_string()),
+            urlencoding::encode(&comparison.to.to_string())
+        );
         self.call("GET", &path, None, ctx, on_done);
     }
 
@@ -826,21 +1085,38 @@ impl NetClient {
         self.call("GET", &url, None, ctx, on_done);
     }
 
-    pub fn code_analysis(&self, path: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::code::CodeAnalysis>) + Send + 'static) {
+    pub fn code_analysis(
+        &self,
+        path: &str,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::code::CodeAnalysis>) + Send + 'static,
+    ) {
         self.call("GET", &format!("/api/code/analysis?path={}", urlencoding::encode(path)), None, ctx, on_done);
     }
 
     /// Code blocks' colours (each its fence and text), each read as the
     /// language its fence names (none: no language pack knows it), in the
     /// order asked.
-    pub fn code_highlight(&self, blocks: &[(String, String)], ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<Option<arch_graph::code::Highlights>>>) + Send + 'static) {
-        let blocks: Vec<serde_json::Value> = blocks.iter().map(|(fence, text)| serde_json::json!({ "language": fence, "text": text })).collect();
+    pub fn code_highlight(
+        &self,
+        blocks: &[(String, String)],
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<Vec<Option<arch_graph::code::Highlights>>>) + Send + 'static,
+    ) {
+        let blocks: Vec<serde_json::Value> =
+            blocks.iter().map(|(fence, text)| serde_json::json!({ "language": fence, "text": text })).collect();
         self.call("POST", "/api/code/highlight", Some(serde_json::json!({ "blocks": blocks })), ctx, on_done);
     }
 
     /// Pairs of texts (calls' changes), each compared as a file's sides are.
-    pub fn changes_texts(&self, pairs: &[crate::comparer::Pair], ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<Vec<harness_contracts::changes::Hunk>>>) + Send + 'static) {
-        let pairs: Vec<serde_json::Value> = pairs.iter().map(|p| serde_json::json!({ "old": p.old, "new": p.new, "context": p.context })).collect();
+    pub fn changes_texts(
+        &self,
+        pairs: &[crate::comparer::Pair],
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<Vec<Vec<harness_contracts::changes::Hunk>>>) + Send + 'static,
+    ) {
+        let pairs: Vec<serde_json::Value> =
+            pairs.iter().map(|p| serde_json::json!({ "old": p.old, "new": p.new, "context": p.context })).collect();
         self.call("POST", "/api/changes/texts", Some(serde_json::json!({ "pairs": pairs })), ctx, on_done);
     }
 
@@ -856,12 +1132,31 @@ impl NetClient {
         ctx: egui::Context,
         on_done: impl FnOnce(NetResult<arch_graph::ComponentDetail>) + Send + 'static,
     ) {
-        self.call("GET", &format!("/api/arch/components/{}?source={}", urlencoding::encode(id.as_str()), source_param(source)), None, ctx, on_done);
+        self.call(
+            "GET",
+            &format!("/api/arch/components/{}?source={}", urlencoding::encode(id.as_str()), source_param(source)),
+            None,
+            ctx,
+            on_done,
+        );
     }
 
     /// The component enclosing `file:line`.
-    pub fn arch_at(&self, file: &str, line: usize, source: &arch_graph::Source, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::Component>) + Send + 'static) {
-        self.call("GET", &format!("/api/arch/at?file={}&line={line}&source={}", urlencoding::encode(file), source_param(source)), None, ctx, on_done);
+    pub fn arch_at(
+        &self,
+        file: &str,
+        line: usize,
+        source: &arch_graph::Source,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::Component>) + Send + 'static,
+    ) {
+        self.call(
+            "GET",
+            &format!("/api/arch/at?file={}&line={line}&source={}", urlencoding::encode(file), source_param(source)),
+            None,
+            ctx,
+            on_done,
+        );
     }
 
     /// Indexing state: running or not, progress, last run, stale files.
@@ -885,35 +1180,91 @@ impl NetClient {
     }
 
     /// One plan, as it is now.
-    pub fn arch_plan(&self, plan: &arch_graph::PlanId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::Plan>) + Send + 'static) {
+    pub fn arch_plan(
+        &self,
+        plan: &arch_graph::PlanId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::Plan>) + Send + 'static,
+    ) {
         self.call("GET", &format!("/api/arch/plans/{}", urlencoding::encode(&plan.0)), None, ctx, on_done);
     }
 
     /// Applies plan operations (as the user: an item's state, say).
-    pub fn arch_plan_ops(&self, plan: &arch_graph::PlanId, ops: serde_json::Value, ctx: egui::Context, on_done: impl FnOnce(NetResult<serde_json::Value>) + Send + 'static) {
+    pub fn arch_plan_ops(
+        &self,
+        plan: &arch_graph::PlanId,
+        ops: serde_json::Value,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<serde_json::Value>) + Send + 'static,
+    ) {
         self.call("POST", &format!("/api/arch/plans/{}/ops", urlencoding::encode(&plan.0)), Some(ops), ctx, on_done);
     }
 
-    pub fn arch_validate(&self, plan: &arch_graph::PlanId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::Report>) + Send + 'static) {
+    pub fn arch_validate(
+        &self,
+        plan: &arch_graph::PlanId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::Report>) + Send + 'static,
+    ) {
         self.call("POST", &format!("/api/arch/plans/{}/validate", urlencoding::encode(&plan.0)), Some(serde_json::json!({})), ctx, on_done);
     }
 
     /// The work queue over a plan.
-    pub fn arch_queue(&self, plan: &arch_graph::PlanId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::QueueSnapshot>) + Send + 'static) {
+    pub fn arch_queue(
+        &self,
+        plan: &arch_graph::PlanId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::QueueSnapshot>) + Send + 'static,
+    ) {
         self.call("GET", &format!("/api/arch/plans/{}/queue", urlencoding::encode(&plan.0)), None, ctx, on_done);
     }
 
     /// Starts the queue; `instance` runs its sessions.
-    pub fn arch_queue_start(&self, plan: &arch_graph::PlanId, instance: &harness_contracts::InstanceId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::QueueSnapshot>) + Send + 'static) {
-        self.call("POST", &format!("/api/arch/plans/{}/queue/start", urlencoding::encode(&plan.0)), Some(serde_json::json!({ "instanceId": instance })), ctx, on_done);
+    pub fn arch_queue_start(
+        &self,
+        plan: &arch_graph::PlanId,
+        instance: &harness_contracts::InstanceId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::QueueSnapshot>) + Send + 'static,
+    ) {
+        self.call(
+            "POST",
+            &format!("/api/arch/plans/{}/queue/start", urlencoding::encode(&plan.0)),
+            Some(serde_json::json!({ "instanceId": instance })),
+            ctx,
+            on_done,
+        );
     }
 
-    pub fn arch_queue_stop(&self, plan: &arch_graph::PlanId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::QueueSnapshot>) + Send + 'static) {
-        self.call("POST", &format!("/api/arch/plans/{}/queue/stop", urlencoding::encode(&plan.0)), Some(serde_json::json!({})), ctx, on_done);
+    pub fn arch_queue_stop(
+        &self,
+        plan: &arch_graph::PlanId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::QueueSnapshot>) + Send + 'static,
+    ) {
+        self.call(
+            "POST",
+            &format!("/api/arch/plans/{}/queue/stop", urlencoding::encode(&plan.0)),
+            Some(serde_json::json!({})),
+            ctx,
+            on_done,
+        );
     }
 
-    pub fn arch_queue_retry(&self, plan: &arch_graph::PlanId, component: &arch_graph::ComponentId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::QueueSnapshot>) + Send + 'static) {
-        self.call("POST", &format!("/api/arch/plans/{}/queue/retry", urlencoding::encode(&plan.0)), Some(serde_json::json!({ "component": component })), ctx, on_done);
+    pub fn arch_queue_retry(
+        &self,
+        plan: &arch_graph::PlanId,
+        component: &arch_graph::ComponentId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::QueueSnapshot>) + Send + 'static,
+    ) {
+        self.call(
+            "POST",
+            &format!("/api/arch/plans/{}/queue/retry", urlencoding::encode(&plan.0)),
+            Some(serde_json::json!({ "component": component })),
+            ctx,
+            on_done,
+        );
     }
 
     /// The user approves a component's design (ArchApproved or PlanApproved).
@@ -926,13 +1277,22 @@ impl NetClient {
         ctx: egui::Context,
         on_done: impl FnOnce(NetResult<arch_graph::Approval>) + Send + 'static,
     ) {
-        let path = format!("/api/arch/plans/{}/components/{}/approve", urlencoding::encode(&plan.0), urlencoding::encode(component.as_str()));
+        let path =
+            format!("/api/arch/plans/{}/components/{}/approve", urlencoding::encode(&plan.0), urlencoding::encode(component.as_str()));
         self.call("POST", &path, Some(serde_json::json!({ "to": to, "by": by })), ctx, on_done);
     }
 
     /// Starts a discussion on `on`: a question or a change request, asking
     /// `asked` (an agent slot's name; none: the lead).
-    pub fn discussion_start(&self, on: &harness_contracts::Subject, kind: harness_contracts::DiscussionKind, message: &harness_contracts::Message, asked: Option<&str>, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Discussion>) + Send + 'static) {
+    pub fn discussion_start(
+        &self,
+        on: &harness_contracts::Subject,
+        kind: harness_contracts::DiscussionKind,
+        message: &harness_contracts::Message,
+        asked: Option<&str>,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<harness_contracts::Discussion>) + Send + 'static,
+    ) {
         let mut body = serde_json::json!(message);
         (body["subject"], body["kind"]) = (serde_json::json!(on), serde_json::json!(kind));
         if let Some(asked) = asked {
@@ -942,22 +1302,51 @@ impl NetClient {
     }
 
     /// What discussion `id` is on says, as it is now (or as it was kept).
-    pub fn discussion_on(&self, id: &harness_contracts::DiscussionId, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::OnNow>) + Send + 'static) {
+    pub fn discussion_on(
+        &self,
+        id: &harness_contracts::DiscussionId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<harness_contracts::OnNow>) + Send + 'static,
+    ) {
         self.call("GET", &format!("/api/discussions/{}/on", urlencoding::encode(id.as_str())), None, ctx, on_done);
     }
 
     /// Acts on a discussion: `action` is `reply`, `settle`, `reopen` or
     /// `change`; `body` is `{text?}`.
-    pub fn discussion_act(&self, id: &harness_contracts::DiscussionId, action: &str, body: serde_json::Value, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Discussion>) + Send + 'static) {
+    pub fn discussion_act(
+        &self,
+        id: &harness_contracts::DiscussionId,
+        action: &str,
+        body: serde_json::Value,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<harness_contracts::Discussion>) + Send + 'static,
+    ) {
         self.call("POST", &format!("/api/discussions/{}/{action}", urlencoding::encode(id.as_str())), Some(body), ctx, on_done);
     }
 
-    pub fn arch_mark_reviewed(&self, plan: &arch_graph::PlanId, by: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::ReviewSnapshot>) + Send + 'static) {
-        self.call("POST", &format!("/api/arch/plans/{}/reviewed", urlencoding::encode(&plan.0)), Some(serde_json::json!({ "by": by })), ctx, on_done);
+    pub fn arch_mark_reviewed(
+        &self,
+        plan: &arch_graph::PlanId,
+        by: &str,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::ReviewSnapshot>) + Send + 'static,
+    ) {
+        self.call(
+            "POST",
+            &format!("/api/arch/plans/{}/reviewed", urlencoding::encode(&plan.0)),
+            Some(serde_json::json!({ "by": by })),
+            ctx,
+            on_done,
+        );
     }
 
     /// What changed in the plan since the user last reviewed it.
-    pub fn arch_review_diff(&self, plan: &arch_graph::PlanId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::PlanDiff>) + Send + 'static) {
+    pub fn arch_review_diff(
+        &self,
+        plan: &arch_graph::PlanId,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::PlanDiff>) + Send + 'static,
+    ) {
         self.call("GET", &format!("/api/arch/plans/{}/diff", urlencoding::encode(&plan.0)), None, ctx, on_done);
     }
 
@@ -1065,9 +1454,22 @@ mod tests {
     fn home_says_whose_events_and_another_servers_calls_go_through_it() {
         let mut net = NetClient::new("http://127.0.0.1:9");
         net.on_ws_event(WsEvent::Opened, 0.0, 0);
-        net.on_ws_event(WsEvent::Message(WsMessage::Text(r#"{"type":"event","server":"cloud","event":{"atMs":5,"type":"resync"}}"#.into())), 1.0, 7);
+        net.on_ws_event(
+            WsEvent::Message(WsMessage::Text(r#"{"type":"event","server":"cloud","event":{"atMs":5,"type":"resync"}}"#.into())),
+            1.0,
+            7,
+        );
         let events = std::mem::take(&mut *net.from_home.lock().unwrap());
-        assert_eq!(events, [(7, HomeEvent::Event { server: "cloud".into(), event: Box::new(harness_contracts::Stamped { at_ms: 5, event: harness_contracts::ClientEvent::Resync }) })]);
+        assert_eq!(
+            events,
+            [(
+                7,
+                HomeEvent::Event {
+                    server: "cloud".into(),
+                    event: Box::new(harness_contracts::Stamped { at_ms: 5, event: harness_contracts::ClientEvent::Resync })
+                }
+            )]
+        );
         let cloud = NetClient::for_server("http://127.0.0.1:9", "cloud");
         cloud.notifications_seen(&SlotId::new("lead"), egui::Context::default(), |_| {});
         assert_eq!(*cloud.sent.lock().unwrap(), ["POST /s/cloud/api/notifications/seen"]);

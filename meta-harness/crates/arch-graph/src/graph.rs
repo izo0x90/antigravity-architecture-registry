@@ -279,8 +279,11 @@ impl Graph {
         let mut chain: Vec<ComponentId> = Vec::new();
         let mut frontier = vec![id.clone()];
         while let Some(current) = frontier.pop() {
-            let mut next: Vec<ComponentId> =
-                self.outgoing(&current, Some(RelationKind::Implements)).map(|r| r.target.clone()).filter(|t| t != id && !chain.contains(t)).collect();
+            let mut next: Vec<ComponentId> = self
+                .outgoing(&current, Some(RelationKind::Implements))
+                .map(|r| r.target.clone())
+                .filter(|t| t != id && !chain.contains(t))
+                .collect();
             next.sort();
             chain.extend(next.iter().cloned());
             frontier.extend(next.into_iter().rev());
@@ -486,7 +489,8 @@ mod tests {
 
     /// A graph as comparable text.
     fn text(g: &Graph) -> Vec<String> {
-        let mut out: Vec<String> = g.components().map(|c| format!("{} {:?}", serde_json::to_string(c).unwrap(), g.provenance(&c.id))).collect();
+        let mut out: Vec<String> =
+            g.components().map(|c| format!("{} {:?}", serde_json::to_string(c).unwrap(), g.provenance(&c.id))).collect();
         out.extend(g.relations().map(|r| serde_json::to_string(r).unwrap()));
         for c in g.components() {
             out.extend(g.outgoing(&c.id, None).map(|r| format!("out {} {}", c.id, r.id())));
@@ -655,14 +659,34 @@ mod tests {
             c
         };
         let mut g = Graph::default();
-        g.upsert_component(with_spec("Store", vec![inv("durable", InvariantKind::PostCondition), inv("bounded", InvariantKind::Complexity)]), Provenance::PLANNED);
-        g.upsert_component(with_spec("CachedStore", vec![inv("bounded", InvariantKind::StateInvariant), inv("fresh", InvariantKind::StateInvariant)]), Provenance::PLANNED);
+        g.upsert_component(
+            with_spec("Store", vec![inv("durable", InvariantKind::PostCondition), inv("bounded", InvariantKind::Complexity)]),
+            Provenance::PLANNED,
+        );
+        g.upsert_component(
+            with_spec("CachedStore", vec![inv("bounded", InvariantKind::StateInvariant), inv("fresh", InvariantKind::StateInvariant)]),
+            Provenance::PLANNED,
+        );
         let mut file = with_spec("FileStore", vec![inv("atomic", InvariantKind::PostCondition)]);
         let spec = file.spec.as_mut().unwrap();
         spec.pattern = Some("write-then-rename".into());
         spec.logic_steps = vec![
-            LogicStep { sequence: 1, name: "write".into(), description: "Write to a temp file.".into(), algorithm: None, complexity: Some("O(n)".into()), check: Some("test -d .".into()) },
-            LogicStep { sequence: 2, name: "rename".into(), description: "Rename over the target.".into(), algorithm: Some("atomic rename".into()), complexity: None, check: None },
+            LogicStep {
+                sequence: 1,
+                name: "write".into(),
+                description: "Write to a temp file.".into(),
+                algorithm: None,
+                complexity: Some("O(n)".into()),
+                check: Some("test -d .".into()),
+            },
+            LogicStep {
+                sequence: 2,
+                name: "rename".into(),
+                description: "Rename over the target.".into(),
+                algorithm: Some("atomic rename".into()),
+                complexity: None,
+                check: None,
+            },
         ];
         spec.tasks = vec![Task { text: "fsync the directory".into(), done: false }];
         spec.validation = vec![ToolRef { tool: "clippy".into(), targets: vec!["src/store.rs".into()], args: None }];
@@ -677,7 +701,8 @@ mod tests {
         assert!(json.contains("\"kind\":\"post_condition\""));
 
         assert_eq!(g.interface_chain(&id("FileStore")), vec![id("CachedStore"), id("Store")]);
-        let resolved: Vec<(String, String, InvariantKind)> = g.invariants(&id("FileStore")).into_iter().map(|(from, i)| (from.0, i.name, i.kind)).collect();
+        let resolved: Vec<(String, String, InvariantKind)> =
+            g.invariants(&id("FileStore")).into_iter().map(|(from, i)| (from.0, i.name, i.kind)).collect();
         assert_eq!(
             resolved,
             vec![

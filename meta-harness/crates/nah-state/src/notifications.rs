@@ -37,16 +37,24 @@ fn write(tx: &Transaction<'_>, n: &Notification) -> Result<(), StateError> {
 impl NotificationStore for StateDb {
     fn open(&self) -> Result<Vec<Notification>, String> {
         let open = word(&NotificationState::Open).map_err(|e| e.to_string())?;
-        self.transaction(|tx| select(tx, "SELECT json FROM notifications WHERE state = ?1 ORDER BY at_ms, seq", params![open])).map_err(|e| e.to_string())
+        self.transaction(|tx| select(tx, "SELECT json FROM notifications WHERE state = ?1 ORDER BY at_ms, seq", params![open]))
+            .map_err(|e| e.to_string())
     }
 
     fn recent(&self, limit: usize) -> Result<Vec<Notification>, String> {
-        self.transaction(|tx| select(tx, "SELECT json FROM notifications ORDER BY at_ms DESC, seq DESC LIMIT ?1", params![limit as i64])).map_err(|e| e.to_string())
+        self.transaction(|tx| select(tx, "SELECT json FROM notifications ORDER BY at_ms DESC, seq DESC LIMIT ?1", params![limit as i64]))
+            .map_err(|e| e.to_string())
     }
 
     fn get(&self, id: &NotificationId) -> Result<Option<Notification>, String> {
-        self.transaction(|tx| tx.query_row("SELECT json FROM notifications WHERE id = ?1", params![id.as_str()], |r| r.get::<_, String>(0)).optional().map_err(failed)?.map(read).transpose())
-            .map_err(|e| e.to_string())
+        self.transaction(|tx| {
+            tx.query_row("SELECT json FROM notifications WHERE id = ?1", params![id.as_str()], |r| r.get::<_, String>(0))
+                .optional()
+                .map_err(failed)?
+                .map(read)
+                .transpose()
+        })
+        .map_err(|e| e.to_string())
     }
 
     fn put(&self, notifications: &[Notification]) -> Result<(), String> {
@@ -54,11 +62,16 @@ impl NotificationStore for StateDb {
     }
 
     fn count(&self, prefix: &str) -> Result<u32, String> {
-        self.transaction(|tx| tx.query_row("SELECT COUNT(*) FROM notifications WHERE substr(id, 1, length(?1)) = ?1", params![prefix], |r| r.get(0)).map_err(failed)).map_err(|e| e.to_string())
+        self.transaction(|tx| {
+            tx.query_row("SELECT COUNT(*) FROM notifications WHERE substr(id, 1, length(?1)) = ?1", params![prefix], |r| r.get(0))
+                .map_err(failed)
+        })
+        .map_err(|e| e.to_string())
     }
 
     fn expire_waiting(&self) -> Result<usize, String> {
-        let (open, waiting) = (word(&NotificationState::Open).map_err(|e| e.to_string())?, word(&Level::Waiting).map_err(|e| e.to_string())?);
+        let (open, waiting) =
+            (word(&NotificationState::Open).map_err(|e| e.to_string())?, word(&Level::Waiting).map_err(|e| e.to_string())?);
         self.transaction(|tx| {
             let waited = select(tx, "SELECT json FROM notifications WHERE state = ?1 AND level = ?2", params![open, waiting])?;
             for n in &waited {

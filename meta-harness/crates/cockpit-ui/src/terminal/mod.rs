@@ -24,7 +24,6 @@ use crate::shared::{Reader, Shared};
 use crate::terminals::{TermAct, TermLink, Terminals};
 use crate::viewport::Go;
 
-
 #[derive(Clone, Debug)]
 enum TermCommand {
     Type,
@@ -153,7 +152,10 @@ impl TerminalBuffer {
 
     /// The command the cursor's on, once it ran; else why there's none.
     fn run_on(&self) -> Result<&harness_contracts::TerminalCommand, String> {
-        let command = self.cursor.and_then(|c| self.lines.command_at(c)).ok_or("The cursor isn't on a command the shell marked (bash and zsh mark theirs).")?;
+        let command = self
+            .cursor
+            .and_then(|c| self.lines.command_at(c))
+            .ok_or("The cursor isn't on a command the shell marked (bash and zsh mark theirs).")?;
         if command.output.is_none() { Err("That command hasn't run yet.".into()) } else { Ok(command) }
     }
 
@@ -279,7 +281,8 @@ impl TerminalBuffer {
                         (self.selection, self.found) = (None, None);
                         // The cursor's line, where it is now: the server says.
                         if let (Some(line), Some(id)) = (self.cursor.take(), self.id.clone()) {
-                            self.going_to = Some(Target::TerminalLines { terminal: id, shell: self.lines.shell(), first: line, last: line });
+                            self.going_to =
+                                Some(Target::TerminalLines { terminal: id, shell: self.lines.shell(), first: line, last: line });
                             (self.asked_now, self.known_now) = (None, false);
                         }
                     }
@@ -315,12 +318,15 @@ impl TerminalBuffer {
                     if self.asked_now == Some((shell, first, last)) {
                         self.known_now = true;
                         match (now, &mut self.going_to) {
-                            (Some((now_first, now_last)), Some(Target::TerminalLines { first, last, .. })) => (*first, *last) = (now_first, now_last),
+                            (Some((now_first, now_last)), Some(Target::TerminalLines { first, last, .. })) => {
+                                (*first, *last) = (now_first, now_last)
+                            }
                             // Laid out anew too long ago to follow: not landed on
                             // a line that may be another's.
                             (None, _) => {
                                 self.going_to = None;
-                                self.said = Some("Its lines were laid out anew too long ago to follow: where they are now isn't known.".into());
+                                self.said =
+                                    Some("Its lines were laid out anew too long ago to follow: where they are now isn't known.".into());
                             }
                             _ => {}
                         }
@@ -336,7 +342,9 @@ impl TerminalBuffer {
         let line_text = |line: u64| -> String { self.lines.text(line).unwrap_or_default() };
         let Some((a, b)) = self.selection else { return self.cursor.map(line_text) };
         let ((l0, c0), (l1, c1)) = if a <= b { (a, b) } else { (b, a) };
-        let cut = |text: String, from: u16, to: Option<u16>| -> String { text.chars().skip(usize::from(from)).take(to.map_or(usize::MAX, |t| usize::from(t.saturating_sub(from)) + 1)).collect() };
+        let cut = |text: String, from: u16, to: Option<u16>| -> String {
+            text.chars().skip(usize::from(from)).take(to.map_or(usize::MAX, |t| usize::from(t.saturating_sub(from)) + 1)).collect()
+        };
         let lines: Vec<String> = (l0..=l1)
             .map(|l| {
                 let text = line_text(l);
@@ -410,7 +418,14 @@ impl crate::buffer::Buffer for TerminalBuffer {
     fn tick(&mut self, net: &crate::net::NetClient, ctx: &egui::Context) {
         self.take_link(net, ctx);
         let now = ctx.input(|i| i.time);
-        let unseen = self.id.as_ref().is_some_and(|id| self.agents.get().store().notifications.values().any(|n| n.level == harness_contracts::Level::Update && n.terminal.as_ref() == Some(id)));
+        let unseen = self.id.as_ref().is_some_and(|id| {
+            self.agents
+                .get()
+                .store()
+                .notifications
+                .values()
+                .any(|n| n.level == harness_contracts::Level::Update && n.terminal.as_ref() == Some(id))
+        });
         if unseen && self.said_seen.is_none_or(|at| now - at > SEEN_EVERY) {
             self.said_seen = Some(now);
             self.asks.push(Ask::Terminals { id: self.id.clone(), act: TermAct::Seen });
@@ -427,7 +442,6 @@ impl crate::buffer::Buffer for TerminalBuffer {
     fn as_card(&mut self, card: bool) {
         self.popped = card;
     }
-
 
     fn describe(&self) -> String {
         match self.info() {
@@ -456,7 +470,12 @@ impl crate::nav::DrawsThings for TerminalBuffer {
             _ => return None,
         };
         let (from, to) = (first.max(top), last.min(top + self.window.saturating_sub(1)));
-        (from <= to).then(|| egui::Rect::from_min_max(grid.min + egui::vec2(0.0, (from - top) as f32 * self.row_h), egui::pos2(grid.max.x, grid.min.y + (to - top + 1) as f32 * self.row_h)))
+        (from <= to).then(|| {
+            egui::Rect::from_min_max(
+                grid.min + egui::vec2(0.0, (from - top) as f32 * self.row_h),
+                egui::pos2(grid.max.x, grid.min.y + (to - top + 1) as f32 * self.row_h),
+            )
+        })
     }
 }
 
@@ -604,15 +623,23 @@ impl Navigable for TerminalBuffer {
         let shell = self.lines.shell();
         let known = harness_contracts::Known::default();
         // The command lines are all in (named with them, as they're kept).
-        let of = |first: u64, last: u64| self.lines.command_at(first).filter(|c| c.output.is_some() && self.lines.command_at(last).is_some_and(|l| l.id == c.id));
+        let of = |first: u64, last: u64| {
+            self.lines.command_at(first).filter(|c| c.output.is_some() && self.lines.command_at(last).is_some_and(|l| l.id == c.id))
+        };
         if let Some((a, b)) = self.selection.filter(|(a, b)| (a.0.min(b.0)..=a.0.max(b.0)).contains(&line)) {
             let (first, last) = (a.0.min(b.0), a.0.max(b.0));
             return Things::one(Subject::TerminalLines { terminal, shell, first, last, command: of(first, last).map(|c| c.id) }, &known);
         }
         let command = of(line, line);
-        let mut things = Things::one(Subject::TerminalLines { terminal: terminal.clone(), shell, first: line, last: line, command: command.map(|c| c.id) }, &known);
+        let mut things = Things::one(
+            Subject::TerminalLines { terminal: terminal.clone(), shell, first: line, last: line, command: command.map(|c| c.id) },
+            &known,
+        );
         if let Some(c) = command {
-            things.at.push(Thing::named(Subject::TerminalCommand { terminal, shell, command: c.id, typed: harness_contracts::typed_line(&c.text) }, &known));
+            things.at.push(Thing::named(
+                Subject::TerminalCommand { terminal, shell, command: c.id, typed: harness_contracts::typed_line(&c.text) },
+                &known,
+            ));
             things.unit = 1;
         }
         things
@@ -648,7 +675,13 @@ impl Navigable for TerminalBuffer {
             Motion::NextSibling | Motion::PrevSibling => {
                 let from = self.cursor.unwrap_or(self.lines.cursor().0);
                 for _ in 0..count.max(1) {
-                    let Some(at) = self.lines.command_beside(self.cursor.unwrap_or(from), motion == Motion::PrevSibling).and_then(|line| line.checked_sub(self.lines.first())) else { break };
+                    let Some(at) = self
+                        .lines
+                        .command_beside(self.cursor.unwrap_or(from), motion == Motion::PrevSibling)
+                        .and_then(|line| line.checked_sub(self.lines.first()))
+                    else {
+                        break;
+                    };
                     self.go(Go::To(at as usize, crate::viewport::Show::InView));
                 }
             }
@@ -662,7 +695,10 @@ impl Navigable for TerminalBuffer {
         match self.link_here().map(|l| l.to) {
             Some(links::To::File { path, line }) => {
                 let line = line.unwrap_or(1) as usize;
-                self.asks.push(Ask::Show { target: Target::Span { file: path, start: line, end: line }, in_: Some(crate::kind::BufferKind::Code) });
+                self.asks.push(Ask::Show {
+                    target: Target::Span { file: path, start: line, end: line },
+                    in_: Some(crate::kind::BufferKind::Code),
+                });
                 return Step::Done;
             }
             Some(links::To::Url(url)) => {
@@ -765,33 +801,121 @@ impl ActionProvider for TerminalBuffer {
         let has = self.id.is_some();
         let ended = self.ended().is_some();
         out.push(match (self.link_here().map(|l| l.to), has, ended) {
-            (Some(links::To::File { path, .. }), _, _) => crate::nav::Move::Enter.offer(format!("Open {path}")).detail("The file the cursor's on, in the code"),
-            (Some(links::To::Url(url)), _, _) => crate::nav::Move::Enter.offer(format!("Open {url}")).detail("The web link the cursor's on, in the browser"),
-            (None, true, true) => crate::nav::Move::Enter.offer("Start its shell again").detail("A new start of your shell, in the same folder"),
-            (None, true, false) => crate::nav::Move::Enter.offer_if(!self.typing, "Type into it").detail("Every key goes to its program until you stop typing"),
+            (Some(links::To::File { path, .. }), _, _) => {
+                crate::nav::Move::Enter.offer(format!("Open {path}")).detail("The file the cursor's on, in the code")
+            }
+            (Some(links::To::Url(url)), _, _) => {
+                crate::nav::Move::Enter.offer(format!("Open {url}")).detail("The web link the cursor's on, in the browser")
+            }
+            (None, true, true) => {
+                crate::nav::Move::Enter.offer("Start its shell again").detail("A new start of your shell, in the same folder")
+            }
+            (None, true, false) => {
+                crate::nav::Move::Enter.offer_if(!self.typing, "Type into it").detail("Every key goes to its program until you stop typing")
+            }
             (None, false, _) => crate::nav::Move::Enter.offer("Open a terminal").detail("Your shell, in the project's folder"),
         });
-        out.push(crate::nav::Move::Leave.offer_if(self.cursor.is_some() || self.selection.is_some() || !self.view.live(), "Back to the live screen").detail("Drops the cursor and the selection; the view follows the output again"));
-        out.push(Action::new("terminal.type", "Type into the terminal", "Every key goes to its program until you stop typing", C::Type).focused().importance(PRIMARY).when(if has && !ended && !self.typing { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
+        out.push(
+            crate::nav::Move::Leave
+                .offer_if(self.cursor.is_some() || self.selection.is_some() || !self.view.live(), "Back to the live screen")
+                .detail("Drops the cursor and the selection; the view follows the output again"),
+        );
+        out.push(
+            Action::new("terminal.type", "Type into the terminal", "Every key goes to its program until you stop typing", C::Type)
+                .focused()
+                .importance(PRIMARY)
+                .when(if has && !ended && !self.typing { crate::actions::When::Always } else { crate::actions::When::Unavailable }),
+        );
         let many = self.terminals.get().list().count() > 1;
-        out.push(Action::new("terminal.next", "Next terminal", "This panel shows the next of the server's terminals", C::Step(1)).focused().importance(MINOR).when(if many { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
-        out.push(Action::new("terminal.prev", "Previous terminal", "This panel shows the terminal before", C::Step(-1)).focused().importance(MINOR).when(if many { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
-        let choices = self.terminals.get().list().map(|t| crate::actions::Choice::new(t.id.as_str(), if t.title.is_empty() { t.shell.clone() } else { t.title.clone() }).detail(Some(t.id.to_string())).current(Some(&t.id) == self.id.as_ref())).collect();
-        out.push(Action::new("terminal.pick", "Show another terminal here", "Every terminal the server runs: pick one for this panel", C::Pick).param(crate::actions::Param::Choice(choices)).focused().importance(MINOR));
-        out.push(Action::new("terminal.new", "Open a new terminal here", "Your shell, in the project's folder, shown in this panel", C::New).focused().importance(MINOR));
+        out.push(
+            Action::new("terminal.next", "Next terminal", "This panel shows the next of the server's terminals", C::Step(1))
+                .focused()
+                .importance(MINOR)
+                .when(if many { crate::actions::When::Always } else { crate::actions::When::Unavailable }),
+        );
+        out.push(
+            Action::new("terminal.prev", "Previous terminal", "This panel shows the terminal before", C::Step(-1))
+                .focused()
+                .importance(MINOR)
+                .when(if many { crate::actions::When::Always } else { crate::actions::When::Unavailable }),
+        );
+        let choices = self
+            .terminals
+            .get()
+            .list()
+            .map(|t| {
+                crate::actions::Choice::new(t.id.as_str(), if t.title.is_empty() { t.shell.clone() } else { t.title.clone() })
+                    .detail(Some(t.id.to_string()))
+                    .current(Some(&t.id) == self.id.as_ref())
+            })
+            .collect();
+        out.push(
+            Action::new("terminal.pick", "Show another terminal here", "Every terminal the server runs: pick one for this panel", C::Pick)
+                .param(crate::actions::Param::Choice(choices))
+                .focused()
+                .importance(MINOR),
+        );
+        out.push(
+            Action::new("terminal.new", "Open a new terminal here", "Your shell, in the project's folder, shown in this panel", C::New)
+                .focused()
+                .importance(MINOR),
+        );
         if ended {
-            out.push(Action::new("terminal.restart", "Start its shell again", "A new start of your shell, in the same folder (what the last one showed goes)", C::Restart).focused().importance(PRIMARY).on_item(crate::actions::Style::Button, "Start again", Some(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)));
+            out.push(
+                Action::new(
+                    "terminal.restart",
+                    "Start its shell again",
+                    "A new start of your shell, in the same folder (what the last one showed goes)",
+                    C::Restart,
+                )
+                .focused()
+                .importance(PRIMARY)
+                .on_item(
+                    crate::actions::Style::Button,
+                    "Start again",
+                    Some(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE),
+                ),
+            );
         }
         if has {
-            out.push(Action::new("terminal.close", "Close the terminal (its shell ends)", "Its shell and what runs in it end; the terminal is forgotten", C::Close).focused().importance(MINOR));
+            out.push(
+                Action::new(
+                    "terminal.close",
+                    "Close the terminal (its shell ends)",
+                    "Its shell and what runs in it end; the terminal is forgotten",
+                    C::Close,
+                )
+                .focused()
+                .importance(MINOR),
+            );
         }
         // The command the cursor's on (the shell's marks say where).
         let commands = !self.lines.alternate() && self.lines.command_beside(self.lines.first().saturating_sub(1), false).is_some();
         out.push(crate::nav::Move::Motion(Motion::NextSibling).offer_if(commands, "Next command"));
         out.push(crate::nav::Move::Motion(Motion::PrevSibling).offer_if(commands, "Previous command"));
         let when = |ok: bool| if ok { crate::actions::When::Always } else { crate::actions::When::Unavailable };
-        out.push(Action::new("terminal.copy_output", "Copy the command's output", "All of what the command the cursor's on printed, to the clipboard", C::CopyOutput).focused().importance(MINOR).when(when(self.run_on().is_ok())));
-        out.push(Action::new("terminal.run_again", "Run the command again", "Types the command the cursor's on at the empty prompt and runs it", C::RunAgain).focused().importance(MINOR).when(when(self.run_on().is_ok_and(|c| !c.text.is_empty()) && self.lines.at_empty_prompt().is_some() && !ended)));
+        out.push(
+            Action::new(
+                "terminal.copy_output",
+                "Copy the command's output",
+                "All of what the command the cursor's on printed, to the clipboard",
+                C::CopyOutput,
+            )
+            .focused()
+            .importance(MINOR)
+            .when(when(self.run_on().is_ok())),
+        );
+        out.push(
+            Action::new(
+                "terminal.run_again",
+                "Run the command again",
+                "Types the command the cursor's on at the empty prompt and runs it",
+                C::RunAgain,
+            )
+            .focused()
+            .importance(MINOR)
+            .when(when(self.run_on().is_ok_and(|c| !c.text.is_empty()) && self.lines.at_empty_prompt().is_some() && !ended)),
+        );
         out
     }
 
@@ -836,14 +960,19 @@ impl ActionProvider for TerminalBuffer {
             TermCommand::RunAgain => {
                 let text = match (self.run_on().map(|c| c.text.clone()), self.lines.at_empty_prompt()) {
                     (Err(why), _) => Err(why),
-                    (Ok(text), _) if text.is_empty() => Err("The shell didn't say what that command was (bash doesn't for one its history doesn't keep).".to_owned()),
+                    (Ok(text), _) if text.is_empty() => {
+                        Err("The shell didn't say what that command was (bash doesn't for one its history doesn't keep).".to_owned())
+                    }
                     (Ok(_), None) => Err("Not at an empty prompt: wait for what runs to end, and clear what's typed.".to_owned()),
                     (Ok(text), Some(_)) => Ok(text),
                 };
                 match text {
                     Ok(text) => {
                         self.type_in(TerminalInput::Text { text });
-                        self.type_in(TerminalInput::Key { key: harness_contracts::TermKey::Enter, mods: harness_contracts::Mods::default() });
+                        self.type_in(TerminalInput::Key {
+                            key: harness_contracts::TermKey::Enter,
+                            mods: harness_contracts::Mods::default(),
+                        });
                     }
                     Err(why) => *cx.note = Some(why),
                 }
@@ -926,21 +1055,60 @@ pub(crate) mod tests {
 
     /// The server's answer to lines asked for, from `from` (each says its number).
     pub(crate) fn numbered_lines(from: u64, count: u32) -> FromTerminal {
-        FromTerminal::Lines { from, rows: (from..from + u64::from(count)).map(|n| vec![Run { text: format!("line {n}"), style: Style::default(), wide: false }]).collect() }
+        FromTerminal::Lines {
+            from,
+            rows: (from..from + u64::from(count))
+                .map(|n| vec![Run { text: format!("line {n}"), style: Style::default(), wide: false }])
+                .collect(),
+        }
     }
 
     /// A whole screen showing `lines`, 80 wide.
     pub(crate) fn screen(lines: &[&str]) -> FromTerminal {
-        let rows = (0..24u16).map(|r| (r, lines.get(usize::from(r)).map(|l| vec![Run { text: (*l).to_owned(), style: Style::default(), wide: false }]).unwrap_or_default())).collect();
+        let rows = (0..24u16)
+            .map(|r| {
+                (
+                    r,
+                    lines
+                        .get(usize::from(r))
+                        .map(|l| vec![Run { text: (*l).to_owned(), style: Style::default(), wide: false }])
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
         let cursor = Cursor { row: lines.len().saturating_sub(1) as u16, col: 2, visible: true };
-        FromTerminal::Screen { update: ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 24 }, full: true, rows, cursor, top: 0, oldest: 0, alternate: false, title: "bash".into(), shell: 1, commands: Vec::new() } }
+        FromTerminal::Screen {
+            update: ScreenUpdate {
+                seq: 1,
+                size: TermSize { cols: 80, rows: 24 },
+                full: true,
+                rows,
+                cursor,
+                top: 0,
+                oldest: 0,
+                alternate: false,
+                title: "bash".into(),
+                shell: 1,
+                commands: Vec::new(),
+            },
+        }
     }
 
     #[test]
     fn a_tag_goes_on_a_command_or_its_line_on_the_selected_lines_and_on_nothing_while_a_program_has_the_whole_screen() {
         let mut t = TerminalBuffer { id: Some(TerminalId::new("t1")), ..TerminalBuffer::default() };
         let FromTerminal::Screen { mut update } = numbered(1000, 0) else { unreachable!() };
-        update.commands = vec![harness_contracts::TerminalCommand { id: 3, prompt: 40, input: 40, input_col: 2, output: Some(41), end: Some(60), text: "make".into(), code: Some(0), ran_ms: Some(5) }];
+        update.commands = vec![harness_contracts::TerminalCommand {
+            id: 3,
+            prompt: 40,
+            input: 40,
+            input_col: 2,
+            output: Some(41),
+            end: Some(60),
+            text: "make".into(),
+            code: Some(0),
+            ran_ms: Some(5),
+        }];
         t.lines.take(&update);
         let lines = |first, last, command| Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first, last, command };
         let said = |things: Things| things.at.iter().map(|t| (t.subject.clone(), t.words.clone())).collect::<Vec<_>>();
@@ -948,11 +1116,25 @@ pub(crate) mod tests {
         // each by its one name (what's kept says it too).
         let in_output = t.things("50");
         assert_eq!(in_output.unit, 1);
-        assert_eq!(said(in_output), [(lines(50, 50, Some(3)), "terminal t1 line 50 (of command 3)".to_owned()), (Subject::TerminalCommand { terminal: TerminalId::new("t1"), shell: 1, command: 3, typed: "make".into() }, "terminal t1 command 3 (make)".to_owned())]);
+        assert_eq!(
+            said(in_output),
+            [
+                (lines(50, 50, Some(3)), "terminal t1 line 50 (of command 3)".to_owned()),
+                (
+                    Subject::TerminalCommand { terminal: TerminalId::new("t1"), shell: 1, command: 3, typed: "make".into() },
+                    "terminal t1 command 3 (make)".to_owned()
+                )
+            ]
+        );
         assert_eq!(said(t.things("70")), [(lines(70, 70, None), "terminal t1 line 70".to_owned())], "in no command: the line");
         t.selection = Some(((1023, 3), (100, 0)));
-        assert_eq!(said(t.things("500")), [(lines(100, 1023, None), "terminal t1 lines 100-1023".to_owned())], "the selection's, alone (the server says if it's too many)");
-        (t.grid, t.drawn, t.window, t.row_h) = (Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 240.0))), Some(1000), 24, 10.0);
+        assert_eq!(
+            said(t.things("500")),
+            [(lines(100, 1023, None), "terminal t1 lines 100-1023".to_owned())],
+            "the selection's, alone (the server says if it's too many)"
+        );
+        (t.grid, t.drawn, t.window, t.row_h) =
+            (Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 240.0))), Some(1000), 24, 10.0);
         let FromTerminal::Screen { mut update } = numbered(1000, 0) else { unreachable!() };
         update.alternate = true;
         t.lines.take(&update);

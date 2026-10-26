@@ -7,24 +7,27 @@
 mod expr;
 mod extract;
 pub mod highlight;
-mod pack;
 mod link;
 mod model;
 mod observed;
+mod pack;
 pub mod rows;
 mod rules;
 pub mod typing;
 mod walk;
 
+pub use arch_graph::code::Occurrence;
 pub use expr::Expr;
 pub use extract::{FileExtract, FlowKind, MacroDef, Named, RawArg, RawCall, RawDef, RawFlow, RawScope, content_hash, extract_file};
-pub use pack::{AliasSpec, BindingSpec, CallSpec, DefinitionSpec, ExpressionShape, ExpressionSpec, LanguageSpec, Pack, PackSet, PackSpec, ParamSpec, MacroSpec, DeadCodeSpec, ConditionSpec, ConstantLogic, RuleSpec, ScopeSpec};
-pub use arch_graph::code::Occurrence;
 pub use link::{AmbiguousCall, ExternalCall, Said, Saids, UnverifiedFlow};
 pub use model::{Answers, Change, FileWrite, Files, Model, ServerAnswer, Written};
-pub use observed::{Keeper, Observed, entry_points, occurrences};
 #[cfg(any(test, feature = "testing"))]
 pub use observed::observed;
+pub use observed::{Keeper, Observed, entry_points, occurrences};
+pub use pack::{
+    AliasSpec, BindingSpec, CallSpec, ConditionSpec, ConstantLogic, DeadCodeSpec, DefinitionSpec, ExpressionShape, ExpressionSpec,
+    LanguageSpec, MacroSpec, Pack, PackSet, PackSpec, ParamSpec, RuleSpec, ScopeSpec,
+};
 pub use rules::{CodeRule, CodeRuleSpec, CodeRules, RuleHit, RuleKind, RuleSeverity};
 pub use walk::{Ignores, PROJECT_IGNORE, SourceFile, module_symbol, walk, walk_with};
 

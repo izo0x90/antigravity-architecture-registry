@@ -50,13 +50,29 @@ fn implemented_validate(arch: &ArchitectureService, body: &str) {
             description: "Checks input.".into(),
             parent: Some(id("sample")),
             file: None,
-            signature: Some(arch_graph::Signature { params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] }),
+            signature: Some(arch_graph::Signature {
+                params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }],
+                returns: Some("bool".into()),
+                qualifiers: vec![],
+            }),
             schemas: None,
             spec: None,
         },
     )
     .unwrap();
-    arch.apply(&plan, PlanOp::Relate { kind: arch_graph::RelationKind::Calls, source: id("sample::validate"), target: id("sample::store::Store::new"), order: None, ports: None, note: None, expects: None }).unwrap();
+    arch.apply(
+        &plan,
+        PlanOp::Relate {
+            kind: arch_graph::RelationKind::Calls,
+            source: id("sample::validate"),
+            target: id("sample::store::Store::new"),
+            order: None,
+            ports: None,
+            note: None,
+            expects: None,
+        },
+    )
+    .unwrap();
     for to in [Stage::ArchApproved, Stage::PlanApproved] {
         arch.approve(&plan, &id("sample::validate"), to, &Actor::User { name: "izo".into() }).unwrap();
     }
@@ -99,9 +115,19 @@ async fn tools_reviews_and_refresh_over_rest_and_mcp() {
     // Through the agent's tools.
     let mut mcp = Mcp::lead(addr).await;
     let (err, text) = mcp.tool("run_tools", json!({ "plan": "v" })).await;
-    assert!(!err && text.contains("PASS mentions on rust:sample::validate") && text.contains("Next:") && text.contains("rust:sample::validate ("), "{text}");
+    assert!(
+        !err && text.contains("PASS mentions on rust:sample::validate")
+            && text.contains("Next:")
+            && text.contains("rust:sample::validate ("),
+        "{text}"
+    );
     let (err, text) = mcp.tool("review", json!({ "plan": "v", "id": "rust:sample::validate" })).await;
-    assert!(!err && text.contains("tiny (anti_patterns): 1 points") && text.contains("ERROR (src/lib.rs:") && text.contains("Address the blocking points"), "{text}");
+    assert!(
+        !err && text.contains("tiny (anti_patterns): 1 points")
+            && text.contains("ERROR (src/lib.rs:")
+            && text.contains("Address the blocking points"),
+        "{text}"
+    );
     let (err, text) = mcp.tool("verify", json!({ "plan": "v", "id": "rust:sample::validate", "goal": "implemented" })).await;
     assert!(!err && text.contains("Not yet") && text.contains("[anti_patterns/tiny]"), "the blocking review blocks: {text}");
     let (err, _) = mcp.tool("review", json!({ "plan": "v", "id": "rust:ghost" })).await;
@@ -110,7 +136,9 @@ async fn tools_reviews_and_refresh_over_rest_and_mcp() {
     // Shrink it below the limit and verify; then a change elsewhere breaks
     // the call and a refresh reports it.
     let lib = arch.root().join("src/lib.rs");
-    let code = std::fs::read_to_string(&lib).unwrap().replace("    crate::store::Store::new();\n    !input.is_empty()\n}", "    crate::store::Store::new(); !input.is_empty() }");
+    let code = std::fs::read_to_string(&lib)
+        .unwrap()
+        .replace("    crate::store::Store::new();\n    !input.is_empty()\n}", "    crate::store::Store::new(); !input.is_empty() }");
     std::fs::write(&lib, code).unwrap();
     let (err, text) = mcp.tool("verify", json!({ "plan": "v", "id": "rust:sample::validate", "goal": "implemented" })).await;
     assert!(!err && text.contains("is now Implemented"), "{text}");
@@ -139,8 +167,11 @@ async fn the_watcher_reverifies_when_a_file_changes() {
     // Give the watcher a moment to register, then break the planned call.
     tokio::time::sleep(Duration::from_millis(200)).await;
     let lib = arch.root().join("src/lib.rs");
-    std::fs::write(&lib, std::fs::read_to_string(&lib).unwrap().replace("    crate::store::Store::new();\n    !input", "    !input")).unwrap();
-    let validated = |events: &[ArchEvent]| events.iter().any(|e| matches!(e, ArchEvent::Validated { component: Some(c), errors: 1, .. } if c == &id("sample::validate")));
+    std::fs::write(&lib, std::fs::read_to_string(&lib).unwrap().replace("    crate::store::Store::new();\n    !input", "    !input"))
+        .unwrap();
+    let validated = |events: &[ArchEvent]| {
+        events.iter().any(|e| matches!(e, ArchEvent::Validated { component: Some(c), errors: 1, .. } if c == &id("sample::validate")))
+    };
     for _ in 0..100 {
         if validated(&seen.lock().unwrap()) {
             return;

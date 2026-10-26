@@ -1,12 +1,22 @@
 //! The card: what it hands back, the answers' keys, the drafts.
 
-use harness_contracts::{ApprovalDecision, ApprovalOption, Question, QuestionOption, RequestId, RequestKind, RequestStatus, RuntimeRequest, ThreadId};
+use harness_contracts::{
+    ApprovalDecision, ApprovalOption, Question, QuestionOption, RequestId, RequestKind, RequestStatus, RuntimeRequest, ThreadId,
+};
 
 use super::*;
 
 fn request() -> RuntimeRequest {
     let option = |label: &str| QuestionOption { label: label.into(), description: None, value: None };
-    let question = |id: &str, multi: bool, required: bool| Question { id: id.into(), header: id.into(), question: format!("{id}?"), options: vec![option("a"), option("b")], multi_select: multi, allow_custom_answer: true, required };
+    let question = |id: &str, multi: bool, required: bool| Question {
+        id: id.into(),
+        header: id.into(),
+        question: format!("{id}?"),
+        options: vec![option("a"), option("b")],
+        multi_select: multi,
+        allow_custom_answer: true,
+        required,
+    };
     RuntimeRequest {
         id: RequestId::new("r"),
         thread_id: ThreadId::new("t"),
@@ -29,9 +39,21 @@ fn request() -> RuntimeRequest {
 fn an_answers_key_is_its_kinds_only_when_its_the_only_one_of_its_kind() {
     let mut asked = request();
     let names = |r: &RuntimeRequest| answers(r).into_iter().map(|a| (a.option, a.alias)).collect::<Vec<_>>();
-    assert_eq!(names(&asked), [("submit".to_owned(), Some("request.accept".to_owned())), ("decline".to_owned(), Some("request.decline".to_owned()))]);
-    asked.options.push(ApprovalOption { id: "other".into(), decision: ApprovalDecision::Accept, label: "Other answer".into(), warning: None });
-    assert_eq!(names(&asked), [("submit".to_owned(), None), ("decline".to_owned(), Some("request.decline".to_owned())), ("other".to_owned(), None)], "two answers that accept: numbered, not both y");
+    assert_eq!(
+        names(&asked),
+        [("submit".to_owned(), Some("request.accept".to_owned())), ("decline".to_owned(), Some("request.decline".to_owned()))]
+    );
+    asked.options.push(ApprovalOption {
+        id: "other".into(),
+        decision: ApprovalDecision::Accept,
+        label: "Other answer".into(),
+        warning: None,
+    });
+    assert_eq!(
+        names(&asked),
+        [("submit".to_owned(), None), ("decline".to_owned(), Some("request.decline".to_owned())), ("other".to_owned(), None)],
+        "two answers that accept: numbered, not both y"
+    );
     asked.status = RequestStatus::Resolved;
     assert!(answers(&asked).is_empty(), "answered: nothing to offer");
 }
@@ -58,11 +80,14 @@ fn picks_and_typed_answers_make_the_response_and_skipping_sends_none() {
 fn texts(request: &RuntimeRequest) -> String {
     let ctx = egui::Context::default();
     let mut drafts = Drafts::default();
-    let out = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() }, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            render_request(ui, request, &mut drafts);
-        });
-    });
+    let out = ctx.run(
+        egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_request(ui, request, &mut drafts);
+            });
+        },
+    );
     fn all(shape: &egui::Shape, out: &mut Vec<String>) {
         match shape {
             egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
@@ -85,7 +110,10 @@ fn asked(kind: RequestKind, options: &[(&str, ApprovalDecision, &str)]) -> Runti
         status: RequestStatus::Pending,
         title: "Which store?".into(),
         detail: None,
-        options: options.iter().map(|(id, decision, label)| ApprovalOption { id: (*id).into(), decision: *decision, label: (*label).into(), warning: None }).collect(),
+        options: options
+            .iter()
+            .map(|(id, decision, label)| ApprovalOption { id: (*id).into(), decision: *decision, label: (*label).into(), warning: None })
+            .collect(),
         questions: Vec::new(),
         response: None,
     }
@@ -99,12 +127,27 @@ fn a_question_reads_as_one_its_answers_a_list_under_it_and_an_approval_as_what_i
     assert!(text.contains("Asks you") && !text.to_lowercase().contains("permission"), "{text}");
     assert!(!text.contains("Redis"), "its answers aren't the card's: they're its actions: {text}");
     let shown: Vec<(String, Style, Tone)> = answers(&question).into_iter().map(|a| (a.caption, a.style, a.tone)).collect();
-    assert_eq!(shown, [("Redis".to_owned(), Style::Choice, Tone::Plain), ("Postgres".to_owned(), Style::Choice, Tone::Plain)], "a list to pick from");
+    assert_eq!(
+        shown,
+        [("Redis".to_owned(), Style::Choice, Tone::Plain), ("Postgres".to_owned(), Style::Choice, Tone::Plain)],
+        "a list to pick from"
+    );
     let answer = answers(&question).remove(0);
-    assert_eq!(answer.place(Action::new(answer.id.clone(), answer.label.clone(), "Answers", ()), Under::Nowhere).at(), None, "not shown: keys and the palette only");
+    assert_eq!(
+        answer.place(Action::new(answer.id.clone(), answer.label.clone(), "Answers", ()), Under::Nowhere).at(),
+        None,
+        "not shown: keys and the palette only"
+    );
     let placed = answer.place(Action::new(answer.id.clone(), answer.label.clone(), "Answers", ()), Under::Place("7"));
-    assert_eq!((placed.at(), placed.control.and_then(|c| c.under)), (Some(At::Waiting), Some("7".to_owned())), "under it (its place), typing or not");
-    let command = asked(RequestKind::Approval { action: harness_contracts::ToolAction::Command }, &[("allow", ApprovalDecision::Accept, "Allow"), ("deny", ApprovalDecision::Decline, "Deny")]);
+    assert_eq!(
+        (placed.at(), placed.control.and_then(|c| c.under)),
+        (Some(At::Waiting), Some("7".to_owned())),
+        "under it (its place), typing or not"
+    );
+    let command = asked(
+        RequestKind::Approval { action: harness_contracts::ToolAction::Command },
+        &[("allow", ApprovalDecision::Accept, "Allow"), ("deny", ApprovalDecision::Decline, "Deny")],
+    );
     assert!(texts(&command).contains("Wants to run a command"));
     let shown: Vec<(String, Style, Tone)> = answers(&command).into_iter().map(|a| (a.caption, a.style, a.tone)).collect();
     assert_eq!(shown, [("Allow".to_owned(), Style::Button, Tone::Ok), ("Deny".to_owned(), Style::Button, Tone::Error)]);

@@ -19,15 +19,34 @@ use crate::net::{NetClient, NetResult};
 #[derive(Clone, Debug, PartialEq)]
 pub enum TagAct {
     /// Tag `subject` with `tag` (a tag's id, or a new tag's name).
-    Tag { tag: String, subject: Subject },
-    Untag { tag: TagId, subject: Subject },
-    Rename { tag: TagId, name: String },
-    Recolour { tag: TagId, colour: u8 },
+    Tag {
+        tag: String,
+        subject: Subject,
+    },
+    Untag {
+        tag: TagId,
+        subject: Subject,
+    },
+    Rename {
+        tag: TagId,
+        name: String,
+    },
+    Recolour {
+        tag: TagId,
+        colour: u8,
+    },
     /// Its note (empty: none).
-    Note { tag: TagId, note: String },
-    Delete { tag: TagId },
+    Note {
+        tag: TagId,
+        note: String,
+    },
+    Delete {
+        tag: TagId,
+    },
     /// What its things say now (read again).
-    Read { tag: TagId },
+    Read {
+        tag: TagId,
+    },
 }
 
 /// A thing's name (its owner's: `Tagged::what`), or that nothing here
@@ -145,13 +164,35 @@ impl Tags {
             }
         };
         match act {
-            TagAct::Tag { tag, subject } => net.tag(&tag, &subject, ctx, say(Box::new(|t| format!("Tagged with {}.", t.name)), "Couldn't tag it")),
-            TagAct::Untag { tag, subject } => net.untag(&tag, &subject, ctx, say(Box::new(|t| format!("Took {} off it.", t.name)), "Couldn't take the tag off")),
-            TagAct::Rename { tag, name } => net.edit_tag(&tag, serde_json::json!({ "name": name }), ctx, say(Box::new(|t| format!("Renamed it {}.", t.name)), "Couldn't rename the tag")),
-            TagAct::Recolour { tag, colour } => net.edit_tag(&tag, serde_json::json!({ "colour": colour }), ctx, say(Box::new(|t| format!("Gave {} another colour.", t.name)), "Couldn't recolour the tag")),
+            TagAct::Tag { tag, subject } => {
+                net.tag(&tag, &subject, ctx, say(Box::new(|t| format!("Tagged with {}.", t.name)), "Couldn't tag it"))
+            }
+            TagAct::Untag { tag, subject } => {
+                net.untag(&tag, &subject, ctx, say(Box::new(|t| format!("Took {} off it.", t.name)), "Couldn't take the tag off"))
+            }
+            TagAct::Rename { tag, name } => net.edit_tag(
+                &tag,
+                serde_json::json!({ "name": name }),
+                ctx,
+                say(Box::new(|t| format!("Renamed it {}.", t.name)), "Couldn't rename the tag"),
+            ),
+            TagAct::Recolour { tag, colour } => net.edit_tag(
+                &tag,
+                serde_json::json!({ "colour": colour }),
+                ctx,
+                say(Box::new(|t| format!("Gave {} another colour.", t.name)), "Couldn't recolour the tag"),
+            ),
             TagAct::Note { tag, note } => {
                 let cleared = note.is_empty();
-                net.edit_tag(&tag, serde_json::json!({ "note": note }), ctx, say(Box::new(move |t| if cleared { format!("Cleared {}'s note.", t.name) } else { format!("Noted {}.", t.name) }), "Couldn't change the tag's note"));
+                net.edit_tag(
+                    &tag,
+                    serde_json::json!({ "note": note }),
+                    ctx,
+                    say(
+                        Box::new(move |t| if cleared { format!("Cleared {}'s note.", t.name) } else { format!("Noted {}.", t.name) }),
+                        "Couldn't change the tag's note",
+                    ),
+                );
             }
             TagAct::Delete { tag } => {
                 let name = self.tags.get(&tag).map_or_else(|| "the tag".to_owned(), |t| t.name.clone());

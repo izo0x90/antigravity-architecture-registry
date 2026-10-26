@@ -11,7 +11,12 @@ fn repo() -> &'static Path {
 #[test]
 fn no_screenshots_in_the_repository() {
     for dir in [repo(), Path::new(env!("CARGO_MANIFEST_DIR"))] {
-        let pngs: Vec<String> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".png")).collect();
+        let pngs: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".png"))
+            .collect();
         assert!(pngs.is_empty(), "{}: {pngs:?}", dir.display());
     }
 }
@@ -20,7 +25,8 @@ fn no_screenshots_in_the_repository() {
 fn the_cockpit_build_is_not_kept_in_git() {
     let ignore = std::fs::read_to_string(repo().join(".gitignore")).unwrap();
     assert!(ignore.lines().any(|l| l.trim() == "meta-harness/static/wasm/"), "ignored");
-    let tracked = std::process::Command::new("git").args(["ls-files", "--cached", "meta-harness/static/wasm"]).current_dir(repo()).output().unwrap();
+    let tracked =
+        std::process::Command::new("git").args(["ls-files", "--cached", "meta-harness/static/wasm"]).current_dir(repo()).output().unwrap();
     assert!(String::from_utf8_lossy(&tracked.stdout).trim().is_empty(), "not in the index");
 }
 

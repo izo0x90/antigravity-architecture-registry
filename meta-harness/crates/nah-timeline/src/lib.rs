@@ -183,7 +183,12 @@ impl Timeline {
 
     /// The events the timeline reads.
     fn matters(event: &ClientEvent) -> bool {
-        matches!(event, ClientEvent::SlotUpdated { .. } | ClientEvent::ThreadClosed { .. } | ClientEvent::Session { event: AdapterEvent::TurnUpdated { .. } })
+        matches!(
+            event,
+            ClientEvent::SlotUpdated { .. }
+                | ClientEvent::ThreadClosed { .. }
+                | ClientEvent::Session { event: AdapterEvent::TurnUpdated { .. } }
+        )
     }
 
     /// What an event means for the timeline: a turn's start or end takes a
@@ -219,7 +224,17 @@ impl Timeline {
     fn turn_started(&self, turn: &str, thread: &str, now: u64) -> Result<()> {
         let start = self.take_snapshot(&format!("turn {turn} started"), now)?;
         let slot = self.lock().slots.get(thread).cloned().unwrap_or_default();
-        stored(self.store.put_turn(&TurnSpan { turn: turn.to_owned(), thread: thread.to_owned(), slot, started_ms: now, start: start.id, ended_ms: None, end: None, files: None, closed_ms: None }))?;
+        stored(self.store.put_turn(&TurnSpan {
+            turn: turn.to_owned(),
+            thread: thread.to_owned(),
+            slot,
+            started_ms: now,
+            start: start.id,
+            ended_ms: None,
+            end: None,
+            files: None,
+            closed_ms: None,
+        }))?;
         self.lock().running.insert(turn.to_owned());
         Ok(())
     }
@@ -228,7 +243,10 @@ impl Timeline {
         self.lock().running.remove(turn);
         let Some(mut span) = stored(self.store.turns())?.into_iter().find(|t| t.turn == turn) else { return Ok(()) };
         let end = self.take_snapshot(&format!("turn {turn} ended"), now)?;
-        let files = self.changes.changed_paths(&Comparison { from: Point::Snapshot(span.start.clone()), to: Point::Snapshot(end.id.clone()) })?.len() as u32;
+        let files = self
+            .changes
+            .changed_paths(&Comparison { from: Point::Snapshot(span.start.clone()), to: Point::Snapshot(end.id.clone()) })?
+            .len() as u32;
         (span.ended_ms, span.end, span.files) = (Some(now), Some(end.id), Some(files));
         stored(self.store.put_turn(&span))
     }
@@ -240,7 +258,10 @@ impl Timeline {
         let (snapshot, new) = self.changes.snapshot(why, last.as_ref())?;
         if new {
             let files = match &last {
-                Some(l) => self.changes.changed_paths(&Comparison { from: Point::Snapshot(l.id.clone()), to: Point::Snapshot(snapshot.id.clone()) })?.len() as u32,
+                Some(l) => self
+                    .changes
+                    .changed_paths(&Comparison { from: Point::Snapshot(l.id.clone()), to: Point::Snapshot(snapshot.id.clone()) })?
+                    .len() as u32,
                 None => 0,
             };
             // When it was taken, by the same clock as the turns.
@@ -263,7 +284,9 @@ impl Timeline {
         let latest = self.lock().last.as_ref().map(|s| s.id.clone());
         let snapshots: Vec<String> = stored(self.store.snapshots())?
             .into_iter()
-            .filter(|s| Some(&s.id) != latest.as_ref() && (s.at_ms + keep < now || (!needed.contains(s.id.as_str()) && s.at_ms + closed < now)))
+            .filter(|s| {
+                Some(&s.id) != latest.as_ref() && (s.at_ms + keep < now || (!needed.contains(s.id.as_str()) && s.at_ms + closed < now))
+            })
             .map(|s| s.id)
             .collect();
         if old.is_empty() && snapshots.is_empty() {
@@ -281,18 +304,35 @@ impl Timeline {
         let mut snapshots = stored(self.store.snapshots())?;
         snapshots.sort_by_key(|s| s.at_ms);
         let running = self.lock().running.clone();
-        let mut turns: Vec<TurnSpan> = stored(self.store.turns())?.into_iter().filter(|t| t.end.is_some() || running.contains(&t.turn)).collect();
+        let mut turns: Vec<TurnSpan> =
+            stored(self.store.turns())?.into_iter().filter(|t| t.end.is_some() || running.contains(&t.turn)).collect();
         turns.sort_by(|a, b| (a.started_ms, &a.turn).cmp(&(b.started_ms, &b.turn)));
-        let count = |from: &str, to: Point| -> Result<u32> { Ok(self.changes.changed_paths(&Comparison { from: Point::Snapshot(from.to_owned()), to })?.len() as u32) };
+        let count = |from: &str, to: Point| -> Result<u32> {
+            Ok(self.changes.changed_paths(&Comparison { from: Point::Snapshot(from.to_owned()), to })?.len() as u32)
+        };
         let mut windows = Vec::with_capacity(snapshots.len());
         for pair in snapshots.windows(2) {
             let (a, b) = (&pair[0], &pair[1]);
             // Counted when taken, unless the one before it was let go since.
             let files = if b.previous.as_ref() == Some(&a.id) { b.files } else { count(&a.id, Point::Snapshot(b.id.clone()))? };
-            windows.push(Window { from: a.id.clone(), to: Some(b.id.clone()), started_ms: a.at_ms, ended_ms: Some(b.at_ms), working: working(&turns, a.at_ms, b.at_ms, now, None), files });
+            windows.push(Window {
+                from: a.id.clone(),
+                to: Some(b.id.clone()),
+                started_ms: a.at_ms,
+                ended_ms: Some(b.at_ms),
+                working: working(&turns, a.at_ms, b.at_ms, now, None),
+                files,
+            });
         }
         if let Some(last) = snapshots.last() {
-            windows.push(Window { from: last.id.clone(), to: None, started_ms: last.at_ms, ended_ms: None, working: working(&turns, last.at_ms, now, now, None), files: count(&last.id, Point::Files)? });
+            windows.push(Window {
+                from: last.id.clone(),
+                to: None,
+                started_ms: last.at_ms,
+                ended_ms: None,
+                working: working(&turns, last.at_ms, now, now, None),
+                files: count(&last.id, Point::Files)?,
+            });
         }
         let mut changes = Vec::with_capacity(turns.len());
         for t in &turns {

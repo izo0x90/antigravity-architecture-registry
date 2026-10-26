@@ -11,7 +11,10 @@ use harness_contracts::ClientEvent;
 use harness_core::EventHub;
 use tokio_tungstenite::tungstenite::Message;
 
-async fn next(ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin), within: Duration) -> Option<ClientEvent> {
+async fn next(
+    ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
+    within: Duration,
+) -> Option<ClientEvent> {
     loop {
         match tokio::time::timeout(within, ws.next()).await {
             Ok(Some(Ok(Message::Text(text)))) => return Some(serde_json::from_str(&text).unwrap()),

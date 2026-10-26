@@ -77,7 +77,10 @@ impl TerminalBuffer {
         let id = egui::Id::new(("terminal_grid", cx.at));
         let response = ui.interact(rect, id, Sense::click_and_drag());
         let grid_rect = Rect::from_min_max(rect.min, pos2((rect.right() - bar_w).max(rect.left()), rect.bottom()));
-        let size = TermSize { cols: (grid_rect.width() / self.char_w).floor().clamp(10.0, 1000.0) as u16, rows: (grid_rect.height() / row_h).floor().clamp(3.0, 500.0) as u16 };
+        let size = TermSize {
+            cols: (grid_rect.width() / self.char_w).floor().clamp(10.0, 1000.0) as u16,
+            rows: (grid_rect.height() / row_h).floor().clamp(3.0, 500.0) as u16,
+        };
         // Its size, said at once the first time; a new one once it's held
         // still a moment (a panel's edge dragged makes one each frame, and
         // a new width lays every line out anew).
@@ -117,7 +120,13 @@ impl TerminalBuffer {
         self.waiting = if missing { Some(self.waiting.unwrap_or(self.clock)) } else { None };
         // (Following the live screen, what's new shows at once.)
         let top = match self.drawn {
-            Some(before) if missing && !self.view.live() && (span.first..span.end).contains(&before) && self.lines.has(rows(before)) && self.waiting.is_some_and(|since| self.clock - since < WAIT_S) => {
+            Some(before)
+                if missing
+                    && !self.view.live()
+                    && (span.first..span.end).contains(&before)
+                    && self.lines.has(rows(before))
+                    && self.waiting.is_some_and(|since| self.clock - since < WAIT_S) =>
+            {
                 ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(WAIT_S));
                 before
             }
@@ -140,7 +149,10 @@ impl TerminalBuffer {
             let text = self.lines.text(l).unwrap_or_default();
             let y = grid_rect.top() + (l - top) as f32 * row_h;
             for link in crate::places::links(&text, &folder, crate::places::Names::Bare) {
-                let at = Rect::from_min_size(pos2(grid_rect.left() + f32::from(link.col) * char_w, y), vec2(f32::from(link.len) * char_w, row_h));
+                let at = Rect::from_min_size(
+                    pos2(grid_rect.left() + f32::from(link.col) * char_w, y),
+                    vec2(f32::from(link.len) * char_w, row_h),
+                );
                 if at.intersects(grid_rect) {
                     spots.push(crate::nav::Spot { key: format!("{l}:{}", link.col), rect: at });
                 }
@@ -211,7 +223,11 @@ impl TerminalBuffer {
             {
                 let from = if line == l0 { f32::from(c0) } else { 0.0 };
                 let to = if line == l1 { f32::from(c1) + 1.0 } else { rect.width() / char_w };
-                painter.rect_filled(Rect::from_min_max(pos2(rect.left() + from * char_w, top), pos2(rect.left() + to * char_w, top + row_h)), 0.0, theme.widget_selection);
+                painter.rect_filled(
+                    Rect::from_min_max(pos2(rect.left() + from * char_w, top), pos2(rect.left() + to * char_w, top + row_h)),
+                    0.0,
+                    theme.widget_selection,
+                );
             }
             if let Some(row) = self.lines.shown(line) {
                 paint_row(&painter, row, pos2(rect.left(), top), char_w, row_h, font, theme);
@@ -233,7 +249,10 @@ impl TerminalBuffer {
     /// The scrollbar: where the window is in all the lines (none when they fit).
     fn paint_bar(&self, painter: &egui::Painter, bar: Rect, span: super::view::Span, theme: &Theme) {
         let Some((at, len)) = self.view.thumb(span) else { return };
-        let thumb = Rect::from_min_size(pos2(bar.left() + bar.width() / 4.0, bar.top() + at * bar.height()), vec2(bar.width() / 2.0, (len * bar.height()).max(self.char_w)));
+        let thumb = Rect::from_min_size(
+            pos2(bar.left() + bar.width() / 4.0, bar.top() + at * bar.height()),
+            vec2(bar.width() / 2.0, (len * bar.height()).max(self.char_w)),
+        );
         painter.rect_filled(thumb, thumb.width() / 2.0, if self.thumb_held.is_some() { theme.text } else { theme.muted });
     }
 
@@ -301,7 +320,9 @@ impl TerminalBuffer {
     fn typing(&mut self, ui: &egui::Ui, response: &egui::Response, id: egui::Id, grid: Grid, keys: Keys, cx: &mut RunCx<'_>) {
         let (rect, first, row_h) = (grid.rect, grid.first, grid.row_h);
         response.request_focus();
-        ui.memory_mut(|m| m.set_focus_lock_filter(id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true }));
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
+        });
         // Where the program's cursor is, kept on the grid (scrolled back, it's
         // below it: the browser would scroll the page to its text field).
         let (line, col, _) = self.lines.cursor();

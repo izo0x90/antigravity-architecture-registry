@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::v1 as acp;
 use harness_contracts::{
-    Account, ApprovalCapabilities, ApprovalOption, AuthStatus, RequestKind, Capabilities, InteractionMode, Launch,
-    PlanningCapabilities, RuntimeMode, RuntimePolicy, SessionCapabilities, SignIn, StreamingCapabilities, SubagentCapabilities,
-    ToolCapabilities, ToolKind, TurnCapabilities,
+    Account, ApprovalCapabilities, ApprovalOption, AuthStatus, Capabilities, InteractionMode, Launch, PlanningCapabilities, RequestKind,
+    RuntimeMode, RuntimePolicy, SessionCapabilities, SignIn, StreamingCapabilities, SubagentCapabilities, ToolCapabilities, ToolKind,
+    TurnCapabilities,
 };
 
 use crate::settings::{AcpSettings, Places};
@@ -64,7 +64,9 @@ impl Profile {
         let home = self.settings.home.as_ref()?;
         Some(match &self.kept_home {
             Some(kept) => harness_contracts::HarnessHome { path: kept.display().to_string(), kept: true },
-            None => harness_contracts::HarnessHome { path: self.places.path(&format!("{{{}}}", home.dir)).display().to_string(), kept: false },
+            None => {
+                harness_contracts::HarnessHome { path: self.places.path(&format!("{{{}}}", home.dir)).display().to_string(), kept: false }
+            }
         })
     }
 
@@ -76,10 +78,17 @@ impl Profile {
             streaming: StreamingCapabilities { assistant_text: true, reasoning: true, tool_output: true },
             tools: ToolCapabilities { mcp_http: true, client_file_system: self.settings.client_fs, ..Default::default() },
             approvals: ApprovalCapabilities { command_approval: true, file_change_approval: true, live_only: true },
-            planning: PlanningCapabilities { todo_list: true, structured_questions: self.settings.advertise.elicitation_form, ..Default::default() },
+            planning: PlanningCapabilities {
+                todo_list: true,
+                structured_questions: self.settings.advertise.elicitation_form,
+                ..Default::default()
+            },
             // Told of by the call that starts them, or announced with their
             // own steps and state.
-            subagents: SubagentCapabilities { supported: self.settings.subagents.declare || self.settings.subagents.started_by.is_some(), lifecycle_events: self.settings.subagents.declare },
+            subagents: SubagentCapabilities {
+                supported: self.settings.subagents.declare || self.settings.subagents.started_by.is_some(),
+                lifecycle_events: self.settings.subagents.declare,
+            },
             ..Default::default()
         }
     }
@@ -166,7 +175,8 @@ impl Profile {
     /// sub-agents when its pack says it tells of them so (a capability the
     /// ACP schema we build on doesn't have yet: added to what it writes).
     pub fn initialize(&self, files: bool) -> Result<agent_client_protocol::UntypedMessage, agent_client_protocol::Error> {
-        let request = acp::InitializeRequest::new(agent_client_protocol::schema::ProtocolVersion::V1).client_capabilities(self.client_capabilities(files));
+        let request = acp::InitializeRequest::new(agent_client_protocol::schema::ProtocolVersion::V1)
+            .client_capabilities(self.client_capabilities(files));
         let mut params = serde_json::to_value(request).map_err(|e| agent_client_protocol::Error::internal_error().data(e.to_string()))?;
         if self.settings.subagents.declare
             && let Some(caps) = params.get_mut("clientCapabilities").and_then(serde_json::Value::as_object_mut)
@@ -200,7 +210,9 @@ impl Profile {
 
     pub fn declared(&self, init: &acp::InitializeResponse) -> Declared {
         let json = serde_json::to_value(init).unwrap_or_default();
-        let says = |pointer: Option<&str>| pointer.and_then(|p| json.pointer(p)).is_some_and(|v| !matches!(v, serde_json::Value::Bool(false) | serde_json::Value::Null));
+        let says = |pointer: Option<&str>| {
+            pointer.and_then(|p| json.pointer(p)).is_some_and(|v| !matches!(v, serde_json::Value::Bool(false) | serde_json::Value::Null))
+        };
         let sign_in = self.settings.sign_in.as_ref();
         Declared {
             queueing: says(self.settings.queueing.as_deref()),
@@ -213,7 +225,9 @@ impl Profile {
     /// Who it says it's signed in as, if `method` is how it says so.
     pub fn sign_in(&self, method: &str, params: &serde_json::Value) -> Option<SignIn> {
         let settings = self.settings.sign_in.as_ref().filter(|s| s.notification == method)?;
-        let text = |pointer: &Option<String>| pointer.as_deref().and_then(|p| params.pointer(p)).and_then(serde_json::Value::as_str).map(str::to_owned);
+        let text = |pointer: &Option<String>| {
+            pointer.as_deref().and_then(|p| params.pointer(p)).and_then(serde_json::Value::as_str).map(str::to_owned)
+        };
         let status = text(&Some(settings.status.clone()))?;
         if settings.signed_out.contains(&status) {
             return Some(SignIn { status: AuthStatus::SignedOut, account: None });
@@ -229,7 +243,9 @@ impl Profile {
 
     /// File access for a session working in `cwd`, when it's given it.
     pub fn workspace(&self, cwd: &Path) -> Option<WorkspaceFs> {
-        self.settings.client_fs.then(|| WorkspaceFs::new(vec![cwd.to_path_buf()], self.private.iter().chain(&self.kept_home).cloned().collect()))
+        self.settings
+            .client_fs
+            .then(|| WorkspaceFs::new(vec![cwd.to_path_buf()], self.private.iter().chain(&self.kept_home).cloned().collect()))
     }
 
     /// The suffix of a question's own answer box, if its forms have them.
@@ -249,10 +265,16 @@ mod tests {
 
     #[test]
     fn planning_and_runtime_modes_map_to_the_agents_and_back() {
-        let modes = Modes { approval_required: Some("default".into()), full_access: Some("bypass".into()), plan: Some("plan".into()), ..Modes::default() };
+        let modes = Modes {
+            approval_required: Some("default".into()),
+            full_access: Some("bypass".into()),
+            plan: Some("plan".into()),
+            ..Modes::default()
+        };
         let p = profile(AcpSettings { modes, ..AcpSettings::default() });
         let available: Vec<String> = ["default", "bypass", "plan"].map(String::from).to_vec();
-        let plan = RuntimePolicy { interaction_mode: InteractionMode::Plan, runtime_mode: RuntimeMode::FullAccess, ..RuntimePolicy::default() };
+        let plan =
+            RuntimePolicy { interaction_mode: InteractionMode::Plan, runtime_mode: RuntimeMode::FullAccess, ..RuntimePolicy::default() };
         assert_eq!(p.native_mode(&plan, &available).as_deref(), Some("plan"));
         let full = RuntimePolicy { runtime_mode: RuntimeMode::FullAccess, ..RuntimePolicy::default() };
         assert_eq!(p.native_mode(&full, &available).as_deref(), Some("bypass"));
@@ -279,7 +301,10 @@ mod tests {
         let account = serde_json::json!({ "authStatus": { "kind": "account", "label": "Claude Max", "account": { "plan": "max", "email": "a@b.c" } } });
         let signed = p.sign_in("_auth/status_update", &account).unwrap();
         assert_eq!(signed.status, AuthStatus::SignedIn);
-        assert_eq!(signed.account.unwrap(), Account { label: "Claude Max".into(), email: Some("a@b.c".into()), plan: Some("max".into()), organization: None });
+        assert_eq!(
+            signed.account.unwrap(),
+            Account { label: "Claude Max".into(), email: Some("a@b.c".into()), plan: Some("max".into()), organization: None }
+        );
         let out = p.sign_in("_auth/status_update", &serde_json::json!({ "authStatus": { "kind": "none" } })).unwrap();
         assert_eq!(out, SignIn { status: AuthStatus::SignedOut, account: None });
         assert_eq!(p.sign_in("_other", &account), None);

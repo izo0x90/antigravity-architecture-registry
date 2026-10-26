@@ -56,7 +56,11 @@ pub fn bridge_architecture_events(arch: &arch_service::ArchitectureService, hub:
 }
 
 /// The work queues, publishing their progress to every client.
-pub fn queue_runner(arch: &Arc<arch_service::ArchitectureService>, config: arch_service::QueueConfig, hub: &Arc<EventHub>) -> Arc<crate::queue::QueueRunner> {
+pub fn queue_runner(
+    arch: &Arc<arch_service::ArchitectureService>,
+    config: arch_service::QueueConfig,
+    hub: &Arc<EventHub>,
+) -> Arc<crate::queue::QueueRunner> {
     let hub = hub.clone();
     crate::queue::QueueRunner::new(arch.clone(), config, move |event| hub.publish(harness_contracts::ClientEvent::Architecture { event }))
 }
@@ -94,7 +98,11 @@ pub fn request_span<B>(request: &axum::http::Request<B>) -> tracing::Span {
 /// every API error is `{ "error": "..." }`.
 async fn json_errors(response: Response) -> Response {
     let status = response.status();
-    let is_json = response.headers().get(axum::http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|v| v.starts_with("application/json"));
+    let is_json = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("application/json"));
     if !(status.is_client_error() || status.is_server_error()) || is_json {
         return response;
     }
@@ -113,7 +121,10 @@ pub(crate) async fn with_state<T: Send + 'static>(
     f: impl FnOnce(&nah_state::StateDb) -> Result<T, nah_state::StateError> + Send + 'static,
 ) -> Result<T, StateFailed> {
     let db = db.clone();
-    tokio::task::spawn_blocking(move || f(&db)).await.map_err(|e| StateFailed(nah_state::StateError::Failed(e.to_string())))?.map_err(StateFailed)
+    tokio::task::spawn_blocking(move || f(&db))
+        .await
+        .map_err(|e| StateFailed(nah_state::StateError::Failed(e.to_string())))?
+        .map_err(StateFailed)
 }
 
 /// A state database error as an HTTP response: `{ "error": "..." }`.

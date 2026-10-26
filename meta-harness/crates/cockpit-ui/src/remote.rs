@@ -212,7 +212,12 @@ impl Remote {
     }
 
     fn click_at(&mut self, at: egui::Pos2, clicked: Option<String>, respond: Responder) {
-        let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
         self.queue(vec![egui::Event::PointerMoved(at)], egui::Modifiers::NONE);
         self.queue(vec![button(true)], egui::Modifiers::NONE);
         self.queue(vec![button(false)], egui::Modifiers::NONE);
@@ -298,14 +303,17 @@ impl Remote {
                 Err(e) => log::warn!("cockpit socket: no ticket: {}", e.message),
             }
         }
-        if self.socket.is_none() && now >= self.retry_at
+        if self.socket.is_none()
+            && now >= self.retry_at
             && let Some(done) = self.ticket_door.start()
         {
             net.cockpit_ticket(ctx.clone(), done);
         }
         match &self.socket {
             Some(socket) => socket.take_calls(&self.door),
-            None if !self.ticket_door.asking() => ctx.request_repaint_after(std::time::Duration::from_secs_f64((self.retry_at - now).max(0.1))),
+            None if !self.ticket_door.asking() => {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64((self.retry_at - now).max(0.1)))
+            }
             None => {}
         }
     }
@@ -341,10 +349,13 @@ fn key_press(name: &str) -> Result<crate::keymap::Chord, String> {
         "bs" => "Backspace".to_owned(),
         "pgup" => "PageUp".to_owned(),
         "pgdn" => "PageDown".to_owned(),
-        lower if key.chars().count() > 1 => lower.split('_').map(|w| {
-            let mut chars = w.chars();
-            chars.next().map(|c| c.to_ascii_uppercase().to_string() + chars.as_str()).unwrap_or_default()
-        }).collect(),
+        lower if key.chars().count() > 1 => lower
+            .split('_')
+            .map(|w| {
+                let mut chars = w.chars();
+                chars.next().map(|c| c.to_ascii_uppercase().to_string() + chars.as_str()).unwrap_or_default()
+            })
+            .collect(),
         _ => key.to_owned(),
     };
     crate::keymap::Chord::try_from(format!("{mods}{key}")).map_err(|e| format!("{name:?}: {e}"))
@@ -364,7 +375,13 @@ pub fn drawn_texts(ctx: &egui::Context) -> Vec<Drawn> {
                 }
                 if !text.is_empty() && rect.intersects(clip) {
                     let r = rect.intersect(clip);
-                    out.push(Drawn { text: text.to_owned(), x: r.min.x.round(), y: r.min.y.round(), w: r.width().round(), h: r.height().round() });
+                    out.push(Drawn {
+                        text: text.to_owned(),
+                        x: r.min.x.round(),
+                        y: r.min.y.round(),
+                        w: r.width().round(),
+                        h: r.height().round(),
+                    });
                 }
             }
             egui::Shape::Vec(list) => list.iter().for_each(|s| collect(s, clip, to_global, out)),
@@ -376,7 +393,8 @@ pub fn drawn_texts(ctx: &egui::Context) -> Vec<Drawn> {
     let mut out = Vec::new();
     for layer in layers {
         let to_global = ctx.layer_transform_to_global(layer);
-        let shapes: Vec<egui::epaint::ClippedShape> = ctx.graphics(|g| g.get(layer).map(|list| list.all_entries().cloned().collect()).unwrap_or_default());
+        let shapes: Vec<egui::epaint::ClippedShape> =
+            ctx.graphics(|g| g.get(layer).map(|list| list.all_entries().cloned().collect()).unwrap_or_default());
         for clipped in &shapes {
             let clip = to_global.map_or(clipped.clip_rect, |to| to.mul_rect(clipped.clip_rect)).intersect(screen);
             collect(&clipped.shape, clip, to_global, &mut out);

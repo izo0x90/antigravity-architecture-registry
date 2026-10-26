@@ -47,7 +47,8 @@ pub fn watch(arch: Arc<ArchitectureService>) -> notify::Result<()> {
         Err(errors) => errors.into_iter().for_each(|e| warn!("file watch error: {e}")),
     };
     // No file-id cache: it walks the whole tree (build output too) on start.
-    let mut debouncer = new_debouncer_opt::<_, notify::RecommendedWatcher, _>(window, None, handler, NoCache::new(), notify::Config::default())?;
+    let mut debouncer =
+        new_debouncer_opt::<_, notify::RecommendedWatcher, _>(window, None, handler, NoCache::new(), notify::Config::default())?;
     debouncer.watch(arch.root(), RecursiveMode::Recursive)?;
     // Rule files above the project apply to it too.
     for folder in arch.ignores().rule_folders_outside() {

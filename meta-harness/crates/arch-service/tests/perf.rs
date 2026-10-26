@@ -6,10 +6,10 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use arch_graph::tree::{TreeRequest, ViewKind, Way, problems};
 use arch_graph::TypeSystem;
-use code_analyzer::PackSet;
+use arch_graph::tree::{TreeRequest, ViewKind, Way, problems};
 use arch_service::{ArchitectureService, FsPlans, SearchKind};
+use code_analyzer::PackSet;
 
 mod common;
 
@@ -20,7 +20,9 @@ const BIG_TAG: &str = "tokio-1.47.1";
 /// Tokio, fetched over the network the first time; why not, when it
 /// can't be.
 fn big_repo() -> Result<PathBuf, String> {
-    let dir = std::env::var_os("NAH_BENCH_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap()).join(".cache/nah-bench"));
+    let dir = std::env::var_os("NAH_BENCH_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap()).join(".cache/nah-bench"));
     let repo = dir.join("tokio");
     if !repo.join(".git").exists() {
         std::fs::create_dir_all(&dir).unwrap();
@@ -80,7 +82,8 @@ fn load_plan(service: &ArchitectureService) -> arch_graph::PlanId {
 /// The service over `root`, its plans kept in the copy (so a restart has them).
 fn open(root: &Path) -> ArchitectureService {
     let facts = arch_service::open_facts(root, &arch_service::Limits::defaults().unwrap()).unwrap();
-    ArchitectureService::open(root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(FsPlans::new(root).unwrap()), facts).unwrap()
+    ArchitectureService::open(root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(FsPlans::new(root).unwrap()), facts)
+        .unwrap()
 }
 
 fn ms(since: Instant) -> u64 {
@@ -97,7 +100,16 @@ fn trees(name: &str, service: &ArchitectureService) {
         let tree = service.tree(&request).unwrap();
         let took = ms(t);
         let bytes = serde_json::to_vec(&tree).unwrap().len();
-        println!("perf {name} tree view={} way={:?} root={} depth={:?} ms={took} cards={} lines={} bytes={bytes} cut={:?}", request.view.name(), request.way, request.root.is_some(), request.depth, tree.cards.len(), tree.lines.len(), tree.cut.as_ref().map(|c| (c.shown, c.asked, c.hidden)));
+        println!(
+            "perf {name} tree view={} way={:?} root={} depth={:?} ms={took} cards={} lines={} bytes={bytes} cut={:?}",
+            request.view.name(),
+            request.way,
+            request.root.is_some(),
+            request.depth,
+            tree.cards.len(),
+            tree.lines.len(),
+            tree.cut.as_ref().map(|c| (c.shown, c.asked, c.hidden))
+        );
         assert!(took <= limits.perf.tree_ms, "{name}: {request:?} took {took} ms (limit {})", limits.perf.tree_ms);
         assert!(tree.cards.len() <= limits.cards_per_answer, "{name}: {} cards", tree.cards.len());
         let found = problems(&tree, &service.trees().layout);
@@ -112,7 +124,13 @@ fn trees(name: &str, service: &ArchitectureService) {
                 if let Some(busiest) = tree.cards.iter().max_by_key(|c| c.more).filter(|c| c.more > 0) {
                     check(TreeRequest { view, way, depth: Some(depth), root: Some(busiest.key.clone()), ..TreeRequest::default() });
                     let t = Instant::now();
-                    service.expand(&TreeRequest { view, way, depth: Some(1), root: Some(busiest.key.clone()), ..TreeRequest::default() }, &busiest.key, 1).unwrap();
+                    service
+                        .expand(
+                            &TreeRequest { view, way, depth: Some(1), root: Some(busiest.key.clone()), ..TreeRequest::default() },
+                            &busiest.key,
+                            1,
+                        )
+                        .unwrap();
                     assert!(ms(t) <= limits.perf.tree_ms * 2, "{name}: expanding {} took {} ms", busiest.key, ms(t));
                 }
             }
@@ -140,13 +158,21 @@ fn measure(name: &str, root: &Path, gate: OneFile) {
 
     // One file changed: the biggest Rust file gets a comment, and the
     // watcher's path takes it (with the plan loaded).
-    let file = code_analyzer::walk(root, root, &packs).unwrap().into_iter().filter(|f| f.path.as_str().ends_with(".rs")).max_by_key(|f| std::fs::metadata(&f.absolute).map(|m| m.len()).unwrap_or(0)).unwrap();
+    let file = code_analyzer::walk(root, root, &packs)
+        .unwrap()
+        .into_iter()
+        .filter(|f| f.path.as_str().ends_with(".rs"))
+        .max_by_key(|f| std::fs::metadata(&f.absolute).map(|m| m.len()).unwrap_or(0))
+        .unwrap();
     let text = std::fs::read_to_string(&file.absolute).unwrap();
     std::fs::write(&file.absolute, format!("{text}\n// changed\n")).unwrap();
     let t = Instant::now();
     let one = service.refresh(std::slice::from_ref(&file.absolute)).unwrap().ingest;
     let took = ms(t);
-    println!("perf {name} one_file ms={took} limit={one_file_limit} full={full} file={} parsed={} read={}", file.path, one.parsed, one.read);
+    println!(
+        "perf {name} one_file ms={took} limit={one_file_limit} full={full} file={} parsed={} read={}",
+        file.path, one.parsed, one.read
+    );
     assert_eq!((one.read, one.parsed), (1, 1), "{name}: {one:?}");
     assert!(took <= one_file_limit, "{name}: one file took {took} ms (limit {one_file_limit}; full index {full} ms)");
     // A change others can see: a new function (its name is new to every
@@ -179,11 +205,18 @@ fn measure(name: &str, root: &Path, gate: OneFile) {
     // The plan's own trees.
     for view in ViewKind::ALL {
         let t = Instant::now();
-        let tree = service.tree(&TreeRequest { view, source: arch_graph::Source::Plan(plan.clone()), depth: Some(4), ..TreeRequest::default() }).unwrap();
+        let tree = service
+            .tree(&TreeRequest { view, source: arch_graph::Source::Plan(plan.clone()), depth: Some(4), ..TreeRequest::default() })
+            .unwrap();
         println!("perf {name} plan_tree view={} ms={} cards={}", view.name(), ms(t), tree.cards.len());
         assert!(ms(t) <= limits.perf.tree_ms, "{name}: the plan's {} tree took {} ms", view.name(), ms(t));
     }
-    for (kind, query) in [(SearchKind::Symbols, "view"), (SearchKind::Symbols, "servce::serch"), (SearchKind::Files, "service"), (SearchKind::Text, "fn new")] {
+    for (kind, query) in [
+        (SearchKind::Symbols, "view"),
+        (SearchKind::Symbols, "servce::serch"),
+        (SearchKind::Files, "service"),
+        (SearchKind::Text, "fn new"),
+    ] {
         let t = Instant::now();
         let found = service.search(query, kind, &arch_graph::Source::Code, None, None).unwrap();
         let took = ms(t);

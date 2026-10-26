@@ -67,13 +67,26 @@ impl Resolve for Lines {
 
     fn named(&self, words: &str) -> Option<Result<Subject, String>> {
         let (first, last) = words.strip_prefix("lines ")?.split_once(" to ")?;
-        Some(first.parse().and_then(|first| Ok(Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first, last: last.parse()?, command: None })).map_err(|e| e.to_string()))
+        Some(
+            first
+                .parse()
+                .and_then(|first| {
+                    Ok(Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first, last: last.parse()?, command: None })
+                })
+                .map_err(|e| e.to_string()),
+        )
     }
 
     fn moved(&self, subject: &Subject) -> Option<Subject> {
         let Subject::TerminalLines { terminal, shell, first, last, command } = subject else { return None };
         let by = 1000 * self.relaid.load(Ordering::SeqCst);
-        (by > 0 && (100..1000).contains(first)).then(|| Subject::TerminalLines { terminal: terminal.clone(), shell: *shell, first: first + by, last: last + by, command: *command })
+        (by > 0 && (100..1000).contains(first)).then(|| Subject::TerminalLines {
+            terminal: terminal.clone(),
+            shell: *shell,
+            first: first + by,
+            last: last + by,
+            command: *command,
+        })
     }
 
     fn lasts(&self, subject: &Subject) -> bool {
@@ -82,7 +95,9 @@ impl Resolve for Lines {
 
     fn settle(&self, subject: &Subject) -> Result<Subject, String> {
         Ok(match subject.clone() {
-            Subject::TerminalLines { terminal, shell, first, last, command: None } if (600..700).contains(&first) => Subject::TerminalLines { terminal, shell, first, last, command: Some(6) },
+            Subject::TerminalLines { terminal, shell, first, last, command: None } if (600..700).contains(&first) => {
+                Subject::TerminalLines { terminal, shell, first, last, command: Some(6) }
+            }
             other => other,
         })
     }

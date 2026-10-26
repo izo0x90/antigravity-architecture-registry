@@ -144,7 +144,10 @@ impl Limits {
         // A client holds an answer and the branch it opens; closing other
         // branches can't make room when that alone is over the cap.
         if limits.cards_held < 2 * limits.cards_per_answer {
-            return Err(format!("limits: cards_held ({}) must be at least twice cards_per_answer ({}): a tree and the branch opened in it are held together", limits.cards_held, limits.cards_per_answer));
+            return Err(format!(
+                "limits: cards_held ({}) must be at least twice cards_per_answer ({}): a tree and the branch opened in it are held together",
+                limits.cards_held, limits.cards_per_answer
+            ));
         }
         Ok(limits)
     }

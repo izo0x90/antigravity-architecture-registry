@@ -38,7 +38,10 @@ pub enum Writing {
 enum Command {
     /// A session for the agent whose move it is (its last resumed, else a
     /// new one): it can't take its move without one.
-    Wake { slot: harness_contracts::SlotId, act: Box<crate::agents::Act> },
+    Wake {
+        slot: harness_contracts::SlotId,
+        act: Box<crate::agents::Act>,
+    },
     Reply,
     Settle,
     Reopen,
@@ -155,7 +158,11 @@ impl DiscussionView {
                 ui.label(RichText::new(format!("What it says couldn't be read: {e}")).size(look.text_small).color(colors().warn));
             }
             Some(Ok(now)) => {
-                ui.label(RichText::new(now.held.words()).size(look.text_small).color(if now.held == harness_contracts::Held::Source { colors().muted } else { colors().warn }));
+                ui.label(RichText::new(now.held.words()).size(look.text_small).color(if now.held == harness_contracts::Held::Source {
+                    colors().muted
+                } else {
+                    colors().warn
+                }));
                 if let Some(text) = &now.text {
                     let shown: Vec<&str> = text.lines().collect();
                     ui.label(RichText::new(shown.join("\n")).monospace().size(look.text_small).color(colors().text));
@@ -180,10 +187,13 @@ impl DiscussionView {
 impl crate::buffer::Buffer for DiscussionView {
     fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
         let Some(d) = self.shown() else {
-            ui.label(RichText::new(match &self.id {
-                Some(id) => format!("There's no discussion {id} (deleted, or not told yet)."),
-                None => "No discussion shown: open one (from what it's on, the plan tree, the inbox).".to_owned(),
-            }).color(colors().muted));
+            ui.label(
+                RichText::new(match &self.id {
+                    Some(id) => format!("There's no discussion {id} (deleted, or not told yet)."),
+                    None => "No discussion shown: open one (from what it's on, the plan tree, the inbox).".to_owned(),
+                })
+                .color(colors().muted),
+            );
             self.spots.clear();
             return;
         };
@@ -195,20 +205,32 @@ impl crate::buffer::Buffer for DiscussionView {
         let mut spots = Vec::new();
         let cursor = self.cursor;
         let box_height = look.text_body * 4.0 + look.space_l * 2.0;
-        let area = self.scrolling.area(egui::ScrollArea::vertical().id_salt("discussion").auto_shrink([false, false]).max_height((ui.available_height() - box_height).max(look.text_body * 4.0)), ui.input(|i| i.time));
+        let area = self.scrolling.area(
+            egui::ScrollArea::vertical()
+                .id_salt("discussion")
+                .auto_shrink([false, false])
+                .max_height((ui.available_height() - box_height).max(look.text_body * 4.0)),
+            ui.input(|i| i.time),
+        );
         let output = area.show(ui, |ui| {
             let stop = |ui: &mut egui::Ui, n: usize, spots: &mut Vec<Spot>, add: &mut dyn FnMut(&mut egui::Ui)| {
                 let fill = if n == cursor { colors().selection } else { egui::Color32::TRANSPARENT };
-                let shown = egui::Frame::NONE.fill(fill).corner_radius(look.radius_s).inner_margin(crate::theme::margin(look.space_xs)).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    add(ui);
-                });
+                let shown = egui::Frame::NONE
+                    .fill(fill)
+                    .corner_radius(look.radius_s)
+                    .inner_margin(crate::theme::margin(look.space_xs))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        add(ui);
+                    });
                 spots.push(Spot { key: n.to_string(), rect: shown.response.rect });
             };
             stop(ui, 0, &mut spots, &mut |ui| self.draw_on(ui, &d));
             ui.add_space(look.space_s);
             for (i, said) in d.said.iter().enumerate() {
-                stop(ui, i + 1, &mut spots, &mut |ui| { messages.draw(ui, egui::Id::new((&d.id, i)), &crate::conversation::said(&d, said)); });
+                stop(ui, i + 1, &mut spots, &mut |ui| {
+                    messages.draw(ui, egui::Id::new((&d.id, i)), &crate::conversation::said(&d, said));
+                });
             }
         });
         for s in &spots {
@@ -245,14 +267,18 @@ impl crate::buffer::Buffer for DiscussionView {
         for reply in std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
             match reply {
                 // A read of one shown before (answered late): not this one's.
-                Reply::On(id, read) if self.asked.as_ref().is_some_and(|(asked, _)| *asked == id) => self.on_now = Some((id, read.map_err(String::from))),
+                Reply::On(id, read) if self.asked.as_ref().is_some_and(|(asked, _)| *asked == id) => {
+                    self.on_now = Some((id, read.map_err(String::from)))
+                }
                 Reply::On(..) => {}
                 Reply::Sent(Ok(())) => (self.note, self.unsent) = (None, None),
                 // Not sent: what was written comes back to its box.
                 Reply::Sent(Err(e)) => {
                     self.note = Some(e);
                     // (Only into the discussion it was written for, still shown.)
-                    if let Some((_, written, purpose)) = self.unsent.take().filter(|(id, ..)| self.id.as_ref() == Some(id) && self.writing.text.trim().is_empty()) {
+                    if let Some((_, written, purpose)) =
+                        self.unsent.take().filter(|(id, ..)| self.id.as_ref() == Some(id) && self.writing.text.trim().is_empty())
+                    {
                         self.purpose = purpose;
                         self.writing.put_back(written);
                     }
@@ -274,7 +300,21 @@ impl crate::buffer::Buffer for DiscussionView {
         use harness_contracts::Subject as S;
         // Only what the code or a plan says changes with it (not a
         // terminal's or a chat's).
-        let of_code = self.with(|d| matches!(d.on.subject, S::Component { .. } | S::CodeLines { .. } | S::CodeFile { .. } | S::Plan { .. } | S::PlanComponent { .. } | S::PlanSection { .. } | S::PlanRelation { .. } | S::PlanItem { .. })).unwrap_or(false);
+        let of_code = self
+            .with(|d| {
+                matches!(
+                    d.on.subject,
+                    S::Component { .. }
+                        | S::CodeLines { .. }
+                        | S::CodeFile { .. }
+                        | S::Plan { .. }
+                        | S::PlanComponent { .. }
+                        | S::PlanSection { .. }
+                        | S::PlanRelation { .. }
+                        | S::PlanItem { .. }
+                )
+            })
+            .unwrap_or(false);
         if of_code && matches!(event, arch_graph::ArchEvent::Changed { .. }) {
             self.asked = None;
         }
@@ -352,7 +392,9 @@ impl Navigable for DiscussionView {
     /// What's said, to search.
     fn items(&self) -> Vec<Item> {
         let Some(d) = self.shown() else { return Vec::new() };
-        std::iter::once(Item::new("0", d.on.what.clone(), String::new())).chain(d.said.iter().enumerate().map(|(i, s)| Item::new((i + 1).to_string(), d.to_user(&s.by).to_owned(), s.text.clone()))).collect()
+        std::iter::once(Item::new("0", d.on.what.clone(), String::new()))
+            .chain(d.said.iter().enumerate().map(|(i, s)| Item::new((i + 1).to_string(), d.to_user(&s.by).to_owned(), s.text.clone())))
+            .collect()
     }
 
     fn spots(&self) -> Vec<Spot> {
@@ -373,7 +415,14 @@ impl Navigable for DiscussionView {
     /// The discussion, then what it's on (it can be tagged, or discussed).
     fn things(&self, _key: &str) -> Things {
         let known = harness_contracts::Known::default();
-        self.with(|d| Things { at: vec![crate::nav::Thing::named(harness_contracts::Subject::Discussion { id: d.id.clone() }, &known), crate::nav::Thing { subject: d.on.subject.clone(), words: d.on.what.clone() }], unit: 0 }).unwrap_or_default()
+        self.with(|d| Things {
+            at: vec![
+                crate::nav::Thing::named(harness_contracts::Subject::Discussion { id: d.id.clone() }, &known),
+                crate::nav::Thing { subject: d.on.subject.clone(), words: d.on.what.clone() },
+            ],
+            unit: 0,
+        })
+        .unwrap_or_default()
     }
 
     fn typing(&self) -> Option<&crate::conversation::TypingBox> {
@@ -423,25 +472,49 @@ impl ActionProvider for DiscussionView {
             kind: DiscussionKind,
             asked: String,
         }
-        let Some(d) = self.with(|d| Standing { what: d.on.what.clone(), status: d.status, kind: d.kind, asked: d.asked.clone() }) else { return out };
+        let Some(d) = self.with(|d| Standing { what: d.on.what.clone(), status: d.status, kind: d.kind, asked: d.asked.clone() }) else {
+            return out;
+        };
         out.push(NavMove::Enter.offer(if self.cursor == 0 { format!("Go to {}", d.what) } else { "Reply".to_owned() }));
         out.push(NavMove::Leave.offer_if(self.cursor > 0, "Up to what it's on"));
         if self.typing.is_some() {
-            out.push(f("discussion.send", "Send what's written", "Said in the discussion", Command::Send).importance(PRIMARY).typed(crate::keymap::Sent::Send).on_typing(Style::Button, "Send", Some(icon::PAPER_PLANE_RIGHT)));
-            out.push(f("discussion.cancel", "Stop writing", "What's written stays in the box", Command::Cancel).importance(PRIMARY).on_typing(Style::Button, "Stop", None));
+            out.push(
+                f("discussion.send", "Send what's written", "Said in the discussion", Command::Send)
+                    .importance(PRIMARY)
+                    .typed(crate::keymap::Sent::Send)
+                    .on_typing(Style::Button, "Send", Some(icon::PAPER_PLANE_RIGHT)),
+            );
+            out.push(
+                f("discussion.cancel", "Stop writing", "What's written stays in the box", Command::Cancel).importance(PRIMARY).on_typing(
+                    Style::Button,
+                    "Stop",
+                    None,
+                ),
+            );
         }
         let open = d.status != DiscussionStatus::Settled;
         // Settling and reopening: under the latest said, while you're on it.
         let on_latest = self.cursor > 0 && self.cursor + 1 == self.stops();
-        let under = |action: Action, caption: &str, icon: &'static str| if on_latest { action.on_item(Style::Button, caption, Some(icon)) } else { action };
-        out.push(f("discussion.reply", "Reply", "Say something in it (it stays where it stands)", Command::Reply).importance(if open { PRIMARY } else { MINOR }).when(if open { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
+        let under = |action: Action, caption: &str, icon: &'static str| {
+            if on_latest { action.on_item(Style::Button, caption, Some(icon)) } else { action }
+        };
+        out.push(
+            f("discussion.reply", "Reply", "Say something in it (it stays where it stands)", Command::Reply)
+                .importance(if open { PRIMARY } else { MINOR })
+                .when(if open { crate::actions::When::Always } else { crate::actions::When::Unavailable }),
+        );
         // Answered, or asked of you (once you've said your answer).
         let asks_you = d.asked == harness_contracts::USER && d.status == DiscussionStatus::Open;
         let settles = d.status == DiscussionStatus::Answered || asks_you;
         out.push(under(
-            f("discussion.settle", if asks_you { "Settle it (your answer's said)" } else { "Settle it (accept its answer)" }, "Settled: it holds nothing any more (a plan's approval)", Command::Settle)
-                .importance(if settles { PRIMARY } else { MINOR })
-                .when(if settles { crate::actions::When::Always } else { crate::actions::When::Unavailable }),
+            f(
+                "discussion.settle",
+                if asks_you { "Settle it (your answer's said)" } else { "Settle it (accept its answer)" },
+                "Settled: it holds nothing any more (a plan's approval)",
+                Command::Settle,
+            )
+            .importance(if settles { PRIMARY } else { MINOR })
+            .when(if settles { crate::actions::When::Always } else { crate::actions::When::Unavailable }),
             "Settle",
             icon::CHECK,
         ));
@@ -458,11 +531,29 @@ impl ActionProvider for DiscussionView {
         {
             let name = self.with(|d| d.name_of(&slot).to_owned()).unwrap_or_else(|| slot.clone());
             let slot = harness_contracts::SlotId::new(slot);
-            out.push(f("discussion.wake", &format!("{way} ({name})"), "Its move waits on it, and it has no session running", Command::Wake { slot, act: Box::new(act) }).importance(PRIMARY).on_view(Style::Button, way, Some(icon::PLAY)));
+            out.push(
+                f(
+                    "discussion.wake",
+                    &format!("{way} ({name})"),
+                    "Its move waits on it, and it has no session running",
+                    Command::Wake { slot, act: Box::new(act) },
+                )
+                .importance(PRIMARY)
+                .on_view(Style::Button, way, Some(icon::PLAY)),
+            );
         }
         // (A change request asks an agent slot: its answer names what it changed.)
         let question = d.kind == DiscussionKind::Question && open && d.asked != harness_contracts::USER;
-        out.push(f("discussion.change", "Make it a change request", "Its answer has to name what changed (answered: say why it's open again)", Command::Change).importance(MINOR).when(if question { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
+        out.push(
+            f(
+                "discussion.change",
+                "Make it a change request",
+                "Its answer has to name what changed (answered: say why it's open again)",
+                Command::Change,
+            )
+            .importance(MINOR)
+            .when(if question { crate::actions::When::Always } else { crate::actions::When::Unavailable }),
+        );
         out
     }
 
@@ -492,7 +583,10 @@ impl ActionProvider for DiscussionView {
 
 impl Hosted for DiscussionView {
     fn title(&self) -> Status {
-        self.with(|d| Status::new(format!("{} {} · {}", icon::CHAT_CIRCLE_DOTS, d.id, d.kind.words()), Tone::Info).detail(d.on.what.clone())).unwrap_or_else(|| Status::new(format!("{} Discussion", icon::CHAT_CIRCLE_DOTS), Tone::Muted))
+        self.with(|d| {
+            Status::new(format!("{} {} · {}", icon::CHAT_CIRCLE_DOTS, d.id, d.kind.words()), Tone::Info).detail(d.on.what.clone())
+        })
+        .unwrap_or_else(|| Status::new(format!("{} Discussion", icon::CHAT_CIRCLE_DOTS), Tone::Muted))
     }
 
     /// Whose move it is (how the agent asked is doing, when it isn't at

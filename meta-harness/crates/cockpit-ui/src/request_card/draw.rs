@@ -25,25 +25,38 @@ fn heading(kind: RequestKind) -> (&'static str, &'static str, egui::Color32, egu
 pub fn render_request(ui: &mut egui::Ui, request: &RuntimeRequest, drafts: &mut Drafts) -> egui::Rect {
     let look = crate::theme::look();
     let (glyph, what, color, fill) = heading(request.kind);
-    Frame::NONE.fill(fill).stroke(Stroke::new(look.line_thin, color)).corner_radius(look.radius_m).inner_margin(crate::theme::margin(look.space_m)).show(ui, |ui| {
-        ui.label(RichText::new(format!("{glyph} {what}")).strong().size(look.text_small).color(color));
-        let title = RichText::new(&request.title).size(look.text_label).color(colors().text_strong);
-        ui.label(if request.kind == (RequestKind::Approval { action: ToolAction::Command }) { title.monospace() } else { title.strong() });
-        // A page to open: its address (opening it is its control).
-        if let Some(detail) = &request.detail {
-            let link = detail.starts_with("https://") || detail.starts_with("http://");
-            ui.label(if link { RichText::new(detail).monospace().size(look.text_body).color(colors().info) } else { RichText::new(detail).size(look.text_body).color(colors().muted) });
-        }
-        if request.status != RequestStatus::Pending {
-            render_outcome(ui, request);
-            return;
-        }
-        for question in &request.questions {
-            render_question(ui, request, question, drafts);
-        }
-    })
-    .response
-    .rect
+    Frame::NONE
+        .fill(fill)
+        .stroke(Stroke::new(look.line_thin, color))
+        .corner_radius(look.radius_m)
+        .inner_margin(crate::theme::margin(look.space_m))
+        .show(ui, |ui| {
+            ui.label(RichText::new(format!("{glyph} {what}")).strong().size(look.text_small).color(color));
+            let title = RichText::new(&request.title).size(look.text_label).color(colors().text_strong);
+            ui.label(if request.kind == (RequestKind::Approval { action: ToolAction::Command }) {
+                title.monospace()
+            } else {
+                title.strong()
+            });
+            // A page to open: its address (opening it is its control).
+            if let Some(detail) = &request.detail {
+                let link = detail.starts_with("https://") || detail.starts_with("http://");
+                ui.label(if link {
+                    RichText::new(detail).monospace().size(look.text_body).color(colors().info)
+                } else {
+                    RichText::new(detail).size(look.text_body).color(colors().muted)
+                });
+            }
+            if request.status != RequestStatus::Pending {
+                render_outcome(ui, request);
+                return;
+            }
+            for question in &request.questions {
+                render_question(ui, request, question, drafts);
+            }
+        })
+        .response
+        .rect
 }
 
 fn render_question(ui: &mut egui::Ui, request: &RuntimeRequest, question: &Question, drafts: &mut Drafts) {
@@ -79,7 +92,12 @@ fn render_question(ui: &mut egui::Ui, request: &RuntimeRequest, question: &Quest
     if question.allow_custom_answer {
         let hint = if question.options.is_empty() { "Your answer…" } else { "Or type your own…" };
         let typed = drafts.drafts.entry(request.id.clone()).or_default().typed.entry(question.id.clone()).or_default();
-        ui.add(egui::TextEdit::singleline(typed).id(egui::Id::new(("question", request.id.as_str(), question.id.as_str()))).hint_text(hint).desired_width(f32::INFINITY));
+        ui.add(
+            egui::TextEdit::singleline(typed)
+                .id(egui::Id::new(("question", request.id.as_str(), question.id.as_str())))
+                .hint_text(hint)
+                .desired_width(f32::INFINITY),
+        );
     }
 }
 
@@ -88,7 +106,8 @@ fn render_outcome(ui: &mut egui::Ui, request: &RuntimeRequest) {
     let status = request.status;
     let look = crate::theme::look();
     let response = request.response.as_ref();
-    let chosen = response.and_then(|r| r.option_id.as_ref()).and_then(|id| request.options.iter().find(|o| &o.id == id)).map(|o| o.label.clone());
+    let chosen =
+        response.and_then(|r| r.option_id.as_ref()).and_then(|id| request.options.iter().find(|o| &o.id == id)).map(|o| o.label.clone());
     let text = match (status, chosen) {
         (RequestStatus::Resolved, Some(label)) => format!("{} {label}", icon::CHECK),
         (RequestStatus::Resolved, None) => format!("{} Answered", icon::CHECK),

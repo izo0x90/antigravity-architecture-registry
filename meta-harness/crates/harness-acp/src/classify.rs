@@ -35,7 +35,9 @@ pub fn permission(settings: &QuestionSettings, tool_id: &str, kind: &ToolKind, o
     if options.iter().any(|o| rejects(&o.kind)) && one_each {
         return RequestKind::Approval { action: action(kind) };
     }
-    tracing::warn!("a permission request with no deny among its options (tool call {tool_id}): shown as a question, never answered for the user");
+    tracing::warn!(
+        "a permission request with no deny among its options (tool call {tool_id}): shown as a question, never answered for the user"
+    );
     RequestKind::Question
 }
 
@@ -74,12 +76,24 @@ mod tests {
         assert_eq!(permission(&none, "t1", &ToolKind::Other, &approval), RequestKind::Approval { action: ToolAction::Tool });
         let answers = [option("1", K::AllowOnce), option("2", K::AllowOnce)];
         assert_eq!(permission(&none, "t1", &ToolKind::Other, &answers), RequestKind::Question, "no deny, two of a kind: answers");
-        assert_eq!(permission(&none, "t1", &ToolKind::Other, &[option("ok", K::AllowOnce)]), RequestKind::Question, "no way to say no: not an approval");
+        assert_eq!(
+            permission(&none, "t1", &ToolKind::Other, &[option("ok", K::AllowOnce)]),
+            RequestKind::Question,
+            "no way to say no: not an approval"
+        );
         // A harness that says how its questions come: by their tool call.
         let antigravity = QuestionSettings { permission_tool_prefix: Some("interaction_".into()), ..Default::default() };
         let trust = [option("trust", K::AllowOnce), option("dont_trust", K::RejectOnce)];
-        assert_eq!(permission(&antigravity, "interaction_1a2b", &ToolKind::Other, &trust), RequestKind::Question, "a question even with a deny among its answers");
-        assert_eq!(permission(&antigravity, "call_9", &ToolKind::Execute, &approval), RequestKind::Approval { action: ToolAction::Command }, "its real tool calls stay approvals");
+        assert_eq!(
+            permission(&antigravity, "interaction_1a2b", &ToolKind::Other, &trust),
+            RequestKind::Question,
+            "a question even with a deny among its answers"
+        );
+        assert_eq!(
+            permission(&antigravity, "call_9", &ToolKind::Execute, &approval),
+            RequestKind::Approval { action: ToolAction::Command },
+            "its real tool calls stay approvals"
+        );
         let decisions: Vec<ApprovalDecision> = options(RequestKind::Question, &trust).into_iter().map(|o| o.decision).collect();
         assert_eq!(decisions, [ApprovalDecision::Answer, ApprovalDecision::Decline]);
     }

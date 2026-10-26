@@ -20,7 +20,12 @@ pub(crate) struct Fed {
 
 impl Fed {
     fn new() -> Self {
-        Self { view: ChangesView::default(), shared: Shared::default(), net: NetClient::new("http://127.0.0.1:9"), ctx: egui::Context::default() }
+        Self {
+            view: ChangesView::default(),
+            shared: Shared::default(),
+            net: NetClient::new("http://127.0.0.1:9"),
+            ctx: egui::Context::default(),
+        }
     }
 
     /// The desk's list read, then a frame.
@@ -31,7 +36,11 @@ impl Fed {
 
     /// The components the changes touch read, then a frame.
     fn touched(&mut self, components: Vec<ComponentChanges>) {
-        self.shared.changes.take_components_for_test(ComponentChangeList { comparison: Comparison::default(), components, out_of_date: vec![] });
+        self.shared.changes.take_components_for_test(ComponentChangeList {
+            comparison: Comparison::default(),
+            components,
+            out_of_date: vec![],
+        });
         self.frame();
     }
 
@@ -77,17 +86,53 @@ fn line(kind: LineKind, old: Option<u32>, new: Option<u32>, text: &str) -> DiffL
 /// a.rs: one change (line 3 replaced); b.rs deleted.
 pub(crate) fn view_with_changes() -> Fed {
     let mut fed = Fed::new();
-    fed.listed(ChangeList { comparison: Comparison::default(), files: vec![file(Group::Unstaged, "a.rs", FileStatus::Modified, 1, 1), file(Group::Unstaged, "b.rs", FileStatus::Deleted, 0, 2)], offset: 0, total: 2 });
+    fed.listed(ChangeList {
+        comparison: Comparison::default(),
+        files: vec![file(Group::Unstaged, "a.rs", FileStatus::Modified, 1, 1), file(Group::Unstaged, "b.rs", FileStatus::Deleted, 0, 2)],
+        offset: 0,
+        total: 2,
+    });
     arrive(&mut fed);
     fed
 }
 
 /// a.rs's and b.rs's changes come in.
 fn arrive(fed: &mut Fed) {
-    let hunk = Hunk { old_start: 2, old_lines: 3, new_start: 2, new_lines: 3, lines: vec![line(LineKind::Context, Some(2), Some(2), "two"), line(LineKind::Removed, Some(3), None, "old three"), line(LineKind::Added, None, Some(3), "new three"), line(LineKind::Context, Some(4), Some(4), "four")] };
-    let a = FileChanges { comparison: Comparison::default(), path: "a.rs".into(), group: Group::Unstaged, context: 3, binary: false, hunks: vec![hunk] };
+    let hunk = Hunk {
+        old_start: 2,
+        old_lines: 3,
+        new_start: 2,
+        new_lines: 3,
+        lines: vec![
+            line(LineKind::Context, Some(2), Some(2), "two"),
+            line(LineKind::Removed, Some(3), None, "old three"),
+            line(LineKind::Added, None, Some(3), "new three"),
+            line(LineKind::Context, Some(4), Some(4), "four"),
+        ],
+    };
+    let a = FileChanges {
+        comparison: Comparison::default(),
+        path: "a.rs".into(),
+        group: Group::Unstaged,
+        context: 3,
+        binary: false,
+        hunks: vec![hunk],
+    };
     fed.file((Group::Unstaged, "a.rs".into()), a);
-    let b = FileChanges { comparison: Comparison::default(), path: "b.rs".into(), group: Group::Unstaged, context: 3, binary: false, hunks: vec![Hunk { old_start: 1, old_lines: 2, new_start: 0, new_lines: 0, lines: vec![line(LineKind::Removed, Some(1), None, "gone"), line(LineKind::Removed, Some(2), None, "too")] }] };
+    let b = FileChanges {
+        comparison: Comparison::default(),
+        path: "b.rs".into(),
+        group: Group::Unstaged,
+        context: 3,
+        binary: false,
+        hunks: vec![Hunk {
+            old_start: 1,
+            old_lines: 2,
+            new_start: 0,
+            new_lines: 0,
+            lines: vec![line(LineKind::Removed, Some(1), None, "gone"), line(LineKind::Removed, Some(2), None, "too")],
+        }],
+    };
     fed.file((Group::Unstaged, "b.rs".into()), b);
 }
 
@@ -101,7 +146,23 @@ fn a_small_set_of_changes_opens_by_itself_and_a_big_one_waits_to_be_opened() {
     let fed = view_with_changes();
     assert_eq!(fed.sent("/api/changes/file"), 2, "both files asked for");
     let (l, h) = (Row::Line, Row::Hunk);
-    assert_eq!(fed.view.rows(), [Row::Group(Group::Unstaged), Row::File(0), h(0, 0), l(0, 0, 0), l(0, 0, 1), l(0, 0, 2), l(0, 0, 3), Row::File(1), h(1, 0), l(1, 0, 0), l(1, 0, 1)], "the diff run together, a row per line");
+    assert_eq!(
+        fed.view.rows(),
+        [
+            Row::Group(Group::Unstaged),
+            Row::File(0),
+            h(0, 0),
+            l(0, 0, 0),
+            l(0, 0, 1),
+            l(0, 0, 2),
+            l(0, 0, 3),
+            Row::File(1),
+            h(1, 0),
+            l(1, 0, 0),
+            l(1, 0, 1)
+        ],
+        "the diff run together, a row per line"
+    );
     // A big one: only its list.
     let mut big = Fed::new();
     let files: Vec<ChangedFile> = (0..40).map(|i| file(Group::Unstaged, &format!("f{i}.rs"), FileStatus::Modified, 1, 0)).collect();
@@ -120,7 +181,10 @@ fn the_cursor_walks_files_and_changes_and_enter_opens_the_spot() {
     // A line at a time: each line is where it is in the file (a removed
     // one, where it was).
     view.motion(Motion::Down, 2);
-    assert_eq!((view.cursor_key().as_deref(), view.target()), (Some("l:Unstaged:a.rs:0:1"), Some(Target::Change { file: "a.rs".into(), line: 3 })));
+    assert_eq!(
+        (view.cursor_key().as_deref(), view.target()),
+        (Some("l:Unstaged:a.rs:0:1"), Some(Target::Change { file: "a.rs".into(), line: 3 }))
+    );
     assert!(view.actions().iter().any(|a| a.id == "nav.leave" && a.label == "Up to its change"));
     view.leave();
     assert_eq!(view.cursor_key().as_deref(), Some("h:Unstaged:a.rs:0"), "out: up to its change");
@@ -156,15 +220,25 @@ fn the_cursor_walks_files_and_changes_and_enter_opens_the_spot() {
 fn search_finds_file_names_and_changed_lines_removed_ones_too() {
     let items = view_with_changes().view.items();
     assert!(items.iter().any(|i| i.key == "f:Unstaged:a.rs" && i.name == "a.rs"));
-    assert!(items.iter().any(|i| i.key == "l:Unstaged:a.rs:0:1" && i.text == "old three"), "each line where it is, removed ones too: {items:?}");
+    assert!(
+        items.iter().any(|i| i.key == "l:Unstaged:a.rs:0:1" && i.text == "old three"),
+        "each line where it is, removed ones too: {items:?}"
+    );
     assert!(items.iter().any(|i| i.key == "l:Unstaged:a.rs:0:2" && i.text == "new three"));
     assert!(items.iter().any(|i| i.text.contains("gone")), "a deleted file's lines");
 }
 
 #[test]
 fn side_by_side_puts_a_run_of_removed_lines_beside_the_added_ones() {
-    let lines = [line(LineKind::Context, Some(1), Some(1), "a"), line(LineKind::Removed, Some(2), None, "b"), line(LineKind::Removed, Some(3), None, "c"), line(LineKind::Added, None, Some(2), "B"), line(LineKind::Context, Some(4), Some(3), "d")];
-    let rows: Vec<(Option<&str>, Option<&str>)> = paired(&lines).into_iter().map(|(l, r)| (l.map(|l| l.text.as_str()), r.map(|r| r.text.as_str()))).collect();
+    let lines = [
+        line(LineKind::Context, Some(1), Some(1), "a"),
+        line(LineKind::Removed, Some(2), None, "b"),
+        line(LineKind::Removed, Some(3), None, "c"),
+        line(LineKind::Added, None, Some(2), "B"),
+        line(LineKind::Context, Some(4), Some(3), "d"),
+    ];
+    let rows: Vec<(Option<&str>, Option<&str>)> =
+        paired(&lines).into_iter().map(|(l, r)| (l.map(|l| l.text.as_str()), r.map(|r| r.text.as_str()))).collect();
     assert_eq!(rows, [(Some("a"), Some("a")), (Some("b"), Some("B")), (Some("c"), None), (Some("d"), Some("d"))]);
     let mut view = ChangesView::default();
     assert!(view.side_by_side(1200.0) && !view.side_by_side(500.0), "auto: by the panel's width");
@@ -175,7 +249,10 @@ fn side_by_side_puts_a_run_of_removed_lines_beside_the_added_ones() {
 #[test]
 fn a_comparison_is_picked_by_its_two_points() {
     assert_eq!(compared("HEAD..files"), Some(Comparison::default()));
-    assert_eq!(compared("rev:main..snapshot:1-ab"), Some(Comparison { from: Point::Rev("main".into()), to: Point::Snapshot("1-ab".into()) }));
+    assert_eq!(
+        compared("rev:main..snapshot:1-ab"),
+        Some(Comparison { from: Point::Rev("main".into()), to: Point::Snapshot("1-ab".into()) })
+    );
     let mut fed = view_with_changes();
     fed.view.compare(Comparison { from: Point::Head, to: Point::Index });
     fed.frame();
@@ -194,13 +271,27 @@ fn going_to_a_components_changes_opens_its_file_at_its_change() {
     fed.view.close(&(Group::Unstaged, "a.rs".into()));
     assert!(fed.view.reveal(&id));
     fed.frame();
-    let a = FileChanges { comparison: Comparison::default(), path: "a.rs".into(), group: Group::Unstaged, context: 3, binary: false, hunks: vec![Hunk { old_start: 2, old_lines: 1, new_start: 2, new_lines: 2, lines: vec![line(LineKind::Added, None, Some(3), "new three")] }] };
+    let a = FileChanges {
+        comparison: Comparison::default(),
+        path: "a.rs".into(),
+        group: Group::Unstaged,
+        context: 3,
+        binary: false,
+        hunks: vec![Hunk {
+            old_start: 2,
+            old_lines: 1,
+            new_start: 2,
+            new_lines: 2,
+            lines: vec![line(LineKind::Added, None, Some(3), "new three")],
+        }],
+    };
     fed.file((Group::Unstaged, "a.rs".into()), a);
     assert_eq!(fed.view.cursor_key().as_deref(), Some("h:Unstaged:a.rs:0"), "its file opened again, the cursor on the change");
 }
 
 fn window(from: &str, to: Option<&str>, started_ms: u64, slots: &[&str], files: u32) -> Window {
-    let working = slots.iter().map(|s| harness_contracts::changes::Working { slot: (*s).into(), thread: "t".into(), turn: "u".into() }).collect();
+    let working =
+        slots.iter().map(|s| harness_contracts::changes::Working { slot: (*s).into(), thread: "t".into(), turn: "u".into() }).collect();
     Window { from: from.into(), to: to.map(Into::into), started_ms, ended_ms: to.map(|_| started_ms + 1), working, files }
 }
 
@@ -210,7 +301,14 @@ fn the_timeline_lists_windows_newest_first_and_picking_one_compares_it() {
     fed.timeline(Timeline { windows: vec![window("1-a", Some("2-b"), 1, &["lead"], 2), window("2-b", None, 2, &[], 1)], turns: vec![] });
     let mut cx_net = (NetClient::new("http://127.0.0.1:9"), None, None, crate::keymap::InputMode::Normal);
     let ctx = egui::Context::default();
-    let mut cx = RunCx { net: &cx_net.0, ctx: &ctx, input_mode: &mut cx_net.3, at: crate::keymap::Host::Panel(0), note: &mut cx_net.1, asked: &mut cx_net.2 };
+    let mut cx = RunCx {
+        net: &cx_net.0,
+        ctx: &ctx,
+        input_mode: &mut cx_net.3,
+        at: crate::keymap::Host::Panel(0),
+        note: &mut cx_net.1,
+        asked: &mut cx_net.2,
+    };
     let timeline = fed.view.actions().into_iter().find(|a| a.id == "changes.timeline").unwrap();
     fed.view.run(&timeline, None, &mut cx);
     assert_eq!(fed.view.rows(), [Row::Window(0), Row::Window(1)]);
@@ -219,7 +317,11 @@ fn the_timeline_lists_windows_newest_first_and_picking_one_compares_it() {
     fed.view.motion(Motion::Down, 1);
     assert_eq!(fed.view.enter(), Step::Done);
     fed.frame();
-    assert_eq!((fed.shared.changes.comparison().clone(), fed.view.on_timeline), (Comparison { from: Point::Snapshot("1-a".into()), to: Point::Snapshot("2-b".into()) }, false), "that window, compared");
+    assert_eq!(
+        (fed.shared.changes.comparison().clone(), fed.view.on_timeline),
+        (Comparison { from: Point::Snapshot("1-a".into()), to: Point::Snapshot("2-b".into()) }, false),
+        "that window, compared"
+    );
     // "Since here": from a window's start to the files now.
     fed.view.show_timeline(true);
     let since = fed.view.actions().into_iter().find(|a| a.id == "changes.since").expect("on a window");
@@ -233,9 +335,23 @@ fn the_user_stages_a_file_or_a_change_and_the_cursor_follows_the_file() {
     let mut fed = view_with_changes();
     let mut parts = (None, None, crate::keymap::InputMode::Normal);
     let ids = |view: &ChangesView| view.actions().into_iter().map(|a| a.id).collect::<Vec<_>>();
-    assert!(ids(&fed.view).contains(&"changes.stage".to_owned()) && !ids(&fed.view).contains(&"changes.unstage".to_owned()), "unstaged: stage it");
+    assert!(
+        ids(&fed.view).contains(&"changes.stage".to_owned()) && !ids(&fed.view).contains(&"changes.unstage".to_owned()),
+        "unstaged: stage it"
+    );
     let stage = fed.view.actions().into_iter().find(|a| a.id == "changes.stage").unwrap();
-    fed.view.run(&stage, None, &mut RunCx { net: &fed.net, ctx: &fed.ctx, input_mode: &mut parts.2, at: crate::keymap::Host::Panel(0), note: &mut parts.0, asked: &mut parts.1 });
+    fed.view.run(
+        &stage,
+        None,
+        &mut RunCx {
+            net: &fed.net,
+            ctx: &fed.ctx,
+            input_mode: &mut parts.2,
+            at: crate::keymap::Host::Panel(0),
+            note: &mut parts.0,
+            asked: &mut parts.1,
+        },
+    );
     assert_eq!(fed.sent("POST /api/changes/stage"), 1);
     assert_eq!(fed.view.restore, Some(super::Restore::Row("f:Staged:a.rs".into())), "the cursor follows it");
     push(&fed.view.inbox, Reply::Staged(Ok(serde_json::Value::Null)));
@@ -258,7 +374,16 @@ fn as_a_destination_it_shows_touched_components_and_turns_it_saw() {
     assert!(!fed.view.can_show(&Target::Change { file: "a.rs".into(), line: 3 }), "a change is what it shows");
     let message = |turn: &str| Target::Message { thread: None, turn: Some(turn.into()), index: 0, link: None };
     let turn = Comparison { from: Point::Snapshot("1-a".into()), to: Point::Snapshot("2-b".into()) };
-    fed.timeline(Timeline { windows: vec![], turns: vec![harness_contracts::changes::TurnChanges { thread: "t".into(), turn: "u1".into(), comparison: turn.clone(), files: 1, alongside: vec![] }] });
+    fed.timeline(Timeline {
+        windows: vec![],
+        turns: vec![harness_contracts::changes::TurnChanges {
+            thread: "t".into(),
+            turn: "u1".into(),
+            comparison: turn.clone(),
+            files: 1,
+            alongside: vec![],
+        }],
+    });
     assert!(fed.view.can_show(&message("u1")) && !fed.view.can_show(&message("u2")));
     assert_eq!(fed.view.show_target(&message("u1")), Ok(()));
     fed.frame();
@@ -268,13 +393,31 @@ fn as_a_destination_it_shows_touched_components_and_turns_it_saw() {
     // is in, in whichever group it's in.
     let linked = Target::Message { thread: None, turn: Some("u1".into()), index: 0, link: Some(("b.rs".into(), None)) };
     assert_eq!(fed.view.show_target(&linked), Ok(()));
-    fed.listed(ChangeList { comparison: turn.clone(), files: vec![file(Group::Unstaged, "a.rs", FileStatus::Modified, 1, 1), file(Group::Unstaged, "b.rs", FileStatus::Modified, 2, 0)], offset: 0, total: 2 });
+    fed.listed(ChangeList {
+        comparison: turn.clone(),
+        files: vec![file(Group::Unstaged, "a.rs", FileStatus::Modified, 1, 1), file(Group::Unstaged, "b.rs", FileStatus::Modified, 2, 0)],
+        offset: 0,
+        total: 2,
+    });
     let on = fed.view.cursor_row().and_then(|r| fed.view.file_of(&r).map(|f| f.path.clone()));
     assert_eq!(on.as_deref(), Some("b.rs"), "once the list is in: on it");
     let mut fed = view_with_changes();
     let now = Comparison::default();
-    fed.timeline(Timeline { windows: vec![], turns: vec![harness_contracts::changes::TurnChanges { thread: "t".into(), turn: "u3".into(), comparison: now, files: 1, alongside: vec![] }] });
-    assert_eq!(fed.view.show_target(&Target::Message { thread: None, turn: Some("u3".into()), index: 0, link: Some(("b.rs".into(), None)) }), Ok(()), "the comparison it shows: the list is in");
+    fed.timeline(Timeline {
+        windows: vec![],
+        turns: vec![harness_contracts::changes::TurnChanges {
+            thread: "t".into(),
+            turn: "u3".into(),
+            comparison: now,
+            files: 1,
+            alongside: vec![],
+        }],
+    });
+    assert_eq!(
+        fed.view.show_target(&Target::Message { thread: None, turn: Some("u3".into()), index: 0, link: Some(("b.rs".into(), None)) }),
+        Ok(()),
+        "the comparison it shows: the list is in"
+    );
     let on = fed.view.cursor_row().and_then(|r| fed.view.file_of(&r).map(|f| f.path.clone()));
     assert_eq!(on.as_deref(), Some("b.rs"));
 }
@@ -282,12 +425,25 @@ fn as_a_destination_it_shows_touched_components_and_turns_it_saw() {
 /// Draws the view in a window `h` high; the text drawn.
 fn drawn(view: &mut ChangesView, ctx: &egui::Context, h: f32) -> Vec<String> {
     let net = NetClient::new("http://127.0.0.1:9");
-    let output = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, h))), ..Default::default() }, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
-            view.draw(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut asked });
-        });
-    });
+    let output = ctx.run(
+        egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, h))), ..Default::default() },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
+                view.draw(
+                    ui,
+                    &mut RunCx {
+                        net: &net,
+                        ctx,
+                        input_mode: &mut mode,
+                        at: crate::keymap::Host::Panel(0),
+                        note: &mut note,
+                        asked: &mut asked,
+                    },
+                );
+            });
+        },
+    );
     fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
         match shape {
             egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
@@ -305,10 +461,22 @@ fn drawn(view: &mut ChangesView, ctx: &egui::Context, h: f32) -> Vec<String> {
 #[test]
 fn a_big_change_is_drawn_only_where_it_shows_and_moved_through_a_line_at_a_time() {
     let mut fed = Fed::new();
-    fed.listed(ChangeList { comparison: Comparison::default(), files: vec![file(Group::Untracked, "big.rs", FileStatus::Added, 5000, 0)], offset: 0, total: 1 });
+    fed.listed(ChangeList {
+        comparison: Comparison::default(),
+        files: vec![file(Group::Untracked, "big.rs", FileStatus::Added, 5000, 0)],
+        offset: 0,
+        total: 1,
+    });
     fed.view.ask_file((Group::Untracked, "big.rs".into()), 3);
     let lines = (1..=5000).map(|n| line(LineKind::Added, None, Some(n), &format!("let line_{n} = {n};"))).collect();
-    let big = FileChanges { comparison: Comparison::default(), path: "big.rs".into(), group: Group::Untracked, context: 3, binary: false, hunks: vec![Hunk { old_start: 0, old_lines: 0, new_start: 1, new_lines: 5000, lines }] };
+    let big = FileChanges {
+        comparison: Comparison::default(),
+        path: "big.rs".into(),
+        group: Group::Untracked,
+        context: 3,
+        binary: false,
+        hunks: vec![Hunk { old_start: 0, old_lines: 0, new_start: 1, new_lines: 5000, lines }],
+    };
     fed.file((Group::Untracked, "big.rs".into()), big);
     let Fed { view, ctx, .. } = &mut fed;
     let mut texts = Vec::new();
@@ -340,13 +508,19 @@ fn a_change_folds_to_one_line_and_opens_again_and_everything_folds_and_unfolds()
     let mut fed = view_with_changes();
     let view = &mut fed.view;
     let fold = |view: &mut ChangesView, fold: Fold| view.fold(fold);
-    let offered = |view: &ChangesView, id: &str| view.actions().into_iter().find(|a| a.id == id && a.when.holds(&crate::actions::Situation::default())).map(|a| a.label);
+    let offered = |view: &ChangesView, id: &str| {
+        view.actions().into_iter().find(|a| a.id == id && a.when.holds(&crate::actions::Situation::default())).map(|a| a.label)
+    };
     view.move_to("h:Unstaged:a.rs:0");
     assert_eq!(offered(view, "nav.fold_toggle").as_deref(), Some("Fold this change"), "said on the change, and on it as a control");
     assert!(view.actions().iter().any(|a| a.id == "nav.fold_toggle" && a.at() == Some(crate::actions::At::Item)));
     fold(view, Fold::Toggle);
     let (l, h) = (Row::Line, Row::Hunk);
-    assert_eq!(view.rows(), [Row::Group(Group::Unstaged), Row::File(0), h(0, 0), Row::File(1), h(1, 0), l(1, 0, 0), l(1, 0, 1)], "one line for it");
+    assert_eq!(
+        view.rows(),
+        [Row::Group(Group::Unstaged), Row::File(0), h(0, 0), Row::File(1), h(1, 0), l(1, 0, 0), l(1, 0, 1)],
+        "one line for it"
+    );
     assert_eq!(offered(view, "nav.enter").as_deref(), Some("Unfold this change"), "Enter (a double click) opens it");
     assert_eq!(view.enter(), Step::Done);
     assert_eq!(view.rows().len(), 11, "open again");
@@ -380,20 +554,64 @@ fn more_context_is_offered_where_theres_more_to_show_and_adds_ten_lines_each_sid
     let mut cx = RunCx { net, ctx, input_mode: &mut parts.2, at: crate::keymap::Host::Panel(0), note: &mut parts.0, asked: &mut parts.1 };
     view.run(&more, None, &mut cx);
     view.tick(net, ctx);
-    assert!(net.sent.lock().unwrap().last().is_some_and(|s| s.contains("a.rs") && s.contains("context=13")), "{:?}", net.sent.lock().unwrap().last());
+    assert!(
+        net.sent.lock().unwrap().last().is_some_and(|s| s.contains("a.rs") && s.contains("context=13")),
+        "{:?}",
+        net.sent.lock().unwrap().last()
+    );
     let ctx_line = |n: u32| line(LineKind::Context, Some(n), Some(n), "same");
     let mut lines: Vec<DiffLine> = (20..33).map(ctx_line).collect();
     lines.extend([line(LineKind::Removed, Some(33), None, "old"), line(LineKind::Added, None, Some(33), "new")]);
     lines.extend((34..47).map(ctx_line));
     let hunk = Hunk { old_start: 20, old_lines: 27, new_start: 20, new_lines: 27, lines };
     assert_eq!(around_words(&hunk), "13 unchanged lines around");
-    push(&view.inbox, Reply::File(Comparison::default(), (Group::Unstaged, "a.rs".into()), Ok(FileChanges { comparison: Comparison::default(), path: "a.rs".into(), group: Group::Unstaged, context: 13, binary: false, hunks: vec![hunk] })));
+    push(
+        &view.inbox,
+        Reply::File(
+            Comparison::default(),
+            (Group::Unstaged, "a.rs".into()),
+            Ok(FileChanges {
+                comparison: Comparison::default(),
+                path: "a.rs".into(),
+                group: Group::Unstaged,
+                context: 13,
+                binary: false,
+                hunks: vec![hunk],
+            }),
+        ),
+    );
     view.tick(net, ctx);
     assert!(offered(view), "still more of the file to show");
     // The whole file shown: from its first line, stopping short of the lines asked for after it.
-    let whole = Hunk { old_start: 1, old_lines: 4, new_start: 1, new_lines: 4, lines: vec![ctx_line(1), line(LineKind::Removed, Some(2), None, "old"), line(LineKind::Added, None, Some(2), "new"), ctx_line(3), ctx_line(4)] };
+    let whole = Hunk {
+        old_start: 1,
+        old_lines: 4,
+        new_start: 1,
+        new_lines: 4,
+        lines: vec![
+            ctx_line(1),
+            line(LineKind::Removed, Some(2), None, "old"),
+            line(LineKind::Added, None, Some(2), "new"),
+            ctx_line(3),
+            ctx_line(4),
+        ],
+    };
     assert_eq!(around_words(&whole), "1 unchanged line before, 2 after");
-    push(&view.inbox, Reply::File(Comparison::default(), (Group::Unstaged, "a.rs".into()), Ok(FileChanges { comparison: Comparison::default(), path: "a.rs".into(), group: Group::Unstaged, context: 13, binary: false, hunks: vec![whole] })));
+    push(
+        &view.inbox,
+        Reply::File(
+            Comparison::default(),
+            (Group::Unstaged, "a.rs".into()),
+            Ok(FileChanges {
+                comparison: Comparison::default(),
+                path: "a.rs".into(),
+                group: Group::Unstaged,
+                context: 13,
+                binary: false,
+                hunks: vec![whole],
+            }),
+        ),
+    );
     view.tick(net, ctx);
     view.move_to("h:Unstaged:a.rs:0");
     assert!(!offered(view), "nothing more to show");

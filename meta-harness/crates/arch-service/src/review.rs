@@ -6,7 +6,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arch_graph::{Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, RelationKind, RepoPath, Report, Severity, Span, Status, Target, TypeSystem};
+use arch_graph::{
+    Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, RelationKind, RepoPath, Report, Severity, Span, Status, Target,
+    TypeSystem,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::ServiceError;
@@ -69,8 +72,12 @@ impl ReviewerCatalog {
         let catalog: Self = toml::from_str(text).map_err(|e| ServiceError::InvalidOp(format!("reviewers: {e}")))?;
         for (name, r) in &catalog.reviewers {
             match r.kind {
-                ReviewerKind::Rule if r.rules.is_empty() => return Err(ServiceError::InvalidOp(format!("rule reviewer '{name}' has no rules"))),
-                ReviewerKind::Session if r.brief.trim().is_empty() => return Err(ServiceError::InvalidOp(format!("session reviewer '{name}' has no brief"))),
+                ReviewerKind::Rule if r.rules.is_empty() => {
+                    return Err(ServiceError::InvalidOp(format!("rule reviewer '{name}' has no rules")));
+                }
+                ReviewerKind::Session if r.brief.trim().is_empty() => {
+                    return Err(ServiceError::InvalidOp(format!("session reviewer '{name}' has no brief")));
+                }
                 _ => {}
             }
         }
@@ -155,16 +162,27 @@ fn rule_findings(rule: &Rule, s: &Subject) -> Vec<(String, bool)> {
         }
         Rule::MaxCalls { limit } => {
             let distinct: BTreeSet<&ComponentId> = calls.iter().copied().collect();
-            if distinct.len() > *limit { vec![(format!("calls {} components (limit {limit}); it does too much", distinct.len()), false)] } else { Vec::new() }
+            if distinct.len() > *limit {
+                vec![(format!("calls {} components (limit {limit}); it does too much", distinct.len()), false)]
+            } else {
+                Vec::new()
+            }
         }
         Rule::UnplannedCalls if c.status == Status::New => {
-            let planned: BTreeSet<&ComponentId> = s.plan.relations.iter().filter(|r| r.kind == RelationKind::Calls && r.source == c.id).map(|r| &r.target).collect();
+            let planned: BTreeSet<&ComponentId> =
+                s.plan.relations.iter().filter(|r| r.kind == RelationKind::Calls && r.source == c.id).map(|r| &r.target).collect();
             let extra: BTreeSet<&ComponentId> = calls.into_iter().filter(|t| !planned.contains(t)).collect();
             // An unplanned helper that's still a placeholder hides unfinished work.
             extra
                 .into_iter()
                 .map(|t| match s.observed.component(t).filter(|h| !h.placeholders.is_empty()) {
-                    Some(h) => (format!("calls {t}, which the plan doesn't mention and which still has {} placeholder bodies", h.placeholders.len()), true),
+                    Some(h) => (
+                        format!(
+                            "calls {t}, which the plan doesn't mention and which still has {} placeholder bodies",
+                            h.placeholders.len()
+                        ),
+                        true,
+                    ),
                     None => (format!("calls {t}, which the plan doesn't mention; plan it or remove it"), false),
                 })
                 .collect()
@@ -224,7 +242,10 @@ pub fn review(catalog: &ReviewerCatalog, types: &TypeSystem, provider: Option<&d
                     Some(Ok(notes)) => {
                         for note in notes {
                             let severity = if note.blocking { Severity::Error } else { Severity::Warning };
-                            let mut f = Finding { severity, ..Finding::error(FindingCode::ReviewFinding, target(), format!("{tag} {}", note.message)) };
+                            let mut f = Finding {
+                                severity,
+                                ..Finding::error(FindingCode::ReviewFinding, target(), format!("{tag} {}", note.message))
+                            };
                             if let (Some(line), Some(file)) = (note.line, &file) {
                                 f = f.at(file.clone(), Span { start_line: line, end_line: line, start_byte: 0, end_byte: 0 });
                             }

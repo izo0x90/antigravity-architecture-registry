@@ -61,11 +61,23 @@ impl Entry {
 
     fn of(server: &McpServer) -> Self {
         let map = |pairs: &[(String, String)]| pairs.iter().cloned().collect::<BTreeMap<_, _>>();
-        let mut entry = Self { name: server.name.clone(), url: None, transport: None, headers: BTreeMap::new(), command: None, args: Vec::new(), env: BTreeMap::new() };
+        let mut entry = Self {
+            name: server.name.clone(),
+            url: None,
+            transport: None,
+            headers: BTreeMap::new(),
+            command: None,
+            args: Vec::new(),
+            env: BTreeMap::new(),
+        };
         match &server.transport {
             McpTransport::Http { url, headers } => (entry.url, entry.headers) = (Some(url.clone()), map(headers)),
-            McpTransport::Sse { url, headers } => (entry.url, entry.transport, entry.headers) = (Some(url.clone()), Some("sse".into()), map(headers)),
-            McpTransport::Stdio { command, args, env } => (entry.command, entry.args, entry.env) = (Some(command.clone()), args.clone(), map(env)),
+            McpTransport::Sse { url, headers } => {
+                (entry.url, entry.transport, entry.headers) = (Some(url.clone()), Some("sse".into()), map(headers))
+            }
+            McpTransport::Stdio { command, args, env } => {
+                (entry.command, entry.args, entry.env) = (Some(command.clone()), args.clone(), map(env))
+            }
         }
         entry
     }
@@ -127,7 +139,9 @@ impl ProjectToolServers {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
         let temp = self.path.with_extension("toml.tmp");
-        std::fs::write(&temp, format!("{header}{text}")).and_then(|()| std::fs::rename(&temp, &self.path)).map_err(|e| format!("{}: {e}", self.path.display()))
+        std::fs::write(&temp, format!("{header}{text}"))
+            .and_then(|()| std::fs::rename(&temp, &self.path))
+            .map_err(|e| format!("{}: {e}", self.path.display()))
     }
 }
 
@@ -141,9 +155,15 @@ mod tests {
         let file = ProjectToolServers::of(dir.path());
         assert_eq!(file.read(), Ok(Vec::new()), "no file: none");
         let servers = vec![
-            McpServer { name: "docs".into(), transport: McpTransport::Http { url: "https://h/mcp".into(), headers: vec![("A".into(), "b".into())] } },
+            McpServer {
+                name: "docs".into(),
+                transport: McpTransport::Http { url: "https://h/mcp".into(), headers: vec![("A".into(), "b".into())] },
+            },
             McpServer { name: "old".into(), transport: McpTransport::Sse { url: "https://h/sse".into(), headers: Vec::new() } },
-            McpServer { name: "git".into(), transport: McpTransport::Stdio { command: "git-mcp".into(), args: vec!["-v".into()], env: Vec::new() } },
+            McpServer {
+                name: "git".into(),
+                transport: McpTransport::Stdio { command: "git-mcp".into(), args: vec!["-v".into()], env: Vec::new() },
+            },
         ];
         file.write(&servers).unwrap();
         assert_eq!(file.read(), Ok(servers));

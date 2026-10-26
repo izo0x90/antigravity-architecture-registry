@@ -8,7 +8,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arch_graph::{ComponentId, RelationKind, RepoPath, ServerStatus, Span};
-use code_analyzer::rows::{ComponentDetail, ComponentRow, Evidence, FileRow, FileRows, FlowRow, PlaceholderRow, RefKind, RefRow, RelationRow};
+use code_analyzer::rows::{
+    ComponentDetail, ComponentRow, Evidence, FileRow, FileRows, FlowRow, PlaceholderRow, RefKind, RefRow, RelationRow,
+};
 use code_analyzer::{FileWrite, RuleHit};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
@@ -94,8 +96,16 @@ CREATE TABLE servers (language TEXT PRIMARY KEY, server TEXT NOT NULL, version T
 ";
 
 /// The tables a file's rows are in (all but meta and servers).
-const FILE_TABLES: [(&str, &str); 8] =
-    [("files", "path"), ("components", "file"), ("refs", "file"), ("relations", "file"), ("flows", "file"), ("placeholders", "file"), ("rule_hits", "file"), ("highlights", "file")];
+const FILE_TABLES: [(&str, &str); 8] = [
+    ("files", "path"),
+    ("components", "file"),
+    ("refs", "file"),
+    ("relations", "file"),
+    ("flows", "file"),
+    ("placeholders", "file"),
+    ("rule_hits", "file"),
+    ("highlights", "file"),
+];
 
 /// A component's detail as stored: what the plan's columns don't hold.
 #[derive(Serialize, Deserialize)]
@@ -135,7 +145,14 @@ impl SqliteStore {
     /// another layout, or that can't be read, is thrown away and started
     /// again then), so that happens on the thread that writes.
     pub fn open(path: &Path, settings: &Settings) -> Self {
-        Self { path: path.to_path_buf(), settings: settings.clone(), writer: Mutex::new(None), prepared: std::sync::atomic::AtomicBool::new(false), readers: Mutex::new(Vec::new()), temporary: false }
+        Self {
+            path: path.to_path_buf(),
+            settings: settings.clone(),
+            writer: Mutex::new(None),
+            prepared: std::sync::atomic::AtomicBool::new(false),
+            readers: Mutex::new(Vec::new()),
+            temporary: false,
+        }
     }
 
     /// A store in a temporary file, removed when dropped (for one run, like
@@ -230,15 +247,38 @@ impl SqliteStore {
         let mut files: BTreeMap<String, FileRows> = BTreeMap::new();
         let mut statement = c.prepare("SELECT path, language, size, modified, content_hash, read_version FROM files").map_err(failed)?;
         let rows = statement
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?)))
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            })
             .map_err(failed)?;
         for row in rows {
             let (path, language, size, modified, content_hash, read_version) = row.map_err(failed)?;
             let Ok(repo_path) = RepoPath::new(&path) else { continue };
             let file = FileRow { path: repo_path, language, size: size as u64, modified, content_hash, read_version };
-            files.insert(path, FileRows { file, components: Vec::new(), refs: Vec::new(), relations: Vec::new(), flows: Vec::new(), placeholders: Vec::new(), rule_hits: Vec::new(), highlights: Default::default() });
+            files.insert(
+                path,
+                FileRows {
+                    file,
+                    components: Vec::new(),
+                    refs: Vec::new(),
+                    relations: Vec::new(),
+                    flows: Vec::new(),
+                    placeholders: Vec::new(),
+                    rule_hits: Vec::new(),
+                    highlights: Default::default(),
+                },
+            );
         }
-        let mut statement = c.prepare("SELECT file, id, parent, type, name, span_start, span_end, name_start, name_end, signature, detail FROM components").map_err(failed)?;
+        let mut statement = c
+            .prepare("SELECT file, id, parent, type, name, span_start, span_end, name_start, name_end, signature, detail FROM components")
+            .map_err(failed)?;
         let mut rows = statement.query([]).map_err(failed)?;
         while let Some(r) = rows.next().map_err(failed)? {
             let file: String = r.get(0).map_err(failed)?;
@@ -246,10 +286,13 @@ impl SqliteStore {
             let stored: StoredDetail = from_json(&r.get::<_, String>(10).map_err(failed)?)?;
             let id = ComponentId::for_symbol(&rows.file.language, &stored.detail.symbol);
             let (start, end): (i64, i64) = (r.get(5).map_err(failed)?, r.get(6).map_err(failed)?);
-            let name_span = match (r.get::<_, Option<i64>>(7).map_err(failed)?, r.get::<_, Option<i64>>(8).map_err(failed)?, stored.name_lines) {
-                (Some(s), Some(e), Some((sl, el))) => Some(Span { start_line: sl, end_line: el, start_byte: s as u32, end_byte: e as u32 }),
-                _ => None,
-            };
+            let name_span =
+                match (r.get::<_, Option<i64>>(7).map_err(failed)?, r.get::<_, Option<i64>>(8).map_err(failed)?, stored.name_lines) {
+                    (Some(s), Some(e), Some((sl, el))) => {
+                        Some(Span { start_line: sl, end_line: el, start_byte: s as u32, end_byte: e as u32 })
+                    }
+                    _ => None,
+                };
             rows.components.push(ComponentRow {
                 id,
                 parent: r.get::<_, Option<String>>(2).map_err(failed)?.map(ComponentId::new),
@@ -262,7 +305,9 @@ impl SqliteStore {
             });
         }
         drop(rows);
-        let mut statement = c.prepare("SELECT file, start, end, name, kind, within, target, evidence, prover, detail FROM refs ORDER BY file, start").map_err(failed)?;
+        let mut statement = c
+            .prepare("SELECT file, start, end, name, kind, within, target, evidence, prover, detail FROM refs ORDER BY file, start")
+            .map_err(failed)?;
         let mut rows = statement.query([]).map_err(failed)?;
         while let Some(r) = rows.next().map_err(failed)? {
             let file: String = r.get(0).map_err(failed)?;
@@ -304,10 +349,16 @@ impl SqliteStore {
             let file: String = r.get(0).map_err(failed)?;
             let Some(rows) = files.get_mut(&file) else { continue };
             let stored: StoredFlow = from_json(&r.get::<_, String>(3).map_err(failed)?)?;
-            rows.flows.push(FlowRow { index: r.get::<_, i64>(1).map_err(failed)? as usize, flow: stored.flow, within: r.get::<_, Option<String>>(2).map_err(failed)?.map(ComponentId::new), receivers: stored.receivers });
+            rows.flows.push(FlowRow {
+                index: r.get::<_, i64>(1).map_err(failed)? as usize,
+                flow: stored.flow,
+                within: r.get::<_, Option<String>>(2).map_err(failed)?.map(ComponentId::new),
+                receivers: stored.receivers,
+            });
         }
         drop(rows);
-        let mut statement = c.prepare("SELECT file, start, end, start_line, end_line, macro FROM placeholders ORDER BY file, start").map_err(failed)?;
+        let mut statement =
+            c.prepare("SELECT file, start, end, start_line, end_line, macro FROM placeholders ORDER BY file, start").map_err(failed)?;
         let mut rows = statement.query([]).map_err(failed)?;
         while let Some(r) = rows.next().map_err(failed)? {
             let file: String = r.get(0).map_err(failed)?;
@@ -345,7 +396,8 @@ impl SqliteStore {
             write_file(&tx, w)?;
         }
         if let Some(f) = fingerprints {
-            let kept: Option<String> = tx.query_row("SELECT value FROM meta WHERE key = 'fingerprints'", [], |r| r.get(0)).optional().map_err(failed)?;
+            let kept: Option<String> =
+                tx.query_row("SELECT value FROM meta WHERE key = 'fingerprints'", [], |r| r.get(0)).optional().map_err(failed)?;
             if kept.as_deref() != Some(f) {
                 tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('fingerprints', ?1)", params![f]).map_err(failed)?;
             }
@@ -370,7 +422,9 @@ impl SqliteStore {
 
     /// One file's colours, on a connection of its own.
     pub fn highlights(&self, file: &RepoPath) -> Result<Option<code_analyzer::highlight::Highlights>, StoreError> {
-        let runs: Option<Vec<u8>> = self.read(|c| c.query_row("SELECT runs FROM highlights WHERE file = ?1", params![file.as_str()], |r| r.get(0)).optional().map_err(failed))?;
+        let runs: Option<Vec<u8>> = self.read(|c| {
+            c.query_row("SELECT runs FROM highlights WHERE file = ?1", params![file.as_str()], |r| r.get(0)).optional().map_err(failed)
+        })?;
         runs.map(|b| decode_runs(&b)).transpose()
     }
 
@@ -378,8 +432,12 @@ impl SqliteStore {
     /// by file and place, on a connection of their own.
     pub fn refs_to(&self, target: &str) -> Result<Vec<RefTo>, StoreError> {
         self.read(|c| {
-            let mut statement = c.prepare("SELECT file, start, \"end\", kind, within, evidence FROM refs WHERE target = ?1 ORDER BY file, start").map_err(failed)?;
-            let rows = statement.query_map(params![target], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).map_err(failed)?;
+            let mut statement = c
+                .prepare("SELECT file, start, \"end\", kind, within, evidence FROM refs WHERE target = ?1 ORDER BY file, start")
+                .map_err(failed)?;
+            let rows = statement
+                .query_map(params![target], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))
+                .map_err(failed)?;
             rows.collect::<Result<Vec<_>, _>>().map_err(failed)
         })
     }
@@ -387,20 +445,29 @@ impl SqliteStore {
     /// The servers' states, as last known.
     pub fn servers(&self) -> Result<Vec<ServerStatus>, StoreError> {
         self.read(|c| {
-        let mut statement = c.prepare("SELECT language, server, version, state, reason, files, proven, dropped_positions FROM servers ORDER BY language").map_err(failed)?;
-        let rows = statement
-            .query_map([], |r| {
-                let counts = (r.get::<_, i64>(5)? as usize, r.get::<_, i64>(6)? as usize, r.get::<_, i64>(7)? as usize);
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, counts))
-            })
-            .map_err(failed)?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (language, server, version, state, reason, (files, proven, dropped_positions)) = row.map_err(failed)?;
-            let state = serde_json::from_value(serde_json::Value::String(state)).map_err(failed)?;
-            out.push(ServerStatus { language, server, state, version, reason, dropped_positions, files, proven });
-        }
-        Ok(out)
+            let mut statement = c
+                .prepare("SELECT language, server, version, state, reason, files, proven, dropped_positions FROM servers ORDER BY language")
+                .map_err(failed)?;
+            let rows = statement
+                .query_map([], |r| {
+                    let counts = (r.get::<_, i64>(5)? as usize, r.get::<_, i64>(6)? as usize, r.get::<_, i64>(7)? as usize);
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                        counts,
+                    ))
+                })
+                .map_err(failed)?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (language, server, version, state, reason, (files, proven, dropped_positions)) = row.map_err(failed)?;
+                let state = serde_json::from_value(serde_json::Value::String(state)).map_err(failed)?;
+                out.push(ServerStatus { language, server, state, version, reason, dropped_positions, files, proven });
+            }
+            Ok(out)
         })
     }
 
@@ -500,13 +567,16 @@ fn write_file(tx: &Transaction<'_>, w: &FileWrite) -> Result<(), StoreError> {
     let path = w.path.as_str();
     if let Some(f) = &w.file {
         let kept: Option<(String, i64, i64, String, String)> = tx
-            .query_row("SELECT language, size, modified, content_hash, read_version FROM files WHERE path = ?1", params![path], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+            .query_row("SELECT language, size, modified, content_hash, read_version FROM files WHERE path = ?1", params![path], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
             .optional()
             .map_err(failed)?;
         match kept {
             // Only the stamp: an update of those two columns.
             Some((language, _, _, hash, version)) if language == f.language && hash == f.content_hash && version == f.read_version => {
-                tx.execute("UPDATE files SET size = ?2, modified = ?3 WHERE path = ?1", params![path, f.size as i64, f.modified]).map_err(failed)?;
+                tx.execute("UPDATE files SET size = ?2, modified = ?3 WHERE path = ?1", params![path, f.size as i64, f.modified])
+                    .map_err(failed)?;
             }
             _ => {
                 tx.execute(
@@ -520,7 +590,11 @@ fn write_file(tx: &Transaction<'_>, w: &FileWrite) -> Result<(), StoreError> {
     if let Some(components) = &w.components {
         tx.execute("DELETE FROM components WHERE file = ?1", params![path]).map_err(failed)?;
         for c in components {
-            let detail = json(&StoredDetail { detail: c.detail.clone(), lines: (c.span.start_line, c.span.end_line), name_lines: c.name_span.map(|s| (s.start_line, s.end_line)) })?;
+            let detail = json(&StoredDetail {
+                detail: c.detail.clone(),
+                lines: (c.span.start_line, c.span.end_line),
+                name_lines: c.name_span.map(|s| (s.start_line, s.end_line)),
+            })?;
             let signature = c.signature.as_ref().map(json).transpose()?;
             let values = |key: &str| {
                 tx.execute(
@@ -553,16 +627,33 @@ fn write_file(tx: &Transaction<'_>, w: &FileWrite) -> Result<(), StoreError> {
         for r in refs {
             let detail = (r.detail != Default::default()).then(|| json(&r.detail)).transpose()?;
             insert
-                .execute(params![path, r.start, r.end, r.name, r.kind.name(), r.within.as_ref().map(ComponentId::as_str), r.target.as_ref().map(ComponentId::as_str), r.evidence.name(), r.prover, detail])
+                .execute(params![
+                    path,
+                    r.start,
+                    r.end,
+                    r.name,
+                    r.kind.name(),
+                    r.within.as_ref().map(ComponentId::as_str),
+                    r.target.as_ref().map(ComponentId::as_str),
+                    r.evidence.name(),
+                    r.prover,
+                    detail
+                ])
                 .map_err(failed)?;
         }
     }
     if let Some(relations) = &w.relations {
         tx.execute("DELETE FROM relations WHERE file = ?1", params![path]).map_err(failed)?;
-        let mut insert = tx.prepare_cached("INSERT INTO relations (file, kind, source, target, detail, evidence, prover) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)").map_err(failed)?;
+        let mut insert = tx
+            .prepare_cached(
+                "INSERT INTO relations (file, kind, source, target, detail, evidence, prover) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )
+            .map_err(failed)?;
         for r in relations {
             let detail = (r.detail != Default::default()).then(|| json(&r.detail)).transpose()?;
-            insert.execute(params![path, r.kind.name(), r.source.as_str(), r.target.as_str(), detail, r.evidence.name(), r.prover]).map_err(failed)?;
+            insert
+                .execute(params![path, r.kind.name(), r.source.as_str(), r.target.as_str(), detail, r.evidence.name(), r.prover])
+                .map_err(failed)?;
         }
     }
     if let Some(flows) = &w.flows {
@@ -572,7 +663,17 @@ fn write_file(tx: &Transaction<'_>, w: &FileWrite) -> Result<(), StoreError> {
             let kind = serde_json::to_value(f.flow.kind).map_err(failed)?;
             let detail = json(&StoredFlow { flow: f.flow.clone(), receivers: f.receivers.clone() })?;
             insert
-                .execute(params![path, f.index as i64, kind.as_str().unwrap_or_default(), f.flow.span.start_byte, f.flow.span.end_byte, f.within.as_ref().map(ComponentId::as_str), f.flow.boundary, f.flow.what, detail])
+                .execute(params![
+                    path,
+                    f.index as i64,
+                    kind.as_str().unwrap_or_default(),
+                    f.flow.span.start_byte,
+                    f.flow.span.end_byte,
+                    f.within.as_ref().map(ComponentId::as_str),
+                    f.flow.boundary,
+                    f.flow.what,
+                    detail
+                ])
                 .map_err(failed)?;
         }
     }

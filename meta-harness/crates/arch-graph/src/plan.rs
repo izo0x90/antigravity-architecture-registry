@@ -11,7 +11,11 @@ use crate::{Component, ComponentId, ModelError, Relation, RelationKind, Stage};
 pub const SCHEMA_VERSION: u32 = 1;
 
 pub fn check_schema_version(found: u32, what: &str) -> Result<(), ModelError> {
-    if found == SCHEMA_VERSION { Ok(()) } else { Err(ModelError::SchemaVersion { what: what.to_owned(), found, supported: SCHEMA_VERSION }) }
+    if found == SCHEMA_VERSION {
+        Ok(())
+    } else {
+        Err(ModelError::SchemaVersion { what: what.to_owned(), found, supported: SCHEMA_VERSION })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -116,7 +120,10 @@ impl std::str::FromStr for PlanKind {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        Self::ALL.into_iter().find(|k| k.name() == text).ok_or_else(|| format!("plan kind '{text}': use \"change\", \"walkthrough\" or \"review\""))
+        Self::ALL
+            .into_iter()
+            .find(|k| k.name() == text)
+            .ok_or_else(|| format!("plan kind '{text}': use \"change\", \"walkthrough\" or \"review\""))
     }
 }
 
@@ -259,13 +266,24 @@ impl Plan {
 
     /// Records that `id` was taken back from `from` to `to`.
     pub fn revoke(&mut self, id: &ComponentId, from: Stage, to: Stage, at: &str) {
-        self.approvals.push(Approval { component: id.clone(), from, to, by: REVOKED_BY.to_owned(), at: at.to_owned(), kind: ApprovalKind::Revoked });
+        self.approvals.push(Approval {
+            component: id.clone(),
+            from,
+            to,
+            by: REVOKED_BY.to_owned(),
+            at: at.to_owned(),
+            kind: ApprovalKind::Revoked,
+        });
     }
 
     /// The user's plan approval is the latest word on `id`: nothing took it
     /// back since.
     pub fn plan_approved(&self, id: &ComponentId) -> bool {
-        self.approvals.iter().rev().find(|a| &a.component == id).is_some_and(|a| a.kind == ApprovalKind::Approved && a.to == Stage::PlanApproved)
+        self.approvals
+            .iter()
+            .rev()
+            .find(|a| &a.component == id)
+            .is_some_and(|a| a.kind == ApprovalKind::Approved && a.to == Stage::PlanApproved)
     }
 
     pub fn component(&self, id: &ComponentId) -> Option<&Component> {

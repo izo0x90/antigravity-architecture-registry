@@ -182,7 +182,9 @@ impl Evidence {
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
-        [Self::Name, Self::Server, Self::Ambiguous, Self::Unproven, Self::External, Self::NotFound, Self::Member, Self::Local].into_iter().find(|e| e.name() == name)
+        [Self::Name, Self::Server, Self::Ambiguous, Self::Unproven, Self::External, Self::NotFound, Self::Member, Self::Local]
+            .into_iter()
+            .find(|e| e.name() == name)
     }
 }
 
@@ -321,7 +323,8 @@ impl FileRows {
             })
             .collect();
         defs.sort_by_key(|(i, _)| *i);
-        let mut calls: Vec<(usize, RawCall)> = self.refs.iter().filter_map(|r| r.detail.call.clone()).chain(reading.unnamed_calls.iter().cloned()).collect();
+        let mut calls: Vec<(usize, RawCall)> =
+            self.refs.iter().filter_map(|r| r.detail.call.clone()).chain(reading.unnamed_calls.iter().cloned()).collect();
         calls.sort_by_key(|(i, _)| *i);
         let mut flows: Vec<&FlowRow> = self.flows.iter().collect();
         flows.sort_by_key(|f| f.index);
@@ -359,7 +362,13 @@ pub fn read_rows(file: FileRow, extract: &FileExtract) -> FileRows {
         components: Vec::new(),
         refs: Vec::new(),
         relations: Vec::new(),
-        flows: extract.flows.iter().cloned().enumerate().map(|(index, flow)| FlowRow { index, flow, within: None, receivers: Vec::new() }).collect(),
+        flows: extract
+            .flows
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, flow)| FlowRow { index, flow, within: None, receivers: Vec::new() })
+            .collect(),
         placeholders: extract
             .placeholders
             .iter()
@@ -383,8 +392,12 @@ pub(crate) fn flow_refs(flow: &RawFlow) -> Vec<(RefKind, &str, Span)> {
 
 /// A call's ref name: the last name in what's called.
 pub(crate) fn call_name(callee: &Expr) -> String {
-    callee.split().map(|(_, _, name)| name.to_owned()).or_else(|| match callee {
-        Expr::Name(n) => Some(n.clone()),
-        _ => None,
-    }).unwrap_or_else(|| callee.render())
+    callee
+        .split()
+        .map(|(_, _, name)| name.to_owned())
+        .or_else(|| match callee {
+            Expr::Name(n) => Some(n.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| callee.render())
 }

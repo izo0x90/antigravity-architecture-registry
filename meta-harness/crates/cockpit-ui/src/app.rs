@@ -6,22 +6,25 @@ use std::sync::{Arc, Mutex};
 
 use arch_graph::ComponentId;
 
-use crate::actions::{Action, Bound, Choice, Group, Invocation, LeaderEntry, MINOR, Origin, PRIMARY, Param, RunCx, SECONDARY, Scope, Situation, When, is_primary, leader_entries};
 use crate::actions::Layer;
+use crate::actions::{
+    Action, Bound, Choice, Group, Invocation, LeaderEntry, MINOR, Origin, PRIMARY, Param, RunCx, SECONDARY, Scope, Situation, When,
+    is_primary, leader_entries,
+};
 use crate::buffer::Buffer;
-use crate::panels::{Panels, BufferId};
-use crate::quick_look::QuickLook;
-use crate::saved::SavedUi;
 use crate::config::UiConfig;
 use crate::feedback::FeedbackInspectorState;
 use crate::goto::{Candidate, Choosing, Details, Pending, Wait, candidates};
 use crate::keymap::{Chord, InputMode, SeqMatch, TapTracker, continuations, match_sequence};
 use crate::nav::{GoTo, Jump, JumpList, Motion, Move, Place, SearchEvent, Spot, Step, Target, hint_labels, rank_matches, step_match};
 use crate::net::{NetClient, NetResult, WsState};
+use crate::panels::{BufferId, Panels};
+use crate::quick_look::QuickLook;
+use crate::saved::SavedUi;
 use crate::theme::colors;
 
-pub(crate) mod attention;
 mod asks;
+pub(crate) mod attention;
 mod capture;
 mod commands;
 mod desk;
@@ -31,8 +34,8 @@ mod going;
 mod keeping;
 mod keys;
 mod layout;
-mod linking;
 mod lifecycle;
+mod linking;
 mod look;
 pub(crate) mod notes;
 mod outside;
@@ -97,11 +100,15 @@ enum ShellCommand {
     OpenPalette,
     /// Row or line N (its value).
     Line,
-    Hint { open: bool },
+    Hint {
+        open: bool,
+    },
     /// What the view has where you are, to the clipboard.
     Copy,
     Search,
-    SearchStep { forward: bool },
+    SearchStep {
+        forward: bool,
+    },
     MarkSet,
     MarkJump,
     /// Tags what the cursor's on (its value: a tag's id, or a new one's name).
@@ -116,7 +123,9 @@ enum ShellCommand {
     /// thing, as JSON).
     TagGoToPick,
     /// The next (or previous) thing the tag on what the cursor's on is on.
-    TagStep { forward: bool },
+    TagStep {
+        forward: bool,
+    },
     /// Tagging: the next of the things at the cursor (the line, its command).
     TagLevel,
     /// A tag's name (its value: its id) put where you're typing.
@@ -355,7 +364,6 @@ pub struct CockpitApp {
     pub index_led: ActivityLed,
 }
 
-
 impl CockpitApp {
     /// The cockpit over home at `host_origin`; how the platform shows
     /// alerts is handed in by its start-up.
@@ -431,123 +439,7 @@ impl CockpitApp {
             index_led: ActivityLed::default(),
         }
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 }
-
-
-
-
-
 
 impl eframe::App for CockpitApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -586,10 +478,6 @@ impl CockpitApp {
         self.desk.remote.end_frame(ctx, status);
         self.desk.remote.flush();
     }
-
-
-
-
 
     fn draw_frame(&mut self, ctx: &egui::Context) {
         self.update_lifecycle(ctx);

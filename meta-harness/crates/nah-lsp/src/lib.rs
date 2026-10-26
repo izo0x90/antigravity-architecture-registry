@@ -60,12 +60,18 @@ pub struct ServerSpec {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerState {
     Starting,
-    Ready { version: Option<String> },
+    Ready {
+        version: Option<String>,
+    },
     /// It ended or hung; started again after a wait.
-    Restarting { reason: String },
+    Restarting {
+        reason: String,
+    },
     /// Not ready within its time limit (it may still get there), or it
     /// can't serve (then it's stopped).
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
     Stopped,
 }
 
@@ -311,7 +317,12 @@ fn read_messages(shared: &Shared, stdout: impl Read) {
             (Some(id), Some("client/registerCapability")) => {
                 for r in msg["params"]["registrations"].as_array().into_iter().flatten() {
                     if r["method"] == "workspace/didChangeWatchedFiles" {
-                        let watches = r["registerOptions"]["watchers"].as_array().into_iter().flatten().filter_map(|w| Watch::of(&w["globPattern"])).collect();
+                        let watches = r["registerOptions"]["watchers"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|w| Watch::of(&w["globPattern"]))
+                            .collect();
                         s.watched.insert(r["id"].as_str().unwrap_or_default().to_owned(), watches);
                     }
                 }
@@ -386,7 +397,8 @@ fn run_once(shared: &Arc<Shared>) -> (String, bool) {
         Ok(c) => c,
         Err(e) => return (format!("{} couldn't start: {e}", spec.program), true),
     };
-    let (stdin, stdout, stderr) = (child.stdin.take().expect("piped"), child.stdout.take().expect("piped"), child.stderr.take().expect("piped"));
+    let (stdin, stdout, stderr) =
+        (child.stdin.take().expect("piped"), child.stdout.take().expect("piped"), child.stderr.take().expect("piped"));
     let (outbox, queue) = channel();
     let writer = std::thread::spawn(move || write_messages(stdin, queue));
     {
@@ -461,7 +473,8 @@ fn run_once(shared: &Arc<Shared>) -> (String, bool) {
     let parsed: Option<lsp_types::InitializeResult> = serde_json::from_value(result.clone()).ok();
     {
         let mut s = shared.lock();
-        s.encoding = Some(parsed.as_ref().and_then(|r| r.capabilities.position_encoding.as_ref()).map_or("utf-16", |e| e.as_str()).to_owned());
+        s.encoding =
+            Some(parsed.as_ref().and_then(|r| r.capabilities.position_encoding.as_ref()).map_or("utf-16", |e| e.as_str()).to_owned());
         s.version = parsed.as_ref().and_then(|r| r.server_info.as_ref()).and_then(|i| i.version.clone());
         s.reports_status = capabilities.pointer("/experimental/serverStatusNotification") == Some(&Value::Bool(true));
         s.highlights = offers(&capabilities, "textDocument/documentHighlight");
@@ -487,7 +500,9 @@ fn run_once(shared: &Arc<Shared>) -> (String, bool) {
                 shared.settle(&mut s);
                 if !s.got_ready && !s.late && Instant::now() >= deadline {
                     s.late = true;
-                    s.server = ServerState::Failed { reason: format!("not ready within {}s (still loading)", shared.spec.ready_timeout.as_secs()) };
+                    s.server = ServerState::Failed {
+                        reason: format!("not ready within {}s (still loading)", shared.spec.ready_timeout.as_secs()),
+                    };
                     shared.changed.notify_all();
                 }
                 s = shared.changed.wait_timeout(s, TICK).unwrap_or_else(|e| e.into_inner()).0;
@@ -709,13 +724,14 @@ impl Client {
             let offset = asked.next().copied().unwrap_or_default();
             // An answer that can't be read, and places that can't be
             // converted, are counted (never silently dropped).
-            let highlights: Vec<lsp_types::DocumentHighlight> = match serde_json::from_value::<Option<Vec<lsp_types::DocumentHighlight>>>(result.clone()) {
-                Ok(h) => h.unwrap_or_default(),
-                Err(_) => {
-                    dropped.fetch_add(1, Ordering::SeqCst);
-                    Vec::new()
-                }
-            };
+            let highlights: Vec<lsp_types::DocumentHighlight> =
+                match serde_json::from_value::<Option<Vec<lsp_types::DocumentHighlight>>>(result.clone()) {
+                    Ok(h) => h.unwrap_or_default(),
+                    Err(_) => {
+                        dropped.fetch_add(1, Ordering::SeqCst);
+                        Vec::new()
+                    }
+                };
             let byte = |p: lsp_types::Position| lines.byte(text, p.line as usize, p.character as usize, &encoding);
             let readable: Vec<(usize, usize, Option<lsp_types::DocumentHighlightKind>)> = highlights
                 .into_iter()
@@ -737,7 +753,14 @@ impl Client {
 
     /// Asks `method` at each place in `file`, a few at a time, and reads
     /// each answer with `read`.
-    fn ask_each<T>(&self, method: &str, file: &Path, text: &str, at: &[usize], mut read: impl FnMut(&Value) -> T) -> Result<Vec<T>, LspError> {
+    fn ask_each<T>(
+        &self,
+        method: &str,
+        file: &Path,
+        text: &str,
+        at: &[usize],
+        mut read: impl FnMut(&Value) -> T,
+    ) -> Result<Vec<T>, LspError> {
         if !self.is_ready() {
             return Err(LspError::NotReady);
         }
@@ -776,16 +799,22 @@ impl Client {
 
     /// The first place a definition answer names, in bytes.
     fn place(&self, result: &Value, encoding: &str, texts: &mut HashMap<PathBuf, Option<String>>) -> Definition {
-        let Ok(response) = serde_json::from_value::<Option<lsp_types::GotoDefinitionResponse>>(result.clone()) else { return self.unreadable() };
+        let Ok(response) = serde_json::from_value::<Option<lsp_types::GotoDefinitionResponse>>(result.clone()) else {
+            return self.unreadable();
+        };
         let first = match response {
             None => None,
             Some(lsp_types::GotoDefinitionResponse::Scalar(l)) => Some((l.uri, l.range)),
             Some(lsp_types::GotoDefinitionResponse::Array(list)) => list.into_iter().next().map(|l| (l.uri, l.range)),
-            Some(lsp_types::GotoDefinitionResponse::Link(list)) => list.into_iter().next().map(|l| (l.target_uri, l.target_selection_range)),
+            Some(lsp_types::GotoDefinitionResponse::Link(list)) => {
+                list.into_iter().next().map(|l| (l.target_uri, l.target_selection_range))
+            }
         };
         let Some((uri, range)) = first else { return Definition::Nowhere };
         let Some(path) = path_of(uri.as_str()) else { return self.unreadable() };
-        let Some(text) = texts.entry(path.clone()).or_insert_with(|| std::fs::read_to_string(&path).ok()).as_deref() else { return self.unreadable() };
+        let Some(text) = texts.entry(path.clone()).or_insert_with(|| std::fs::read_to_string(&path).ok()).as_deref() else {
+            return self.unreadable();
+        };
         let lines = Lines::new(text);
         let at = |p: lsp_types::Position| lines.byte(text, p.line as usize, p.character as usize, encoding);
         match (at(range.start), at(range.end)) {
@@ -947,7 +976,10 @@ mod tests {
         let b = text.find("b()").unwrap();
         for encoding in ["utf-8", "utf-16"] {
             let p = lines.position(text, b, encoding);
-            assert_eq!(lines.byte(text, p["line"].as_u64().unwrap() as usize, p["character"].as_u64().unwrap() as usize, encoding), Some(b));
+            assert_eq!(
+                lines.byte(text, p["line"].as_u64().unwrap() as usize, p["character"].as_u64().unwrap() as usize, encoding),
+                Some(b)
+            );
         }
         let path = Path::new("/tmp/a dir/é.rs");
         assert_eq!(path_of(&file_uri(path)).unwrap(), path);

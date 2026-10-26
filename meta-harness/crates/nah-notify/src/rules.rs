@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 
 use harness_contracts::{
-    AdapterEvent, AuthStatus, ClientEvent, InstanceId, Notification, NotificationId, NotificationKind, NotificationState, RequestKind, RequestStatus, SlotId, Terminal, TerminalNews, ThreadId,
-    ThreadStatus, TurnId, TurnStatus,
+    AdapterEvent, AuthStatus, ClientEvent, InstanceId, Notification, NotificationId, NotificationKind, NotificationState, RequestKind,
+    RequestStatus, SlotId, Terminal, TerminalNews, ThreadId, ThreadStatus, TurnId, TurnStatus,
 };
 
 /// A slot as notifications name it.
@@ -63,7 +63,15 @@ fn clip(text: &str) -> Option<String> {
     Some(clipped)
 }
 
-fn new(id: NotificationId, kind: NotificationKind, slot: Option<&SlotRef>, thread: Option<&ThreadId>, title: String, detail: Option<String>, world: &dyn World) -> Notification {
+fn new(
+    id: NotificationId,
+    kind: NotificationKind,
+    slot: Option<&SlotRef>,
+    thread: Option<&ThreadId>,
+    title: String,
+    detail: Option<String>,
+    world: &dyn World,
+) -> Notification {
     Notification {
         id,
         server: None,
@@ -116,8 +124,12 @@ pub fn derive(event: &ClientEvent, world: &dyn World, open: &BTreeMap<Notificati
                 _ => Vec::new(),
             }
         }
-        ClientEvent::Session { event: AdapterEvent::ThreadUpdated { thread } } if thread.status == ThreadStatus::Error => crashed(&thread.id, "its harness reported an error", world),
-        ClientEvent::ThreadClosed { thread_id } if !world.closed_on_purpose(thread_id) => crashed(thread_id, "it ended without being asked to", world),
+        ClientEvent::Session { event: AdapterEvent::ThreadUpdated { thread } } if thread.status == ThreadStatus::Error => {
+            crashed(&thread.id, "its harness reported an error", world)
+        }
+        ClientEvent::ThreadClosed { thread_id } if !world.closed_on_purpose(thread_id) => {
+            crashed(thread_id, "it ended without being asked to", world)
+        }
         ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } } => {
             if !world.was_running(&turn.id) {
                 return Vec::new();
@@ -127,10 +139,22 @@ pub fn derive(event: &ClientEvent, world: &dyn World, open: &BTreeMap<Notificati
             match turn.status {
                 TurnStatus::Failed => {
                     let detail = turn.failure.as_ref().map(|f| f.message.clone());
-                    vec![opened(new(id, NotificationKind::TurnFailed, Some(&slot), Some(&turn.thread_id), format!("{}'s turn failed", slot.name), detail, world))]
+                    vec![opened(new(
+                        id,
+                        NotificationKind::TurnFailed,
+                        Some(&slot),
+                        Some(&turn.thread_id),
+                        format!("{}'s turn failed", slot.name),
+                        detail,
+                        world,
+                    ))]
                 }
                 TurnStatus::Completed => {
-                    let title = if slot.lead && !world.queued(&turn.thread_id) { "The lead is idle".to_owned() } else { format!("{} finished a turn", slot.name) };
+                    let title = if slot.lead && !world.queued(&turn.thread_id) {
+                        "The lead is idle".to_owned()
+                    } else {
+                        format!("{} finished a turn", slot.name)
+                    };
                     let detail = clip(&world.reply(&turn.thread_id, &turn.id));
                     vec![opened(new(id, NotificationKind::TurnFinished, Some(&slot), Some(&turn.thread_id), title, detail, world))]
                 }
@@ -138,10 +162,18 @@ pub fn derive(event: &ClientEvent, world: &dyn World, open: &BTreeMap<Notificati
             }
         }
         // A bell rung while one is open is the same news.
-        ClientEvent::TerminalNews { news: TerminalNews::Bell, terminal } if open.values().any(|n| n.kind == NotificationKind::TerminalBell && n.terminal.as_ref() == Some(&terminal.id)) => Vec::new(),
+        ClientEvent::TerminalNews { news: TerminalNews::Bell, terminal }
+            if open.values().any(|n| n.kind == NotificationKind::TerminalBell && n.terminal.as_ref() == Some(&terminal.id)) =>
+        {
+            Vec::new()
+        }
         ClientEvent::TerminalNews { terminal, news } => vec![opened(terminal_news(terminal, *news, world))],
         ClientEvent::DiscussionUpdated { discussion } => discussion_news(discussion, world, open),
-        ClientEvent::DiscussionRemoved { discussion_id } => open.values().filter(|n| n.discussion.as_ref() == Some(discussion_id)).map(|n| Change::End { id: n.id.clone(), to: NotificationState::Done }).collect(),
+        ClientEvent::DiscussionRemoved { discussion_id } => open
+            .values()
+            .filter(|n| n.discussion.as_ref() == Some(discussion_id))
+            .map(|n| Change::End { id: n.id.clone(), to: NotificationState::Done })
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -152,14 +184,20 @@ pub fn derive(event: &ClientEvent, world: &dyn World, open: &BTreeMap<Notificati
 fn discussion_news(d: &harness_contracts::Discussion, world: &dyn World, open: &BTreeMap<NotificationId, Notification>) -> Vec<Change> {
     let id = NotificationId::discussion(&d.id, d.said.len());
     let now: Vec<&NotificationId> = open.values().filter(|n| n.discussion.as_ref() == Some(&d.id)).map(|n| &n.id).collect();
-    let mut changes: Vec<Change> = now.iter().filter(|n| ***n != id || d.whose_move() != harness_contracts::Move::User).map(|n| Change::End { id: (*n).clone(), to: NotificationState::Done }).collect();
+    let mut changes: Vec<Change> = now
+        .iter()
+        .filter(|n| ***n != id || d.whose_move() != harness_contracts::Move::User)
+        .map(|n| Change::End { id: (*n).clone(), to: NotificationState::Done })
+        .collect();
     if d.whose_move() != harness_contracts::Move::User || now.contains(&&id) {
         return changes;
     }
     let last = d.said.last();
     let who = |by: &str| d.to_user(by).to_owned();
     let title = match (d.status, last) {
-        (harness_contracts::DiscussionStatus::Answered, Some(said)) => format!("{} answered {} on {}: settle or reopen it", who(&said.by), d.id, d.on.what),
+        (harness_contracts::DiscussionStatus::Answered, Some(said)) => {
+            format!("{} answered {} on {}: settle or reopen it", who(&said.by), d.id, d.on.what)
+        }
         (_, Some(said)) if d.said.len() > 1 => format!("{} said something back in {} on {}", who(&said.by), d.id, d.on.what),
         _ => format!("{} asks you on {} ({})", who(&d.by), d.on.what, d.id),
     };
@@ -175,12 +213,21 @@ fn terminal_news(terminal: &Terminal, news: TerminalNews, world: &dyn World) -> 
     let name = if terminal.title.is_empty() { terminal.id.to_string() } else { terminal.title.clone() };
     let (what, kind, title, detail) = match news {
         TerminalNews::Bell => ("bell", NotificationKind::TerminalBell, format!("{name} rang its bell"), None),
-        TerminalNews::Ended { code } => ("end", NotificationKind::ShellEnded, format!("{name}: its shell ended"), code.map(|c| format!("exit code {c}"))),
+        TerminalNews::Ended { code } => {
+            ("end", NotificationKind::ShellEnded, format!("{name}: its shell ended"), code.map(|c| format!("exit code {c}")))
+        }
         TerminalNews::Finished { code, ran_ms } => {
             let took = took(ran_ms);
             match code {
-                Some(0) | None => ("done", NotificationKind::CommandFinished, format!("{name}: a command finished"), Some(format!("after {took}"))),
-                Some(c) => ("done", NotificationKind::CommandFailed, format!("{name}: a command failed"), Some(format!("exit code {c}, after {took}"))),
+                Some(0) | None => {
+                    ("done", NotificationKind::CommandFinished, format!("{name}: a command finished"), Some(format!("after {took}")))
+                }
+                Some(c) => (
+                    "done",
+                    NotificationKind::CommandFailed,
+                    format!("{name}: a command failed"),
+                    Some(format!("exit code {c}, after {took}")),
+                ),
             }
         }
     };
@@ -202,7 +249,15 @@ pub fn took(ms: u64) -> String {
 fn crashed(thread: &ThreadId, why: &str, world: &dyn World) -> Vec<Change> {
     let Some(slot) = world.slot_of(thread) else { return Vec::new() };
     let title = format!("{}'s session stopped", slot.name);
-    vec![opened(new(NotificationId::crash(thread), NotificationKind::SessionCrashed, Some(&slot), Some(thread), title, Some(format!("{why}; its next prompt resumes it")), world))]
+    vec![opened(new(
+        NotificationId::crash(thread),
+        NotificationKind::SessionCrashed,
+        Some(&slot),
+        Some(thread),
+        title,
+        Some(format!("{why}; its next prompt resumes it")),
+        world,
+    ))]
 }
 
 /// A server home links to stopped answering (the `time`th time).
@@ -231,7 +286,15 @@ pub fn message(from: Option<&SlotRef>, text: &str, world: &dyn World) -> Notific
         Some(slot) => format!("From {}", slot.name),
         None => "From an agent".to_owned(),
     };
-    new(NotificationId::message(&uuid::Uuid::new_v4().simple().to_string()), NotificationKind::Message, from, None, title, Some(text.trim().to_owned()), world)
+    new(
+        NotificationId::message(&uuid::Uuid::new_v4().simple().to_string()),
+        NotificationKind::Message,
+        from,
+        None,
+        title,
+        Some(text.trim().to_owned()),
+        world,
+    )
 }
 
 #[cfg(test)]

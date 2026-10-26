@@ -27,21 +27,37 @@ pub(crate) fn routes() -> Router<HomeState> {
 }
 
 /// `/s/{server}/...`: that server's `/...` (it checks what the call needs).
-async fn pass(_: Needs<can::ViewRead>, State(state): State<HomeState>, Path((server, rest)): Path<(String, String)>, request: axum::extract::Request) -> axum::response::Response {
+async fn pass(
+    _: Needs<can::ViewRead>,
+    State(state): State<HomeState>,
+    Path((server, rest)): Path<(String, String)>,
+    request: axum::extract::Request,
+) -> axum::response::Response {
     match crate::home::pass::entry(&state.home, &server) {
         Some(entry) => crate::home::pass::request(&state.home.client, &entry, &rest, request).await,
-        None => (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({ "error": format!("home links to no server named {server:?}") }))).into_response(),
+        None => (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({ "error": format!("home links to no server named {server:?}") })))
+            .into_response(),
     }
 }
 
 /// `/s/{server}/ws/...`: that server's socket, bridged both ways.
-async fn pass_socket(_: Ticketed, ws: WebSocketUpgrade, State(state): State<HomeState>, Path((server, rest)): Path<(String, String)>, uri: axum::http::Uri) -> axum::response::Response {
+async fn pass_socket(
+    _: Ticketed,
+    ws: WebSocketUpgrade,
+    State(state): State<HomeState>,
+    Path((server, rest)): Path<(String, String)>,
+    uri: axum::http::Uri,
+) -> axum::response::Response {
     match crate::home::pass::entry(&state.home, &server) {
         Some(entry) => {
             let query = uri.query().map(str::to_owned);
-            ws.on_upgrade(move |socket| async move { state.stopping.or_stop(crate::home::pass::socket(socket, entry, format!("ws/{rest}"), query)).await }).into_response()
+            ws.on_upgrade(move |socket| async move {
+                state.stopping.or_stop(crate::home::pass::socket(socket, entry, format!("ws/{rest}"), query)).await
+            })
+            .into_response()
         }
-        None => (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({ "error": format!("home links to no server named {server:?}") }))).into_response(),
+        None => (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({ "error": format!("home links to no server named {server:?}") })))
+            .into_response(),
     }
 }
 
@@ -59,7 +75,11 @@ struct NewServer {
 
 /// Adds a server (its secret is what `meta-harness token` prints there),
 /// followed from now on.
-async fn add(_: Needs<can::SessionsControl>, State(state): State<HomeState>, Json(body): Json<NewServer>) -> Result<(StatusCode, Json<Vec<ServerView>>), StateFailed> {
+async fn add(
+    _: Needs<can::SessionsControl>,
+    State(state): State<HomeState>,
+    Json(body): Json<NewServer>,
+) -> Result<(StatusCode, Json<Vec<ServerView>>), StateFailed> {
     let entry = nah_state::ServerEntry { name: body.name, url: body.url, secret: body.secret, added_at_ms: crate::home::now_ms() };
     let kept = entry.clone();
     with_state(&state.home.db, move |db| db.add_server(&kept)).await?;
@@ -70,7 +90,11 @@ async fn add(_: Needs<can::SessionsControl>, State(state): State<HomeState>, Jso
     Ok((StatusCode::CREATED, Json(state.home.servers())))
 }
 
-async fn remove(_: Needs<can::SessionsControl>, State(state): State<HomeState>, Path(name): Path<String>) -> Result<StatusCode, StateFailed> {
+async fn remove(
+    _: Needs<can::SessionsControl>,
+    State(state): State<HomeState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, StateFailed> {
     let removed = {
         let name = name.clone();
         with_state(&state.home.db, move |db| db.remove_server(&name)).await?

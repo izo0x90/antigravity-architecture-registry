@@ -22,13 +22,37 @@ pub(crate) struct Reach {
 pub(crate) const NOT_YOURS: &str = "a chat this session can't read (its own slot's, or with slots.observe a sub-slot's or a closed slot's)";
 
 impl Reach {
-    pub(crate) fn of(slots: &Arc<harness_core::SlotManager>, access: &Arc<nah_access::Access>, discussions: &Arc<nah_discussions::Discussions>, caller: &crate::mcp::McpCaller) -> Arc<Self> {
-        Arc::new(Self { slots: slots.clone(), access: access.clone(), discussions: discussions.clone(), principal: caller.principal.clone(), slot: caller.slot.clone(), listed: Default::default() })
+    pub(crate) fn of(
+        slots: &Arc<harness_core::SlotManager>,
+        access: &Arc<nah_access::Access>,
+        discussions: &Arc<nah_discussions::Discussions>,
+        caller: &crate::mcp::McpCaller,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            slots: slots.clone(),
+            access: access.clone(),
+            discussions: discussions.clone(),
+            principal: caller.principal.clone(),
+            slot: caller.slot.clone(),
+            listed: Default::default(),
+        })
     }
 
     /// What slot `slot` may read (as its sessions' tools would).
-    pub(crate) fn of_slot(slots: &Arc<harness_core::SlotManager>, access: &Arc<nah_access::Access>, discussions: &Arc<nah_discussions::Discussions>, slot: &harness_contracts::Slot) -> Self {
-        Self { slots: slots.clone(), access: access.clone(), discussions: discussions.clone(), principal: nah_access::Principal::agent(&slot.role), slot: Some(slot.id.clone()), listed: Default::default() }
+    pub(crate) fn of_slot(
+        slots: &Arc<harness_core::SlotManager>,
+        access: &Arc<nah_access::Access>,
+        discussions: &Arc<nah_discussions::Discussions>,
+        slot: &harness_contracts::Slot,
+    ) -> Self {
+        Self {
+            slots: slots.clone(),
+            access: access.clone(),
+            discussions: discussions.clone(),
+            principal: nah_access::Principal::agent(&slot.role),
+            slot: Some(slot.id.clone()),
+            listed: Default::default(),
+        }
     }
 
     pub(crate) fn reaches(&self, subject: &Subject) -> bool {
@@ -38,7 +62,9 @@ impl Reach {
         let session = match subject {
             Subject::ChatSession { session } | Subject::ChatTurn { session, .. } | Subject::ChatMessage { session, .. } => session,
             // A discussion as what it's on (one on a discussion, as that one).
-            Subject::Discussion { id } => return self.discussions.get(id).is_ok_and(|d| d.on.subject != *subject && self.reaches(&d.on.subject)),
+            Subject::Discussion { id } => {
+                return self.discussions.get(id).is_ok_and(|d| d.on.subject != *subject && self.reaches(&d.on.subject));
+            }
             _ => return true,
         };
         let observes = self.access.allows(&self.principal, Capability::SlotsObserve);

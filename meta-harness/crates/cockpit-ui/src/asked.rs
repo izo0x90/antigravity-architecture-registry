@@ -42,7 +42,9 @@ pub enum Found<A> {
     Known(Rc<A>),
     /// Not known yet; `asked` when it's on its way (or failed a moment
     /// ago).
-    Unknown { asked: bool },
+    Unknown {
+        asked: bool,
+    },
     /// Bigger than the server takes: not asked.
     TooBig,
 }
@@ -120,7 +122,9 @@ impl<Q, A> Asked<Q, A> {
         let mut wanted = std::mem::take(&mut self.wanted).into_iter().peekable();
         while wanted.peek().is_some() {
             let (mut keys, mut call, mut bytes) = (Vec::new(), Vec::new(), 0);
-            while let Some((key, question, size)) = wanted.next_if(|(.., size)| call.is_empty() || (call.len() < self.bounds.per_call && bytes + size <= self.bounds.call_bytes)) {
+            while let Some((key, question, size)) = wanted
+                .next_if(|(.., size)| call.is_empty() || (call.len() < self.bounds.per_call && bytes + size <= self.bounds.call_bytes))
+            {
                 bytes += size;
                 keys.push(key);
                 call.push(question);
@@ -165,7 +169,9 @@ impl<A> Reply<A> {
     pub fn answered(self, answers: Option<Vec<A>>) {
         let mut came = self.mailbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match answers {
-            Some(each) if each.len() == self.keys.len() => came.extend(self.keys.into_iter().zip(each).map(|(key, answer)| (key, Ok(answer)))),
+            Some(each) if each.len() == self.keys.len() => {
+                came.extend(self.keys.into_iter().zip(each).map(|(key, answer)| (key, Ok(answer))))
+            }
             _ => came.extend(self.keys.into_iter().map(|key| (key, Err(())))),
         }
     }
@@ -188,7 +194,11 @@ mod tests {
         }
         let mut calls = Vec::new();
         asked.tick(100.0, |questions, reply| calls.push((questions, reply)));
-        assert_eq!(calls.iter().map(|(q, _)| q.clone()).collect::<Vec<_>>(), [vec!["a", "b"], vec!["c"]], "each once; two to a call, ten bytes at most");
+        assert_eq!(
+            calls.iter().map(|(q, _)| q.clone()).collect::<Vec<_>>(),
+            [vec!["a", "b"], vec!["c"]],
+            "each once; two to a call, ten bytes at most"
+        );
         asked.want(key(&"a"), "a", 4);
         asked.tick(100.0, |_, _| panic!("on its way: not asked again"));
         let mut calls = calls.into_iter();

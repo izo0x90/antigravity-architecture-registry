@@ -39,7 +39,9 @@ fn side<'r>(repo: &'r Repository, point: &Point) -> Result<Side<'r>> {
         Point::Head => Side::Tree(head_tree(repo)?),
         Point::Index => Side::Index,
         Point::Files => Side::Files,
-        Point::Rev(rev) => Side::Tree(Some(repo.revparse_single(rev).map_err(|e| ChangesError::BadPoint(format!("rev:{rev}: {}", e.message())))?.peel_to_tree()?)),
+        Point::Rev(rev) => Side::Tree(Some(
+            repo.revparse_single(rev).map_err(|e| ChangesError::BadPoint(format!("rev:{rev}: {}", e.message())))?.peel_to_tree()?,
+        )),
         Point::Snapshot(id) => Side::Tree(Some(crate::timeline::tree_of(repo, id)?)),
     })
 }
@@ -96,7 +98,9 @@ fn diffs<'r>(repo: &'r Repository, comparison: &Comparison, context: u32, paths:
 /// status, its path and its path before (a rename's), from the project's
 /// folder (`prefix`: where it is in the repository, `dir/` or empty).
 fn described(delta: &git2::DiffDelta<'_>, group: Group, prefix: &str) -> Option<(Group, FileStatus, String, Option<String>)> {
-    let path = |f: git2::DiffFile<'_>| f.path().map(|p| p.to_string_lossy().replace('\\', "/")).and_then(|p| p.strip_prefix(prefix).map(str::to_owned));
+    let path = |f: git2::DiffFile<'_>| {
+        f.path().map(|p| p.to_string_lossy().replace('\\', "/")).and_then(|p| p.strip_prefix(prefix).map(str::to_owned))
+    };
     let (status, group) = match delta.status() {
         Delta::Untracked => (FileStatus::Added, if group == Group::Unstaged { Group::Untracked } else { group }),
         Delta::Added | Delta::Copied => (FileStatus::Added, group),
@@ -159,7 +163,14 @@ pub(crate) fn runs(repo: &Repository, comparison: &Comparison, prefix: &str) -> 
 }
 
 /// `path`'s changes (from the project's folder) in `group` of `comparison`.
-pub(crate) fn file(repo: &Repository, comparison: &Comparison, path: &str, group: Group, context: u32, prefix: &str) -> Result<FileChanges> {
+pub(crate) fn file(
+    repo: &Repository,
+    comparison: &Comparison,
+    path: &str,
+    group: Group,
+    context: u32,
+    prefix: &str,
+) -> Result<FileChanges> {
     let mut out = FileChanges { comparison: comparison.clone(), path: path.to_owned(), group, context, binary: false, hunks: Vec::new() };
     let full = format!("{prefix}{path}");
     for (diff_group, diff) in diffs(repo, comparison, context, &[full.as_str()])? {
@@ -207,7 +218,13 @@ fn hunks(patch: &Patch) -> Result<Vec<Hunk>> {
             let text = String::from_utf8_lossy(line.content()).trim_end_matches(['\n', '\r']).to_owned();
             lines.push(DiffLine { kind, old: line.old_lineno(), new: line.new_lineno(), text });
         }
-        out.push(Hunk { old_start: hunk.old_start(), old_lines: hunk.old_lines(), new_start: hunk.new_start(), new_lines: hunk.new_lines(), lines });
+        out.push(Hunk {
+            old_start: hunk.old_start(),
+            old_lines: hunk.old_lines(),
+            new_start: hunk.new_start(),
+            new_lines: hunk.new_lines(),
+            lines,
+        });
     }
     Ok(out)
 }
@@ -216,9 +233,8 @@ fn hunks(patch: &Patch) -> Result<Vec<Hunk>> {
 /// ids, the index's and the file's size and time. The same fingerprint,
 /// the same changes.
 pub(crate) fn fingerprint(repo: &Repository, comparison: &Comparison, path: &str, prefix: &str) -> Result<String> {
-    let stat = |p: &std::path::Path| {
-        std::fs::metadata(p).map_or_else(|_| "-".to_owned(), |m| format!("{}:{:?}", m.len(), m.modified().ok()))
-    };
+    let stat =
+        |p: &std::path::Path| std::fs::metadata(p).map_or_else(|_| "-".to_owned(), |m| format!("{}:{:?}", m.len(), m.modified().ok()));
     let mut parts = Vec::new();
     for point in [&comparison.from, &comparison.to] {
         parts.push(match point {

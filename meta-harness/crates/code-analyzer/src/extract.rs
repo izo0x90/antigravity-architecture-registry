@@ -214,7 +214,12 @@ pub fn content_hash(content: &str) -> String {
 /// The span of bytes `start..end` of `text`, which is written at `at`.
 fn within(text: &str, at: Span, start: usize, end: usize) -> Span {
     let line = at.start_line + text[..start].matches('\n').count() as u32;
-    Span { start_line: line, end_line: line + text[start..end].matches('\n').count() as u32, start_byte: at.start_byte + start as u32, end_byte: at.start_byte + end as u32 }
+    Span {
+        start_line: line,
+        end_line: line + text[start..end].matches('\n').count() as u32,
+        start_byte: at.start_byte + start as u32,
+        end_byte: at.start_byte + end as u32,
+    }
 }
 
 pub(crate) fn span(node: &AstNode<'_>) -> Span {
@@ -276,7 +281,11 @@ fn signature_types(pack: &Pack, def: &crate::pack::DefinitionSpec, node: &AstNod
 /// The callee and span when `node` is a call (or wraps exactly one).
 fn as_call(pack: &Pack, node: &AstNode<'_>) -> Option<(Expr, Span)> {
     let direct = |n: &AstNode<'_>| {
-        pack.calls.iter().zip(&pack.spec.calls).find_map(|(rule, spec)| n.matches(rule).then(|| n.field(&spec.callee_field)).flatten()).map(|c| (Expr::read(pack, &c), span(n)))
+        pack.calls
+            .iter()
+            .zip(&pack.spec.calls)
+            .find_map(|(rule, spec)| n.matches(rule).then(|| n.field(&spec.callee_field)).flatten())
+            .map(|c| (Expr::read(pack, &c), span(n)))
     };
     direct(node).or_else(|| {
         let mut named = node.named_children();
@@ -289,7 +298,12 @@ fn as_call(pack: &Pack, node: &AstNode<'_>) -> Option<(Expr, Span)> {
 
 /// The call that produces `node`'s value: the call itself, through calls
 /// that just wrap their argument (`Ok(f(x))`), or a local bound to a call.
-fn producer(pack: &Pack, node: &AstNode<'_>, bound: &std::collections::HashMap<(Option<usize>, String), Bound>, at: Option<usize>) -> Option<(Expr, Span)> {
+fn producer(
+    pack: &Pack,
+    node: &AstNode<'_>,
+    bound: &std::collections::HashMap<(Option<usize>, String), Bound>,
+    at: Option<usize>,
+) -> Option<(Expr, Span)> {
     let lang = &pack.spec.language;
     fn call<'r, 'p>(pack: &'p Pack, n: &AstNode<'r>) -> Option<(AstNode<'r>, &'p crate::pack::CallSpec)> {
         pack.calls.iter().zip(&pack.spec.calls).find_map(|(rule, spec)| n.matches(rule).then_some(spec)).map(|spec| (n.clone(), spec))
@@ -305,7 +319,11 @@ fn producer(pack: &Pack, node: &AstNode<'_>, bound: &std::collections::HashMap<(
         let callee = Expr::read(pack, &n.field(&spec.callee_field)?);
         let written = callee.render();
         if lang.transparent_calls.iter().any(|t| *t == written || Some(t.as_str()) == callee.last_name()) {
-            let arg = spec.args_field.as_ref().and_then(|f| n.field(f)).and_then(|list| list.named_children().find(|c| !lang.ignored(&c.kind())))?;
+            let arg = spec
+                .args_field
+                .as_ref()
+                .and_then(|f| n.field(f))
+                .and_then(|list| list.named_children().find(|c| !lang.ignored(&c.kind())))?;
             return producer(pack, &arg, bound, at);
         }
         return Some((callee, span(&n)));
@@ -337,12 +355,19 @@ fn local_name<'a>(pack: &Pack, text: &'a str) -> Option<&'a str> {
 /// one of its locals (bound in it, or a parameter) rather than a function:
 /// `let helper = || ..; helper()` or `fn run(callback: impl Fn()) { callback() }`.
 /// A definition of that name nested right there is a function after all.
-fn is_local(pack: &Pack, name: &str, at: Option<usize>, defs: &[RawDef], bound: &std::collections::HashMap<(Option<usize>, String), Bound>) -> bool {
+fn is_local(
+    pack: &Pack,
+    name: &str,
+    at: Option<usize>,
+    defs: &[RawDef],
+    bound: &std::collections::HashMap<(Option<usize>, String), Bound>,
+) -> bool {
     let Some(at) = at else { return false };
     if local_name(pack, name) != Some(name) || defs.iter().any(|d| d.parent == Some(at) && d.name == name) {
         return false;
     }
-    let param = defs.get(at).and_then(|d| d.signature.as_ref()).is_some_and(|s| s.params.iter().any(|p| local_name(pack, &p.name) == Some(name)));
+    let param =
+        defs.get(at).and_then(|d| d.signature.as_ref()).is_some_and(|s| s.params.iter().any(|p| local_name(pack, &p.name) == Some(name)));
     param || bound.contains_key(&(Some(at), name.to_owned()))
 }
 
@@ -442,16 +467,48 @@ fn dead(pack: &Pack, node: &AstNode<'_>) -> bool {
 /// The flows a node makes: a returned call, a value made, a field of the
 /// definition's own value written or read, data sent or received across a
 /// boundary.
-fn flows(pack: &Pack, node: &AstNode<'_>, ctx: &Ctx, bound: &std::collections::HashMap<(Option<usize>, String), Bound>, defs: &[RawDef], out: &mut Vec<RawFlow>) {
+fn flows(
+    pack: &Pack,
+    node: &AstNode<'_>,
+    ctx: &Ctx,
+    bound: &std::collections::HashMap<(Option<usize>, String), Bound>,
+    defs: &[RawDef],
+    out: &mut Vec<RawFlow>,
+) {
     let lang = &pack.spec.language;
-    let push = |out: &mut Vec<RawFlow>, kind, what: String, names: Vec<(String, Span)>, boundary: Option<String>, what_span: Option<Span>| {
-        let (names, name_spans) = names.into_iter().unzip();
-        out.push(RawFlow { kind, at: ctx.parent, what, call: None, call_span: None, names, name_spans, what_span, boundary, through: None, span: span(node) })
-    };
+    let push =
+        |out: &mut Vec<RawFlow>, kind, what: String, names: Vec<(String, Span)>, boundary: Option<String>, what_span: Option<Span>| {
+            let (names, name_spans) = names.into_iter().unzip();
+            out.push(RawFlow {
+                kind,
+                at: ctx.parent,
+                what,
+                call: None,
+                call_span: None,
+                names,
+                name_spans,
+                what_span,
+                boundary,
+                through: None,
+                span: span(node),
+            })
+        };
     if pack.returns.iter().any(|rule| node.matches(rule))
         && let Some((callee, call_span)) = producer(pack, node, bound, ctx.parent)
     {
-        out.push(RawFlow { kind: FlowKind::Returned, at: ctx.parent, what: callee.render(), call: Some(callee), call_span: Some(call_span), names: Vec::new(), name_spans: Vec::new(), what_span: None, boundary: None, through: None, span: span(node) });
+        out.push(RawFlow {
+            kind: FlowKind::Returned,
+            at: ctx.parent,
+            what: callee.render(),
+            call: Some(callee),
+            call_span: Some(call_span),
+            names: Vec::new(),
+            name_spans: Vec::new(),
+            what_span: None,
+            boundary: None,
+            through: None,
+            span: span(node),
+        });
     }
     for (rule, spec) in pack.constructions.iter().zip(&pack.spec.constructions) {
         if node.matches(rule)
@@ -466,9 +523,12 @@ fn flows(pack: &Pack, node: &AstNode<'_>, ctx: &Ctx, bound: &std::collections::H
     {
         let own = ctx.parent.and_then(|p| defs.get(p)).and_then(|d| d.self_name.clone());
         let own_value = lang.self_names.contains(&object) || own.as_deref() == Some(object.as_str());
-        let other = !own_value && state.other_object.as_ref().is_some_and(|rule| node.field(&spec.object_field).is_some_and(|o| o.matches(rule)));
+        let other =
+            !own_value && state.other_object.as_ref().is_some_and(|rule| node.field(&spec.object_field).is_some_and(|o| o.matches(rule)));
         if own_value || other {
-            let written = node.parent().is_some_and(|p| state.assignments.iter().any(|a| p.matches(a)) && p.field(&spec.left_field).is_some_and(|l| l.node_id() == node.node_id()));
+            let written = node.parent().is_some_and(|p| {
+                state.assignments.iter().any(|a| p.matches(a)) && p.field(&spec.left_field).is_some_and(|l| l.node_id() == node.node_id())
+            });
             push(out, if written { FlowKind::Writes } else { FlowKind::Reads }, field.text, Vec::new(), None, Some(field.span));
             if other && let Some(flow) = out.last_mut() {
                 flow.through = Some(object);
@@ -496,7 +556,11 @@ fn flows(pack: &Pack, node: &AstNode<'_>, ctx: &Ctx, bound: &std::collections::H
                 let handlers = compiled
                     .receive_handlers
                     .as_ref()
-                    .map(|re| re.captures_iter(&keyed).filter_map(|c| c.get(1).map(|g| (g.as_str().to_owned(), within(&keyed, at, g.start(), g.end())))).collect())
+                    .map(|re| {
+                        re.captures_iter(&keyed)
+                            .filter_map(|c| c.get(1).map(|g| (g.as_str().to_owned(), within(&keyed, at, g.start(), g.end()))))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 push(out, FlowKind::Receives, compiled.key(key.as_str()), handlers, Some(spec.name.clone()), None);
             }
@@ -535,7 +599,8 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
     let lang = &pack.spec.language;
     // Local names bound to a call's output (or a declared type), per enclosing definition.
     let mut bound: std::collections::HashMap<(Option<usize>, String), Bound> = std::collections::HashMap::new();
-    let mut stack: Vec<(AstNode<'_>, Ctx)> = vec![(root.root(), Ctx { parent: None, scope: None, deferred: false, dead: false, own_body: None, def_spec: None })];
+    let mut stack: Vec<(AstNode<'_>, Ctx)> =
+        vec![(root.root(), Ctx { parent: None, scope: None, deferred: false, dead: false, own_body: None, def_spec: None })];
     while let Some((node, mut ctx)) = stack.pop() {
         if !ctx.dead && dead(pack, &node) {
             ctx.dead = true;
@@ -544,21 +609,37 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
             ctx.deferred = true;
         }
         let mut child_ctx = ctx.clone();
-        if let Some((di, def)) = pack.definitions.iter().zip(&pack.spec.definitions).enumerate().find_map(|(i, (rule, def))| node.matches(rule).then_some((i, def))) {
+        if let Some((di, def)) = pack
+            .definitions
+            .iter()
+            .zip(&pack.spec.definitions)
+            .enumerate()
+            .find_map(|(i, (rule, def))| node.matches(rule).then_some((i, def)))
+        {
             if let Some(name) = field_text(&node, &def.name_field) {
                 let bases: Vec<Named> = def
                     .bases_field
                     .as_ref()
                     .and_then(|f| node.field(f))
-                    .map(|b| b.children().filter(|c| c.is_named() && !lang.ignored(&c.kind())).map(|c| Named { text: c.text().trim().to_owned(), span: span(&c) }).collect())
+                    .map(|b| {
+                        b.children()
+                            .filter(|c| c.is_named() && !lang.ignored(&c.kind()))
+                            .map(|c| Named { text: c.text().trim().to_owned(), span: span(&c) })
+                            .collect()
+                    })
                     .unwrap_or_default();
                 // Declared outside its type (e.g. a method with a receiver).
                 let owner = match (&def.owner_field, &def.owner_kind) {
-                    (Some(field), Some(kind)) => node.field(field).and_then(|f| f.dfs().find(|n| n.kind() == kind.as_str())).map(|n| Named { text: n.text().trim().to_owned(), span: span(&n) }),
+                    (Some(field), Some(kind)) => node
+                        .field(field)
+                        .and_then(|f| f.dfs().find(|n| n.kind() == kind.as_str()))
+                        .map(|n| Named { text: n.text().trim().to_owned(), span: span(&n) }),
                     _ => None,
                 };
                 let self_name = match (&def.owner_field, &def.receiver_name_kind) {
-                    (Some(field), Some(kind)) => node.field(field).and_then(|f| f.dfs().find(|n| n.kind() == kind.as_str())).map(|n| n.text().trim().to_owned()),
+                    (Some(field), Some(kind)) => {
+                        node.field(field).and_then(|f| f.dfs().find(|n| n.kind() == kind.as_str())).map(|n| n.text().trim().to_owned())
+                    }
                     _ => None,
                 };
                 let scope = match owner {
@@ -580,7 +661,14 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
                 });
                 // A definition is its own caller: not deferred by what encloses it.
                 let own_body = def.signature_field.as_ref().and_then(|f| node.field(f)).map(|b| b.node_id());
-                child_ctx = Ctx { parent: Some(out.definitions.len() - 1), scope: None, deferred: false, dead: ctx.dead, own_body, def_spec: Some(di) };
+                child_ctx = Ctx {
+                    parent: Some(out.definitions.len() - 1),
+                    scope: None,
+                    deferred: false,
+                    dead: ctx.dead,
+                    own_body,
+                    def_spec: Some(di),
+                };
             }
         } else if let Some(scope) = pack.scopes.iter().zip(&pack.spec.scopes).find_map(|(rule, spec)| node.matches(rule).then_some(spec))
             && let Some(target) = field_named(&node, &scope.target_field)
@@ -614,7 +702,19 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
             if let Some((callee, call_span)) = produced
                 && !names.is_empty()
             {
-                out.flows.push(RawFlow { kind: FlowKind::Bound, at: ctx.parent, what: callee.render(), call: Some(callee), call_span: Some(call_span), name_spans: Vec::new(), what_span: None, names, boundary: None, through: None, span: span(&node) });
+                out.flows.push(RawFlow {
+                    kind: FlowKind::Bound,
+                    at: ctx.parent,
+                    what: callee.render(),
+                    call: Some(callee),
+                    call_span: Some(call_span),
+                    name_spans: Vec::new(),
+                    what_span: None,
+                    names,
+                    boundary: None,
+                    through: None,
+                    span: span(&node),
+                });
             }
         }
         if !ctx.dead {
@@ -630,8 +730,9 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
             let mut args = Vec::new();
             if let Some(list) = call.args_field.as_ref().and_then(|f| node.field(f)) {
                 for (position, arg) in list.named_children().filter(|c| !lang.ignored(&c.kind())).enumerate() {
-                    let producer =
-                        as_call(pack, &arg).or_else(|| local_name(pack, &arg.text()).and_then(|n| bound.get(&(ctx.parent, n.to_owned())).and_then(|b| b.producer.clone())));
+                    let producer = as_call(pack, &arg).or_else(|| {
+                        local_name(pack, &arg.text()).and_then(|n| bound.get(&(ctx.parent, n.to_owned())).and_then(|b| b.producer.clone()))
+                    });
                     if let Some((producer, producer_span)) = producer {
                         args.push(RawArg { position: position as u32, producer, producer_span });
                     }
@@ -661,7 +762,10 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
                 out.items.push(name.text().into_owned());
             }
         }
-        if !ctx.dead && pack.references.iter().any(|rule| node.matches(rule)) && !is_local(pack, node.text().trim(), ctx.parent, &out.definitions, &bound) {
+        if !ctx.dead
+            && pack.references.iter().any(|rule| node.matches(rule))
+            && !is_local(pack, node.text().trim(), ctx.parent, &out.definitions, &bound)
+        {
             out.calls.push(RawCall {
                 caller: ctx.parent,
                 callee: Expr::read(pack, &node),
@@ -712,7 +816,9 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
         // body are tokens, not syntax, so those are matched as text.
         let last = |name: &str| lang.words(name).last().map_or(name, |w| w).to_owned();
         for m in root_node.find_all(&macros.invocation) {
-            if let Some(name) = m.get_node().field(&spec.name_field).map(|n| Expr::read(pack, &n)).and_then(|e| e.last_name().map(str::to_owned)) {
+            if let Some(name) =
+                m.get_node().field(&spec.name_field).map(|n| Expr::read(pack, &n)).and_then(|e| e.last_name().map(str::to_owned))
+            {
                 out.macro_uses.push((name, span(m.get_node())));
             }
         }
@@ -720,7 +826,8 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
             let node = m.get_node();
             let Some(name) = field_text(node, &spec.definition_name_field) else { continue };
             let text = node.text();
-            let mut uses: Vec<String> = macros.uses.captures_iter(&text).filter_map(|c| c.get(1).map(|g| last(g.as_str()))).filter(|u| *u != name).collect();
+            let mut uses: Vec<String> =
+                macros.uses.captures_iter(&text).filter_map(|c| c.get(1).map(|g| last(g.as_str()))).filter(|u| *u != name).collect();
             uses.sort();
             uses.dedup();
             let placeholder = macros.placeholder.as_ref().is_some_and(|r| r.is_match(&text));
@@ -735,6 +842,8 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
     out.placeholders.dedup();
     // A field read many times in one definition is one flow.
     let mut seen = std::collections::BTreeSet::new();
-    out.flows.retain(|f| !matches!(f.kind, FlowKind::Reads | FlowKind::Writes) || seen.insert((f.kind, f.at, f.what.clone(), f.through.clone())));
+    out.flows.retain(|f| {
+        !matches!(f.kind, FlowKind::Reads | FlowKind::Writes) || seen.insert((f.kind, f.at, f.what.clone(), f.through.clone()))
+    });
     out
 }

@@ -13,7 +13,8 @@ use crate::checks::stage_gate;
 use crate::progress::topological;
 
 const DEFAULT_CONFIG: &str = include_str!("../config/queue.toml");
-const PLACEHOLDERS: [&str; 11] = ["plan", "plan_title", "component", "name", "type", "stage", "goal", "attempt", "max_attempts", "contract", "findings"];
+const PLACEHOLDERS: [&str; 11] =
+    ["plan", "plan_title", "component", "name", "type", "stage", "goal", "attempt", "max_attempts", "contract", "findings"];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueueSettings {
@@ -40,7 +41,8 @@ struct Override {
 
 impl QueueConfig {
     pub fn defaults() -> Result<Self, ServiceError> {
-        let config: QueueConfig = toml::from_str(DEFAULT_CONFIG).map_err(|e| ServiceError::Corrupt(format!("built-in queue config: {e}")))?;
+        let config: QueueConfig =
+            toml::from_str(DEFAULT_CONFIG).map_err(|e| ServiceError::Corrupt(format!("built-in queue config: {e}")))?;
         config.check()?;
         Ok(config)
     }
@@ -60,10 +62,17 @@ impl QueueConfig {
             return Err(ServiceError::InvalidOp("queue config: max_attempts must be at least 1".into()));
         }
         for kind in JobKind::ALL {
-            let template = self.briefs.get(kind.name()).ok_or_else(|| ServiceError::InvalidOp(format!("queue config: no brief for '{}' jobs", kind.name())))?;
+            let template = self
+                .briefs
+                .get(kind.name())
+                .ok_or_else(|| ServiceError::InvalidOp(format!("queue config: no brief for '{}' jobs", kind.name())))?;
             for name in placeholders(template) {
                 if !PLACEHOLDERS.contains(&name.as_str()) {
-                    return Err(ServiceError::InvalidOp(format!("queue config: the {} brief uses {{{name}}}, which isn't known (known: {})", kind.name(), PLACEHOLDERS.join(", "))));
+                    return Err(ServiceError::InvalidOp(format!(
+                        "queue config: the {} brief uses {{{name}}}, which isn't known (known: {})",
+                        kind.name(),
+                        PLACEHOLDERS.join(", ")
+                    )));
                 }
             }
         }
@@ -173,7 +182,16 @@ pub struct Queue {
 
 impl Queue {
     pub fn new(plan: PlanId, settings: QueueSettings) -> Self {
-        Self { plan, settings, attempts: BTreeMap::new(), findings: BTreeMap::new(), awaiting: BTreeSet::new(), running: None, stopping: false, active: false }
+        Self {
+            plan,
+            settings,
+            attempts: BTreeMap::new(),
+            findings: BTreeMap::new(),
+            awaiting: BTreeSet::new(),
+            running: None,
+            stopping: false,
+            active: false,
+        }
     }
 
     fn attempts(&self, id: &ComponentId, kind: JobKind) -> u32 {
@@ -280,7 +298,13 @@ impl Queue {
                 _ if self.findings.contains_key(&id) => JobState::Retrying,
                 _ => JobState::Queued,
             };
-            jobs.push(Job { component: id.clone(), kind, state, attempts: self.attempts(&id, kind), findings: self.last_findings(&id).to_vec() });
+            jobs.push(Job {
+                component: id.clone(),
+                kind,
+                state,
+                attempts: self.attempts(&id, kind),
+                findings: self.last_findings(&id).to_vec(),
+            });
         }
         let status = if implemented {
             QueueStatus::Done

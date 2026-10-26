@@ -65,7 +65,9 @@ impl Comparer {
     /// Once a frame (the shell): what came back kept, what's asked sent.
     pub fn tick(&mut self, net: &crate::net::NetClient, ctx: &egui::Context) {
         self.asked.tick(ctx.input(|i| i.time), |pairs, reply| {
-            net.changes_texts(&pairs, ctx.clone(), move |result| reply.answered(result.ok().map(|each| each.into_iter().map(Compared::of).collect())));
+            net.changes_texts(&pairs, ctx.clone(), move |result| {
+                reply.answered(result.ok().map(|each| each.into_iter().map(Compared::of).collect()))
+            });
         });
     }
 

@@ -18,14 +18,28 @@ use crate::theme::colors;
 /// or asked for straight away.
 #[derive(Clone, Debug)]
 enum Stage {
-    Actions { reach: Reach },
-    Choose { action: Box<Bound>, from: Option<Reach> },
-    Text { action: Box<Bound>, from: Option<Reach> },
+    Actions {
+        reach: Reach,
+    },
+    Choose {
+        action: Box<Bound>,
+        from: Option<Reach>,
+    },
+    Text {
+        action: Box<Bound>,
+        from: Option<Reach>,
+    },
     /// Written in the typing box (many lines).
-    Writing { action: Box<Bound>, from: Option<Reach> },
+    Writing {
+        action: Box<Bound>,
+        from: Option<Reach>,
+    },
     /// Looked up as it's typed: the action is read afresh each frame (its
     /// results come in after the query goes out).
-    Search { action: Box<Bound>, from: Option<Reach> },
+    Search {
+        action: Box<Bound>,
+        from: Option<Reach>,
+    },
 }
 
 /// What a search stage is asking its view for.
@@ -136,7 +150,26 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions { reach: Reach::Here }, filter: String::new(), list: Default::default(), ask: None, enter_waiting: false, said: None, rows_of: None, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None, drawn_at: None }
+        Self {
+            open: false,
+            stage: Stage::Actions { reach: Reach::Here },
+            filter: String::new(),
+            list: Default::default(),
+            ask: None,
+            enter_waiting: false,
+            said: None,
+            rows_of: None,
+            tallest: 0.0,
+            opened: 0,
+            caret_to_end: false,
+            writing: Default::default(),
+            trigger: None,
+            held: None,
+            ranked: Ranked::default(),
+            gives_back: false,
+            given_back: None,
+            drawn_at: None,
+        }
     }
 }
 
@@ -168,7 +201,11 @@ impl Palette {
     /// listing actions).
     pub fn picking(&self) -> Option<&str> {
         match &self.stage {
-            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } if self.open => Some(&action.action.id),
+            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. }
+                if self.open =>
+            {
+                Some(&action.action.id)
+            }
             _ => None,
         }
     }
@@ -184,7 +221,9 @@ impl Palette {
     /// and id (what the cycle key changes a value to act on).
     pub fn keys_said<'a>(&self, keymap: &KeymapConfig, find: impl Fn(Origin, &str) -> Option<&'a Bound>) -> Vec<String> {
         let cycle = match &self.stage {
-            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => action.action.cycle.as_deref().and_then(|id| find(action.origin, id)),
+            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => {
+                action.action.cycle.as_deref().and_then(|id| find(action.origin, id))
+            }
             Stage::Actions { .. } => None,
         };
         keys_said(&self.stage, cycle, self.enter_waiting, keymap)
@@ -238,7 +277,8 @@ impl Palette {
 
     /// It's open at an action's writing that takes links (`#`, `@`).
     pub fn writes_links(&self) -> bool {
-        self.open && matches!(&self.stage, Stage::Writing { action, .. } if matches!(action.action.param, Param::Writing { links: true, .. }))
+        self.open
+            && matches!(&self.stage, Stage::Writing { action, .. } if matches!(action.action.param, Param::Writing { links: true, .. }))
     }
 
     /// Its typing box as it is, while what's written takes links.
@@ -307,7 +347,10 @@ impl Palette {
             return;
         }
         match &self.stage {
-            Stage::Choose { from: Some(reach), .. } | Stage::Text { from: Some(reach), .. } | Stage::Writing { from: Some(reach), .. } | Stage::Search { from: Some(reach), .. } => {
+            Stage::Choose { from: Some(reach), .. }
+            | Stage::Text { from: Some(reach), .. }
+            | Stage::Writing { from: Some(reach), .. }
+            | Stage::Search { from: Some(reach), .. } => {
                 self.stage = Stage::Actions { reach: *reach };
                 self.filter.clear();
                 self.list.reset();
@@ -326,11 +369,8 @@ impl Palette {
         let screen = ctx.content_rect();
         let narrow = screen.width() < 600.0;
         let width = (screen.width() - 32.0).min(620.0);
-        let pos = if narrow {
-            egui::pos2(16.0, (screen.max.y - 420.0).max(60.0))
-        } else {
-            egui::pos2((screen.width() - width) / 2.0, 90.0)
-        };
+        let pos =
+            if narrow { egui::pos2(16.0, (screen.max.y - 420.0).max(60.0)) } else { egui::pos2((screen.width() - width) / 2.0, 90.0) };
         let list_height = (screen.max.y - pos.y - 110.0).clamp(120.0, 360.0);
 
         // Its keys are its own: egui moves the keyboard on Tab and the
@@ -360,7 +400,8 @@ impl Palette {
         // key acts on what that picks. (Any other stays what it was asked
         // for: an edit of a tag deleted meanwhile is of that tag still.)
         let search = matches!(self.stage, Stage::Search { .. });
-        if let Stage::Search { action, .. } | Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } = &mut self.stage
+        if let Stage::Search { action, .. } | Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } =
+            &mut self.stage
             && (search || action.action.cycle.is_some())
             && let Some(fresh) = find(action.origin, &action.action.id)
         {
@@ -385,7 +426,9 @@ impl Palette {
         let stage = self.stage.clone();
         // While a value is picked: what the cycle key changes it to act on.
         let cycle = match &stage {
-            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => action.action.cycle.as_ref().and_then(|id| find(action.origin, id)),
+            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => {
+                action.action.cycle.as_ref().and_then(|id| find(action.origin, id))
+            }
             Stage::Actions { .. } => None,
         };
         // Cycled: it runs, and the picker stays (its top line says the new).
@@ -410,14 +453,22 @@ impl Palette {
                         let title = match &stage {
                             Stage::Actions { reach: Reach::Everything } => "Every action and key".to_owned(),
                             Stage::Actions { reach: Reach::Here } => "What can be done here".to_owned(),
-                            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => action.action.about.clone().unwrap_or_else(|| action.action.label.clone()),
+                            Stage::Choose { action, .. }
+                            | Stage::Text { action, .. }
+                            | Stage::Writing { action, .. }
+                            | Stage::Search { action, .. } => action.action.about.clone().unwrap_or_else(|| action.action.label.clone()),
                         };
-                        ui.add(egui::Label::new(RichText::new(title).strong().size(crate::theme::look().text_label).color(colors().info)).truncate());
+                        ui.add(
+                            egui::Label::new(RichText::new(title).strong().size(crate::theme::look().text_label).color(colors().info))
+                                .truncate(),
+                        );
                         let hint = match &stage {
-                            Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => match &action.action.param {
-                                Param::Text { hint, .. } | Param::Writing { hint, .. } | Param::Search { hint, .. } => hint.clone(),
-                                _ => String::new(),
-                            },
+                            Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => {
+                                match &action.action.param {
+                                    Param::Text { hint, .. } | Param::Writing { hint, .. } | Param::Search { hint, .. } => hint.clone(),
+                                    _ => String::new(),
+                                }
+                            }
                             _ => "Type to filter…".to_owned(),
                         };
                         // Writing: the typing box every conversation has; Enter sends it.
@@ -446,7 +497,13 @@ impl Palette {
                             if ui.memory(|m| m.focused() != Some(id)) {
                                 ui.memory_mut(|m| m.request_focus(id));
                             }
-                            let edit = ui.add(egui::TextEdit::singleline(&mut self.filter).id(id).lock_focus(true).hint_text(hint).desired_width(f32::INFINITY));
+                            let edit = ui.add(
+                                egui::TextEdit::singleline(&mut self.filter)
+                                    .id(id)
+                                    .lock_focus(true)
+                                    .hint_text(hint)
+                                    .desired_width(f32::INFINITY),
+                            );
                             if std::mem::take(&mut self.caret_to_end) {
                                 crate::conversation::caret_to_end(ui.ctx(), edit.id, &self.filter);
                             }
@@ -457,7 +514,8 @@ impl Palette {
                             self.list.reset();
                             self.said = None;
                             if let Stage::Search { action, .. } = &stage {
-                                self.ask = Some(SearchAsk { origin: action.origin, action: action.action.id.clone(), query: self.filter.clone() });
+                                self.ask =
+                                    Some(SearchAsk { origin: action.origin, action: action.action.id.clone(), query: self.filter.clone() });
                                 // Results of what was typed before: Enter waits for these.
                                 // (An Enter before this typing is dropped: it
                                 // was for what's typed no more.)
@@ -473,9 +531,17 @@ impl Palette {
                                 let listed = Listed::of(offered, sheet, *reach, &self.filter);
                                 let fingerprint = listed.fingerprint();
                                 let haystacks = || (0..listed.len()).map(|e| listed.haystack(e)).collect();
-                                let lines = listed.lines(self.ranked.of(&self.filter, (&fingerprint, *reach == Reach::Everything), haystacks));
-                                let listing = Listing { id: "palette_actions", height: list_height, len: lines.len(), details: true, empty: "No matching actions" };
-                                if let Some(i) = self.list.show(ui, listing, moved, enter, |i| listed.kind(lines[i]), |i| listed.row(lines[i]))
+                                let lines =
+                                    listed.lines(self.ranked.of(&self.filter, (&fingerprint, *reach == Reach::Everything), haystacks));
+                                let listing = Listing {
+                                    id: "palette_actions",
+                                    height: list_height,
+                                    len: lines.len(),
+                                    details: true,
+                                    empty: "No matching actions",
+                                };
+                                if let Some(i) =
+                                    self.list.show(ui, listing, moved, enter, |i| listed.kind(lines[i]), |i| listed.row(lines[i]))
                                     && let crate::sheet::Line::Entry(e) = lines[i]
                                 {
                                     match listed.item(e) {
@@ -494,10 +560,17 @@ impl Palette {
                                 let choices: Vec<Choice> = action.action.param.choices();
                                 let fingerprint: Vec<(&str, &str)> = choices.iter().map(|c| (c.label.as_str(), c.value.as_str())).collect();
                                 let haystacks = || fingerprint.iter().map(|(label, value)| format!("{label} {value}")).collect();
-                                let ranked: Vec<&Choice> = self.ranked.of(&self.filter, &fingerprint, haystacks).iter().map(|i| &choices[*i]).collect();
+                                let ranked: Vec<&Choice> =
+                                    self.ranked.of(&self.filter, &fingerprint, haystacks).iter().map(|i| &choices[*i]).collect();
                                 let details = ranked.iter().any(|c| c.detail.is_some());
                                 let row = |i: usize| crate::pick_list::Row::of_choice(ranked[i]);
-                                let listing = Listing { id: "palette_choices", height: list_height, len: ranked.len(), details, empty: "Nothing to choose" };
+                                let listing = Listing {
+                                    id: "palette_choices",
+                                    height: list_height,
+                                    len: ranked.len(),
+                                    details,
+                                    empty: "Nothing to choose",
+                                };
                                 if let Some(i) = self.list.show(ui, listing, moved, enter, every_row_picks, row) {
                                     picked = Some(invocation(action, Some(ranked[i].value.clone())));
                                 }
@@ -545,7 +618,9 @@ impl Palette {
                         // keeps its size).
                         let line = match &self.said {
                             Some(said) => RichText::new(said).size(crate::theme::look().text_small).color(colors().warn),
-                            None => RichText::new(keys_said(&stage, cycle, self.enter_waiting, keymap).join(" · ")).size(crate::theme::look().text_small).color(colors().muted),
+                            None => RichText::new(keys_said(&stage, cycle, self.enter_waiting, keymap).join(" · "))
+                                .size(crate::theme::look().text_small)
+                                .color(colors().muted),
                         };
                         ui.add(egui::Label::new(line).wrap());
                         let used = ui.min_rect().height();

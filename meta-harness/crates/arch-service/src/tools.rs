@@ -216,15 +216,28 @@ pub fn invocations(catalog: &ToolCatalog, types: &TypeSystem, component: &Compon
             ("{root}", vec![root.to_string_lossy().into_owned()]),
             ("{component}", vec![component.id.to_string()]),
         ];
-        runs.push(Invocation { tool: name.to_owned(), component: component.id.clone(), program: tool.executable.clone(), args: expand(args, &values), timeout_secs: tool.timeout_secs });
+        runs.push(Invocation {
+            tool: name.to_owned(),
+            component: component.id.clone(),
+            program: tool.executable.clone(),
+            args: expand(args, &values),
+            timeout_secs: tool.timeout_secs,
+        });
     };
     let bound = component.spec.as_ref().map(|s| s.validation.as_slice()).unwrap_or_default();
     for binding in bound {
         let Some(tool) = catalog.get(&binding.tool) else {
             let known: Vec<&str> = catalog.tools.keys().map(String::as_str).collect();
             report.push(
-                Finding::error(FindingCode::UnknownTool, Target::Component { id: component.id.clone() }, format!("validation tool '{}' isn't defined", binding.tool))
-                    .suggest(format!("define it in .nah/tools.toml or use one of: {}", if known.is_empty() { "(none defined)".to_owned() } else { known.join(", ") })),
+                Finding::error(
+                    FindingCode::UnknownTool,
+                    Target::Component { id: component.id.clone() },
+                    format!("validation tool '{}' isn't defined", binding.tool),
+                )
+                .suggest(format!(
+                    "define it in .nah/tools.toml or use one of: {}",
+                    if known.is_empty() { "(none defined)".to_owned() } else { known.join(", ") }
+                )),
             );
             continue;
         };
@@ -255,8 +268,12 @@ pub fn run(invocations: Vec<Invocation>, runner: &dyn ToolRunner, root: &Path) -
         if !passed {
             let status = exit_code.map(|c| format!("exit {c}")).unwrap_or_else(|| "didn't finish".to_owned());
             out.report.push(
-                Finding::error(FindingCode::ToolFailed, target, format!("{} failed ({status}) on {}: `{command}`\n{output}", invocation.tool, invocation.component))
-                    .suggest("fix what the tool reports, then verify again"),
+                Finding::error(
+                    FindingCode::ToolFailed,
+                    target,
+                    format!("{} failed ({status}) on {}: `{command}`\n{output}", invocation.tool, invocation.component),
+                )
+                .suggest("fix what the tool reports, then verify again"),
             );
         }
         out.runs.push(ToolRun { invocation, passed, exit_code, output });
@@ -266,7 +283,12 @@ pub fn run(invocations: Vec<Invocation>, runner: &dyn ToolRunner, root: &Path) -
 
 /// Runs every logic step's check for `components`: one finding per check,
 /// passed (info) or failed (error, with the output).
-pub fn run_logic_checks<'a>(components: impl Iterator<Item = &'a Component>, config: &LogicChecks, runner: &dyn ToolRunner, root: &Path) -> Vec<Finding> {
+pub fn run_logic_checks<'a>(
+    components: impl Iterator<Item = &'a Component>,
+    config: &LogicChecks,
+    runner: &dyn ToolRunner,
+    root: &Path,
+) -> Vec<Finding> {
     let mut out = Vec::new();
     let Some((program, lead)) = config.shell.split_first() else { return out };
     for c in components {

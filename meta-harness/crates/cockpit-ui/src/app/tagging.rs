@@ -12,11 +12,11 @@
 use harness_contracts::{Subject, TagId, on_things};
 
 use super::*;
+use crate::actions::{Choice, Group, When};
 use crate::app::TagEditing;
 use crate::app::notes::{NotesHere, TagHere};
-use crate::actions::{Choice, Group, When};
-use crate::nav::{Item, Target, Things};
 use crate::conversation::first_line;
+use crate::nav::{Item, Target, Things};
 use crate::tags::{TagAct, thing_name};
 
 impl CockpitApp {
@@ -46,11 +46,30 @@ impl CockpitApp {
         use TagEditing as E;
         let theme = crate::theme::colors();
         let (label, param) = match edit {
-            E::Rename => (format!("Rename the tag {}", tag.name), Param::Text { hint: "a new name (letters, digits, - and _)".into(), start: tag.name.clone() }),
-            E::Recolour => (format!("Give {} another colour", tag.name), Param::Choice((0..harness_contracts::TAG_COLOURS).map(|i| Choice::new(i.to_string(), theme.tag_name(i)).swatch(theme.tag(i)).current(tag.colour == i)).collect())),
-            E::Note => (format!("Write {}'s note", tag.name), Param::Writing { hint: "its note (as many lines as it takes)".into(), start: tag.note.as_str().into(), links: false }),
+            E::Rename => (
+                format!("Rename the tag {}", tag.name),
+                Param::Text { hint: "a new name (letters, digits, - and _)".into(), start: tag.name.clone() },
+            ),
+            E::Recolour => (
+                format!("Give {} another colour", tag.name),
+                Param::Choice(
+                    (0..harness_contracts::TAG_COLOURS)
+                        .map(|i| Choice::new(i.to_string(), theme.tag_name(i)).swatch(theme.tag(i)).current(tag.colour == i))
+                        .collect(),
+                ),
+            ),
+            E::Note => (
+                format!("Write {}'s note", tag.name),
+                Param::Writing { hint: "its note (as many lines as it takes)".into(), start: tag.note.as_str().into(), links: false },
+            ),
             E::ClearNote => (format!("Clear {}'s note", tag.name), Param::None),
-            E::Delete => (format!("Delete the tag {}", tag.name), Param::Choice(vec![Choice::new("yes", format!("Delete {} (from {})", tag.name, on_things(tag.count))), Choice::new("no", "Keep it")])),
+            E::Delete => (
+                format!("Delete the tag {}", tag.name),
+                Param::Choice(vec![
+                    Choice::new("yes", format!("Delete {} (from {})", tag.name, on_things(tag.count))),
+                    Choice::new("no", "Keep it"),
+                ]),
+            ),
         };
         Action::new(edit.id(), label, edit.detail(), S::TagEdit(edit, tag.id.clone())).param(param).group(Group::Act).importance(MINOR)
     }
@@ -71,9 +90,20 @@ impl CockpitApp {
             out.push(match fitting.as_slice() {
                 [one] => Self::edit_action(edit, one),
                 some => {
-                    let choices = some.iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).glyph(egui_phosphor::fill::TAG, theme.tag(t.colour)).detail(Some(described(t.count, &t.note)))).collect();
+                    let choices = some
+                        .iter()
+                        .map(|t| {
+                            Choice::new(t.id.as_str(), t.name.clone())
+                                .glyph(egui_phosphor::fill::TAG, theme.tag(t.colour))
+                                .detail(Some(described(t.count, &t.note)))
+                        })
+                        .collect();
                     let available = if some.is_empty() { When::Unavailable } else { When::Always };
-                    Action::new(edit.id(), edit.which(), edit.detail(), S::TagEditWhich(edit)).param(Param::Choice(choices)).group(Group::Act).importance(MINOR).when(available)
+                    Action::new(edit.id(), edit.which(), edit.detail(), S::TagEditWhich(edit))
+                        .param(Param::Choice(choices))
+                        .group(Group::Act)
+                        .importance(MINOR)
+                        .when(available)
                 }
             });
         }
@@ -91,8 +121,23 @@ impl CockpitApp {
             _ => None,
         };
         let action = match one {
-            Some((tag, subject)) => Action::new("tag.remove", format!("Take {} off this", tag.name), "The tag stays on everything else", S::Untag(Some((tag.id.clone(), (*subject).clone())))),
-            None => Action::new("tag.remove", "Take a tag off what you're on", "Pick which of its tags (on any of the things at the cursor)", S::Untag(None)).param(Param::Choice(on.iter().map(|(t, _)| Choice::new(t.id.as_str(), t.name.clone()).glyph(egui_phosphor::fill::TAG, theme.tag(t.colour))).collect())),
+            Some((tag, subject)) => Action::new(
+                "tag.remove",
+                format!("Take {} off this", tag.name),
+                "The tag stays on everything else",
+                S::Untag(Some((tag.id.clone(), (*subject).clone()))),
+            ),
+            None => Action::new(
+                "tag.remove",
+                "Take a tag off what you're on",
+                "Pick which of its tags (on any of the things at the cursor)",
+                S::Untag(None),
+            )
+            .param(Param::Choice(
+                on.iter()
+                    .map(|(t, _)| Choice::new(t.id.as_str(), t.name.clone()).glyph(egui_phosphor::fill::TAG, theme.tag(t.colour)))
+                    .collect(),
+            )),
         };
         action.group(Group::Act).importance(MINOR).when(if on.is_empty() { When::Unavailable } else { When::Always })
     }
@@ -114,42 +159,104 @@ impl CockpitApp {
         let next = (things.at.len() > 1).then(|| &things.at[(level + 1) % things.at.len()]);
         let mut out = vec![
             Action::new("tag.add", "Tag what you're on", "Pick a tag, or type a new one's name (what's tagged is said at the top)", S::Tag)
-                .param(Param::Search { hint: "a tag's name (a new one is made)".into(), found: if picking == Some("tag.add") { self.tag_found("tag.add") } else { Vec::new() }, of: self.desk.shell_searches.get("tag.add").cloned() })
+                .param(Param::Search {
+                    hint: "a tag's name (a new one is made)".into(),
+                    found: if picking == Some("tag.add") { self.tag_found("tag.add") } else { Vec::new() },
+                    of: self.desk.shell_searches.get("tag.add").cloned(),
+                })
                 .about(chosen.map(|t| format!("Tag {}", t.words)))
                 .cycle(next.map(|_| "tag.level"))
                 .group(Group::Act)
                 .importance(MINOR)
                 .when(when(chosen.is_some()))
                 .icon(egui_phosphor::regular::TAG),
-            Action::new("tag.level", next.map_or_else(|| "Tag something around it".to_owned(), |t| format!("Tag {} instead", t.words)), "While tagging: what's tagged becomes the next of the things at the cursor (a line, the command it's in)", S::TagLevel)
-                .group(Group::Act)
-                .importance(MINOR)
-                .when(when(picking == Some("tag.add") && next.is_some())),
+            Action::new(
+                "tag.level",
+                next.map_or_else(|| "Tag something around it".to_owned(), |t| format!("Tag {} instead", t.words)),
+                "While tagging: what's tagged becomes the next of the things at the cursor (a line, the command it's in)",
+                S::TagLevel,
+            )
+            .group(Group::Act)
+            .importance(MINOR)
+            .when(when(picking == Some("tag.add") && next.is_some())),
             Self::untag_action(&at),
-            Action::new("tag.goto", "Go to something tagged", "Pick the tag, then which thing it's on", S::TagGoTo).param(Param::Choice(tags.list().iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).glyph(egui_phosphor::fill::TAG, crate::theme::colors().tag(t.colour)).detail(Some(described(t.on.len(), &t.note)))).collect())).group(Group::GoTo).importance(MINOR),
-            Action::new("tag.next", "Next with its tag", "The next thing the tag on this is on (the one stepped through last)", S::TagStep { forward: true }).group(Group::Navigate).importance(MINOR).when(when(tagged)),
-            Action::new("tag.prev", "Previous with its tag", "The thing before, of those the tag on this is on", S::TagStep { forward: false }).group(Group::Navigate).importance(MINOR).when(when(tagged)),
+            Action::new("tag.goto", "Go to something tagged", "Pick the tag, then which thing it's on", S::TagGoTo)
+                .param(Param::Choice(
+                    tags.list()
+                        .iter()
+                        .map(|t| {
+                            Choice::new(t.id.as_str(), t.name.clone())
+                                .glyph(egui_phosphor::fill::TAG, crate::theme::colors().tag(t.colour))
+                                .detail(Some(described(t.on.len(), &t.note)))
+                        })
+                        .collect(),
+                ))
+                .group(Group::GoTo)
+                .importance(MINOR),
+            Action::new(
+                "tag.next",
+                "Next with its tag",
+                "The next thing the tag on this is on (the one stepped through last)",
+                S::TagStep { forward: true },
+            )
+            .group(Group::Navigate)
+            .importance(MINOR)
+            .when(when(tagged)),
+            Action::new(
+                "tag.prev",
+                "Previous with its tag",
+                "The thing before, of those the tag on this is on",
+                S::TagStep { forward: false },
+            )
+            .group(Group::Navigate)
+            .importance(MINOR)
+            .when(when(tagged)),
         ];
         out.extend(Self::tag_edits(&at));
         // Where text is typed (a prompt): a tag's name, picked.
-        let named: Vec<Choice> = if picking == Some("tag.insert") { self.tag_found("tag.insert").into_iter().filter(|c| tags.get(&TagId::new(&c.value)).is_some()).collect() } else { Vec::new() };
+        let named: Vec<Choice> = if picking == Some("tag.insert") {
+            self.tag_found("tag.insert").into_iter().filter(|c| tags.get(&TagId::new(&c.value)).is_some()).collect()
+        } else {
+            Vec::new()
+        };
         out.push(
             Action::new("tag.insert", "Link a tag", "Where you're writing: the agent is handed what the tag is on", S::TagInsert)
-                .param(Param::Search { hint: if tags.list().is_empty() { format!("no tags yet ({}: the # stays as typed)", self.config.keymap.back.label()) } else { "a tag's name".into() }, found: named, of: self.desk.shell_searches.get("tag.insert").cloned() })
+                .param(Param::Search {
+                    hint: if tags.list().is_empty() {
+                        format!("no tags yet ({}: the # stays as typed)", self.config.keymap.back.label())
+                    } else {
+                        "a tag's name".into()
+                    },
+                    found: named,
+                    of: self.desk.shell_searches.get("tag.insert").cloned(),
+                })
                 .group(Group::Act)
                 .importance(MINOR)
                 .when(when(self.writing_here(here))),
         );
         // `g T` picked a tag on several things: which.
         // An edit's tag picked (of several): its value asked for.
-        if let Some((edit, tag)) = self.desk.tag_editing.as_ref().and_then(|(edit, id)| Some((*edit, at.tags.iter().find(|t| t.id == *id)?))) {
+        if let Some((edit, tag)) =
+            self.desk.tag_editing.as_ref().and_then(|(edit, id)| Some((*edit, at.tags.iter().find(|t| t.id == *id)?)))
+        {
             let mut action = Self::edit_action(edit, tag);
             action.id = "tag.edit.picked".into();
             out.push(action);
         }
         if let Some(tag) = self.desk.tag_picking.as_ref().and_then(|id| tags.get(id)) {
-            let choices = tag.on.iter().map(|on| Choice::new(serde_json::to_string(&on.subject).unwrap_or_default(), thing_name(&on.what)).detail(Some(crate::tags::tagged_by(on)))).collect();
-            out.push(Action::new("tag.goto.pick", format!("Go to which thing {} is on?", tag.name), "It's on several: pick one", S::TagGoToPick).param(Param::Choice(choices)).group(Group::GoTo));
+            let choices = tag
+                .on
+                .iter()
+                .map(|on| {
+                    Choice::new(serde_json::to_string(&on.subject).unwrap_or_default(), thing_name(&on.what))
+                        .detail(Some(crate::tags::tagged_by(on)))
+                })
+                .collect();
+            out.push(
+                Action::new("tag.goto.pick", format!("Go to which thing {} is on?", tag.name), "It's on several: pick one", S::TagGoToPick)
+                    .param(Param::Choice(choices))
+                    .group(Group::GoTo),
+            );
         }
         out
     }
@@ -161,7 +268,11 @@ impl CockpitApp {
         let tags = self.desk.shared.tags.get();
         let list = tags.list();
         let query = self.desk.shell_searches.get(search).map_or("", |q| q.trim());
-        let choice = |t: &harness_contracts::Tag| Choice::new(t.id.as_str(), t.name.clone()).glyph(egui_phosphor::fill::TAG, crate::theme::colors().tag(t.colour)).detail(Some(described(t.on.len(), &t.note)));
+        let choice = |t: &harness_contracts::Tag| {
+            Choice::new(t.id.as_str(), t.name.clone())
+                .glyph(egui_phosphor::fill::TAG, crate::theme::colors().tag(t.colour))
+                .detail(Some(described(t.on.len(), &t.note)))
+        };
         if query.is_empty() {
             return list.into_iter().map(choice).collect();
         }
@@ -172,7 +283,12 @@ impl CockpitApp {
         if named.is_none() && harness_contracts::tag_name_ok(query) {
             found.push(Choice::new(query, format!("New tag \u{201c}{query}\u{201d}")));
         }
-        found.extend(crate::nav::rank_matches(&items, query).into_iter().filter(|i| Some(list[*i].id.clone()) != named.map(|t| t.id.clone())).map(|i| choice(list[i])));
+        found.extend(
+            crate::nav::rank_matches(&items, query)
+                .into_iter()
+                .filter(|i| Some(list[*i].id.clone()) != named.map(|t| t.id.clone()))
+                .map(|i| choice(list[i])),
+        );
         found
     }
 
@@ -193,7 +309,11 @@ impl CockpitApp {
             }
             (ShellCommand::Untag(one), _, value) => {
                 // The one it named, or the one picked of those there.
-                let which = one.clone().or_else(|| value.and_then(|id| self.notes_here(here).tags.into_iter().find(|t| t.id.as_str() == id).and_then(|t| Some((t.id, t.on?)))));
+                let which = one.clone().or_else(|| {
+                    value.and_then(|id| {
+                        self.notes_here(here).tags.into_iter().find(|t| t.id.as_str() == id).and_then(|t| Some((t.id, t.on?)))
+                    })
+                });
                 match which {
                     Some((tag, subject)) => self.ask_tags(TagAct::Untag { tag, subject }, ctx),
                     None => self.note = Some("That tag isn't on what you're on any more.".into()),
@@ -243,7 +363,8 @@ impl CockpitApp {
             (ShellCommand::Tag, None, _) => self.note = Some("Nothing here to tag: the cursor isn't on something that can be.".into()),
             (ShellCommand::TagGoTo, _, Some(tag)) => {
                 let tag = TagId::new(tag);
-                let on: Vec<Subject> = self.desk.shared.tags.get().get(&tag).map(|t| t.on.iter().map(|on| on.subject.clone()).collect()).unwrap_or_default();
+                let on: Vec<Subject> =
+                    self.desk.shared.tags.get().get(&tag).map(|t| t.on.iter().map(|on| on.subject.clone()).collect()).unwrap_or_default();
                 match on.as_slice() {
                     [] => self.note = Some("It's on nothing.".into()),
                     [one] => {
@@ -258,7 +379,9 @@ impl CockpitApp {
             }
             (ShellCommand::TagGoToPick, _, Some(which)) => {
                 let Some(tag) = self.desk.tag_picking.take() else { return };
-                let still = serde_json::from_str::<Subject>(&which).ok().filter(|s| self.desk.shared.tags.get().get(&tag).is_some_and(|t| t.on.iter().any(|on| on.subject.same_thing(s))));
+                let still = serde_json::from_str::<Subject>(&which)
+                    .ok()
+                    .filter(|s| self.desk.shared.tags.get().get(&tag).is_some_and(|t| t.on.iter().any(|on| on.subject.same_thing(s))));
                 match still {
                     Some(subject) => {
                         self.desk.tag_stepping = Some(tag);

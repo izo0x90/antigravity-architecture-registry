@@ -139,7 +139,13 @@ pub enum Subject {
     /// Lines of a file (`first` to `last`, from 1) as the files were at a
     /// snapshot (the changes' timeline; none yet: the files now, kept as
     /// one when it's tagged); kept where they are as the files change.
-    CodeLines { path: String, first: u32, last: u32, #[serde(default)] snapshot: String },
+    CodeLines {
+        path: String,
+        first: u32,
+        last: u32,
+        #[serde(default)]
+        snapshot: String,
+    },
     /// A file of the project, all of it (as it is now).
     CodeFile { path: String },
     /// A plan, as a whole.
@@ -149,7 +155,12 @@ pub enum Subject {
     /// One section of a plan's component's card (`CARD_SECTIONS`).
     PlanSection { plan: arch_graph::PlanId, id: arch_graph::ComponentId, section: String },
     /// A relation of a plan (`relation`: its kind).
-    PlanRelation { plan: arch_graph::PlanId, relation: arch_graph::RelationKind, source: arch_graph::ComponentId, target: arch_graph::ComponentId },
+    PlanRelation {
+        plan: arch_graph::PlanId,
+        relation: arch_graph::RelationKind,
+        source: arch_graph::ComponentId,
+        target: arch_graph::ComponentId,
+    },
     /// An item of a plan (a finding, a decision, a to-do), by its id.
     PlanItem { plan: arch_graph::PlanId, item: String },
     /// A discussion (it's a thing too: tagged, gone to, named from another).
@@ -168,7 +179,8 @@ pub struct CodeAt {
 
 /// The sections of a plan's component's card (`Subject::PlanSection`), in
 /// the order a card shows them.
-pub const CARD_SECTIONS: [&str; 9] = ["overview", "signature", "logic", "invariants", "relations", "code", "changes", "placeholders", "findings"];
+pub const CARD_SECTIONS: [&str; 9] =
+    ["overview", "signature", "logic", "invariants", "relations", "code", "changes", "placeholders", "findings"];
 
 /// What names a thing beyond the thing itself: what its owner (or a view
 /// showing it) knows of it now.
@@ -238,8 +250,12 @@ impl Subject {
         };
         let more = |text: &str| if text.is_empty() { String::new() } else { format!(" ({text})") };
         match self {
-            Self::TerminalLines { terminal: t, first, last, command, .. } => format!("{} {}{}", terminal(t), lines_words(first, last), command.map(|c| format!(" (of command {c})")).unwrap_or_default()),
-            Self::TerminalCommand { terminal: t, command, typed, .. } => format!("{} command {command}{}", terminal(t), more(typed.lines().next().unwrap_or_default())),
+            Self::TerminalLines { terminal: t, first, last, command, .. } => {
+                format!("{} {}{}", terminal(t), lines_words(first, last), command.map(|c| format!(" (of command {c})")).unwrap_or_default())
+            }
+            Self::TerminalCommand { terminal: t, command, typed, .. } => {
+                format!("{} command {command}{}", terminal(t), more(typed.lines().next().unwrap_or_default()))
+            }
             Self::ChatSession { .. } => format!("chat {}", known.chat),
             Self::ChatTurn { turn, .. } => format!("chat {} turn {turn}", known.chat),
             Self::ChatMessage { turn, message, .. } => format!("chat {} turn {turn} message {message}", known.chat),
@@ -273,8 +289,12 @@ impl Subject {
     pub fn unfit(&self) -> Option<String> {
         match self {
             Self::TerminalLines { first, last, .. } if last < first => Some("its last line is before its first".into()),
-            Self::TerminalLines { first, last, .. } if last - first >= TAGGED_LINES => Some(format!("at most {TAGGED_LINES} lines at once")),
-            Self::CodeLines { first, last, .. } if *first == 0 || last < first => Some("its lines are from 1, its last not before its first".into()),
+            Self::TerminalLines { first, last, .. } if last - first >= TAGGED_LINES => {
+                Some(format!("at most {TAGGED_LINES} lines at once"))
+            }
+            Self::CodeLines { first, last, .. } if *first == 0 || last < first => {
+                Some("its lines are from 1, its last not before its first".into())
+            }
             _ => None,
         }
     }
@@ -304,7 +324,9 @@ impl Subject {
         match self.clone() {
             Self::CodeLines { path, first, last, .. } => Self::CodeLines { path, first, last, snapshot: String::new() },
             Self::TerminalLines { terminal, shell, first, last, .. } => Self::TerminalLines { terminal, shell, first, last, command: None },
-            Self::TerminalCommand { terminal, shell, command, .. } => Self::TerminalCommand { terminal, shell, command, typed: String::new() },
+            Self::TerminalCommand { terminal, shell, command, .. } => {
+                Self::TerminalCommand { terminal, shell, command, typed: String::new() }
+            }
             Self::ChatTurn { session, turn, .. } => Self::ChatTurn { session, turn, turn_id: String::new() },
             Self::ChatMessage { session, turn, message, .. } => Self::ChatMessage { session, turn, message, turn_id: String::new() },
             Self::Component { id, .. } => Self::Component { id, was: None },
@@ -316,15 +338,26 @@ impl Subject {
     /// each of their lines in them).
     pub fn contains(&self, other: &Subject) -> bool {
         match (self, other) {
-            (Self::TerminalLines { terminal, shell, first, last, .. }, Self::TerminalLines { terminal: t, shell: s, first: f, last: l, .. }) => terminal == t && shell == s && first <= f && l <= last,
+            (
+                Self::TerminalLines { terminal, shell, first, last, .. },
+                Self::TerminalLines { terminal: t, shell: s, first: f, last: l, .. },
+            ) => terminal == t && shell == s && first <= f && l <= last,
             // Lines of a file: where they are now (one side's snapshot not
             // taken yet: the files now, as the other's are kept).
-            (Self::CodeLines { path, first, last, snapshot }, Self::CodeLines { path: p, first: f, last: l, snapshot: s }) => path == p && first <= f && l <= last && (snapshot == s || snapshot.is_empty() || s.is_empty()),
+            (Self::CodeLines { path, first, last, snapshot }, Self::CodeLines { path: p, first: f, last: l, snapshot: s }) => {
+                path == p && first <= f && l <= last && (snapshot == s || snapshot.is_empty() || s.is_empty())
+            }
             // A file has its lines in it; a session, its turns and messages.
             (Self::CodeFile { path }, Self::CodeLines { path: p, .. }) => path == p,
             (Self::ChatSession { session }, Self::ChatTurn { session: s, .. } | Self::ChatMessage { session: s, .. }) => session == s,
             // A plan has its parts in it; a component, its sections.
-            (Self::Plan { plan }, Self::PlanComponent { plan: p, .. } | Self::PlanSection { plan: p, .. } | Self::PlanRelation { plan: p, .. } | Self::PlanItem { plan: p, .. }) => plan == p,
+            (
+                Self::Plan { plan },
+                Self::PlanComponent { plan: p, .. }
+                | Self::PlanSection { plan: p, .. }
+                | Self::PlanRelation { plan: p, .. }
+                | Self::PlanItem { plan: p, .. },
+            ) => plan == p,
             (Self::PlanComponent { plan, id }, Self::PlanSection { plan: p, id: i, .. }) => plan == p && id == i,
             _ => self.same_thing(other),
         }
@@ -346,7 +379,8 @@ fn plan_ends(s: &Subject) -> [Option<(&arch_graph::PlanId, &arch_graph::Componen
 /// is; and never shaped like a tag's id (a uuid), so it's never mistaken
 /// for one.
 pub fn tag_name_ok(name: &str) -> bool {
-    let uuid = name.len() == 36 && name.char_indices().all(|(at, c)| if [8, 13, 18, 23].contains(&at) { c == '-' } else { c.is_ascii_hexdigit() });
+    let uuid =
+        name.len() == 36 && name.char_indices().all(|(at, c)| if [8, 13, 18, 23].contains(&at) { c == '-' } else { c.is_ascii_hexdigit() });
     let ends = name.ends_with(|c: char| c.is_ascii_alphanumeric());
     ends && name.len() <= 40 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') && !uuid
 }
@@ -408,11 +442,33 @@ mod tests {
         let lines = |first, last| Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first, last, command: None };
         assert!(lines(10, 12).contains(&lines(11, 11)) && lines(10, 12).contains(&lines(10, 12)));
         assert!(!lines(10, 12).contains(&lines(12, 13)) && !lines(11, 11).contains(&lines(10, 12)));
-        assert!(!lines(10, 12).contains(&Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 2, first: 11, last: 11, command: None }), "another start's");
-        assert!(lines(10, 12).contains(&Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first: 11, last: 11, command: Some(3) }), "what's kept when noted isn't what it is");
+        assert!(
+            !lines(10, 12).contains(&Subject::TerminalLines {
+                terminal: TerminalId::new("t1"),
+                shell: 2,
+                first: 11,
+                last: 11,
+                command: None
+            }),
+            "another start's"
+        );
+        assert!(
+            lines(10, 12).contains(&Subject::TerminalLines {
+                terminal: TerminalId::new("t1"),
+                shell: 1,
+                first: 11,
+                last: 11,
+                command: Some(3)
+            }),
+            "what's kept when noted isn't what it is"
+        );
         let command = Subject::TerminalCommand { terminal: TerminalId::new("t1"), shell: 1, command: 3, typed: String::new() };
         assert!(command.contains(&command.clone()) && !lines(0, 99).contains(&command));
-        assert_eq!((lines(1, 200).unfit(), lines(1, 201).unfit().is_some(), lines(5, 4).unfit().is_some()), (None, true, true), "200 lines at most, the right way round");
+        assert_eq!(
+            (lines(1, 200).unfit(), lines(1, 201).unfit().is_some(), lines(5, 4).unfit().is_some()),
+            (None, true, true),
+            "200 lines at most, the right way round"
+        );
         // One name for a thing: what the picker shows is what's kept.
         let known = |start| Known { start, chat: "lead@4f2a91c0".into() };
         let of_command = Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first: 4, last: 9, command: Some(3) };
@@ -426,8 +482,16 @@ mod tests {
         let (a, b) = (arch_graph::ComponentId::new("rust:app::open"), arch_graph::ComponentId::new("rust:app::show"));
         let section = Subject::PlanSection { plan: plan.clone(), id: a.clone(), section: "logic".into() };
         assert_eq!(section.name(&Known::default()), "plan quick-look component rust:app::open section logic");
-        assert_eq!(Subject::PlanRelation { plan: plan.clone(), relation: arch_graph::RelationKind::Calls, source: a.clone(), target: b }.name(&Known::default()), "plan quick-look relation rust:app::open calls rust:app::show");
-        assert!(Subject::Plan { plan: plan.clone() }.contains(&section) && Subject::PlanComponent { plan: plan.clone(), id: a.clone() }.contains(&section), "a plan has its parts in it");
+        assert_eq!(
+            Subject::PlanRelation { plan: plan.clone(), relation: arch_graph::RelationKind::Calls, source: a.clone(), target: b }
+                .name(&Known::default()),
+            "plan quick-look relation rust:app::open calls rust:app::show"
+        );
+        assert!(
+            Subject::Plan { plan: plan.clone() }.contains(&section)
+                && Subject::PlanComponent { plan: plan.clone(), id: a.clone() }.contains(&section),
+            "a plan has its parts in it"
+        );
         assert!(!Subject::PlanComponent { plan: arch_graph::PlanId::new("other").unwrap(), id: a }.contains(&section));
         let message = Subject::ChatMessage { session: NativeId::new("4f2a91c0aa"), turn: 3, message: 2, turn_id: "u7".into() };
         assert_eq!(message.name(&known(None)), "chat lead@4f2a91c0 turn 3 message 2");
@@ -442,7 +506,8 @@ mod tests {
         for ok in ["flaky-build", "a_1", "X"] {
             assert!(tag_name_ok(ok), "{ok}");
         }
-        for bad in ["", "two words", "dots.too", "a/b", "café", "wip_", "build-", "0b8f8a9e-3c1d-4f6e-9a2b-7c5d4e3f2a1b", &"x".repeat(41)] {
+        for bad in ["", "two words", "dots.too", "a/b", "café", "wip_", "build-", "0b8f8a9e-3c1d-4f6e-9a2b-7c5d4e3f2a1b", &"x".repeat(41)]
+        {
             assert!(!tag_name_ok(bad), "{bad}");
         }
     }

@@ -1,7 +1,7 @@
 //! Hints, search and marks: typed keys a view reads itself.
 
-use super::*;
 use super::desk::Found;
+use super::*;
 
 /// Where a hint label goes so it hides as little as it can, and never on
 /// another label: just left of its item, else just right of it (inside the
@@ -16,7 +16,12 @@ pub(super) fn hint_chip(item: egui::Rect, size: egui::Vec2, panel: egui::Rect, t
     }
     let corner = egui::Rect::from_min_size(item.left_top() + egui::vec2(-4.0, -4.0), size);
     places.push(corner);
-    places.iter().copied().find(|r| inside(r) && !taken.iter().any(|t| t.intersects(*r))).or_else(|| places.iter().copied().find(inside)).unwrap_or(corner)
+    places
+        .iter()
+        .copied()
+        .find(|r| inside(r) && !taken.iter().any(|t| t.intersects(*r)))
+        .or_else(|| places.iter().copied().find(inside))
+        .unwrap_or(corner)
 }
 
 impl CockpitApp {
@@ -29,7 +34,13 @@ impl CockpitApp {
             self.note = Some("Nothing on screen to label.".into());
             return;
         }
-        self.start_capture(Capture::Hint(Hinting { panel: self.desk.panels.focused(), kind, open, typed: String::new(), labels: labels.into_iter().zip(spots).collect() }));
+        self.start_capture(Capture::Hint(Hinting {
+            panel: self.desk.panels.focused(),
+            kind,
+            open,
+            typed: String::new(),
+            labels: labels.into_iter().zip(spots).collect(),
+        }));
     }
 
     /// A hint label was typed (or tapped): move there, or open it.
@@ -80,10 +91,14 @@ impl CockpitApp {
                             self.desk.view_mut(kind).on_search(SearchEvent::Confirmed);
                             // Only a search that finds something stays for n/N.
                             let items = self.desk.view(kind).items();
-                            let found: Vec<String> = rank_matches(&items, &search.query).into_iter().map(|i| items[i].key.clone()).collect();
+                            let found: Vec<String> =
+                                rank_matches(&items, &search.query).into_iter().map(|i| items[i].key.clone()).collect();
                             if !found.is_empty() {
                                 self.desk.searches.insert(kind, search.query.clone());
-                                self.desk.found.borrow_mut().insert(self.desk.used_buffer(kind), Found::new(&search.query, self.desk.view(kind).items_changed(), found));
+                                self.desk.found.borrow_mut().insert(
+                                    self.desk.used_buffer(kind),
+                                    Found::new(&search.query, self.desk.view(kind).items_changed(), found),
+                                );
                                 self.desk.missed.remove(&kind);
                             } else {
                                 self.desk.searches.remove(&kind);
@@ -158,7 +173,10 @@ impl CockpitApp {
         };
         let items = self.desk.view(kind).items();
         let found = rank_matches(&items, &query);
-        self.desk.found.borrow_mut().insert(self.desk.used_buffer(kind), Found::new(&query, self.desk.view(kind).items_changed(), found.iter().map(|i| items[*i].key.clone()).collect()));
+        self.desk.found.borrow_mut().insert(
+            self.desk.used_buffer(kind),
+            Found::new(&query, self.desk.view(kind).items_changed(), found.iter().map(|i| items[*i].key.clone()).collect()),
+        );
         if found.is_empty() {
             self.note = Some(format!("No match for {query}."));
             return;
@@ -196,7 +214,10 @@ impl CockpitApp {
             }
             _ => {
                 let items = view.items();
-                kept.insert(buffer, Found::new(query, changed, rank_matches(&items, query).into_iter().map(|i| items[i].key.clone()).collect()));
+                kept.insert(
+                    buffer,
+                    Found::new(query, changed, rank_matches(&items, query).into_iter().map(|i| items[i].key.clone()).collect()),
+                );
             }
         }
         let found = &kept.get(&buffer)?.keys;
@@ -216,8 +237,14 @@ impl CockpitApp {
             if !label.starts_with(&hint.typed) {
                 continue;
             }
-            let galley = painter.layout_no_wrap(label.to_uppercase(), egui::FontId::monospace(crate::theme::look().text_title), colors().on_bright);
-            let chip = hint_chip(spot.rect, galley.size() + egui::vec2(8.0, 4.0), self.panel_rects.get(hint.panel).copied().unwrap_or(egui::Rect::EVERYTHING), &taken);
+            let galley =
+                painter.layout_no_wrap(label.to_uppercase(), egui::FontId::monospace(crate::theme::look().text_title), colors().on_bright);
+            let chip = hint_chip(
+                spot.rect,
+                galley.size() + egui::vec2(8.0, 4.0),
+                self.panel_rects.get(hint.panel).copied().unwrap_or(egui::Rect::EVERYTHING),
+                &taken,
+            );
             taken.push(chip);
             painter.rect_filled(chip, 3.0, colors().key);
             painter.galley(chip.min + egui::vec2(4.0, 2.0), galley, colors().on_bright);

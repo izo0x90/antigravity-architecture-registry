@@ -108,11 +108,7 @@ impl LoginRun {
             .await
             .map_err(|_| HarnessError::Provider { reason: "the sign-in didn't finish".into() })??;
         self.read_out().await;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(HarnessError::Provider { reason: format!("the sign-in failed: {}", self.last_words()) })
-        }
+        if status.success() { Ok(()) } else { Err(HarnessError::Provider { reason: format!("the sign-in failed: {}", self.last_words()) }) }
     }
 
     /// Once it's exited: what it printed, read to the end (the streams can
@@ -137,9 +133,13 @@ mod tests {
 
     const WAIT: Duration = Duration::from_secs(30);
 
-
     fn sh(script: &str) -> (Launch, CommandLogin) {
-        let launch = Launch { program: "sh".into(), args: vec!["-c".into(), script.into()], env: vec![("A".into(), "1".into())], env_remove: Vec::new() };
+        let launch = Launch {
+            program: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            env: vec![("A".into(), "1".into())],
+            env_remove: Vec::new(),
+        };
         (launch, CommandLogin { method: "login".into(), args: Vec::new(), env: vec![("B".into(), "2".into())] })
     }
 
@@ -147,7 +147,10 @@ mod tests {
     async fn the_link_is_shown_and_the_code_goes_to_its_input() {
         let dir = tempfile::tempdir().unwrap();
         let got = dir.path().join("code");
-        let (launch, login) = sh(&format!(r#"echo "If the browser didn't open, visit: https://claude.ai/oauth?x=$A$B"; read code; echo "$code" > {}"#, got.display()));
+        let (launch, login) = sh(&format!(
+            r#"echo "If the browser didn't open, visit: https://claude.ai/oauth?x=$A$B"; read code; echo "$code" > {}"#,
+            got.display()
+        ));
         let started = LoginRun::start(&launch, &login, dir.path(), None, WAIT).await.unwrap();
         assert_eq!(started.link.as_deref(), Some("https://claude.ai/oauth?x=12"));
         started.run.finish(" abc#state \n").await.unwrap();

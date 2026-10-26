@@ -62,7 +62,11 @@ mod tests {
     fn servers_come_from_each_file_at_its_pointer_and_bad_files_say_so() {
         let dir = tempfile::tempdir().unwrap();
         let user = dir.path().join("user.json");
-        std::fs::write(&user, r#"{"projects":{"/p/x":{"mcpServers":{"docs":{"type":"sse","url":"u"}}}},"mcpServers":{"git":{"command":"git-mcp"}}}"#).unwrap();
+        std::fs::write(
+            &user,
+            r#"{"projects":{"/p/x":{"mcpServers":{"docs":{"type":"sse","url":"u"}}}},"mcpServers":{"git":{"command":"git-mcp"}}}"#,
+        )
+        .unwrap();
         let broken = dir.path().join("broken.json");
         std::fs::write(&broken, "{").unwrap();
         let file = |path: &std::path::Path, pointer: &str, scope| ToolConfigFile { path: path.into(), pointer: pointer.into(), scope };

@@ -13,7 +13,16 @@ use crate::{Activity, StateDb, StateError, failed, log_in};
 fn logged(tx: &Transaction<'_>, discussion: &Stored, change: &Change) -> Result<(), StateError> {
     let at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
     let detail = (!change.detail.is_empty()).then(|| change.detail.clone());
-    log_in(tx, &Activity { at_ms, actor: change.by.clone(), action: change.action.to_owned(), subject: format!("discussion {}", discussion.id), detail })
+    log_in(
+        tx,
+        &Activity {
+            at_ms,
+            actor: change.by.clone(),
+            action: change.action.to_owned(),
+            subject: format!("discussion {}", discussion.id),
+            detail,
+        },
+    )
 }
 
 /// Every discussion as written.
@@ -25,11 +34,13 @@ fn rows(tx: &Transaction<'_>) -> Result<Vec<String>, StateError> {
 impl DiscussionStore for StateDb {
     fn discussions(&self) -> Result<Vec<Stored>, String> {
         // One this build can't read (a newer kind of subject) stays as kept.
-        self.transaction(|tx| Ok(rows(tx)?.into_iter().filter_map(|json| serde_json::from_str(&json).ok()).collect())).map_err(|e| e.to_string())
+        self.transaction(|tx| Ok(rows(tx)?.into_iter().filter_map(|json| serde_json::from_str(&json).ok()).collect()))
+            .map_err(|e| e.to_string())
     }
 
     fn unreadable(&self) -> Result<usize, String> {
-        self.transaction(|tx| Ok(rows(tx)?.iter().filter(|json| serde_json::from_str::<Stored>(json).is_err()).count())).map_err(|e| e.to_string())
+        self.transaction(|tx| Ok(rows(tx)?.iter().filter(|json| serde_json::from_str::<Stored>(json).is_err()).count()))
+            .map_err(|e| e.to_string())
     }
 
     /// Read from every discussion as written, those this build can't read

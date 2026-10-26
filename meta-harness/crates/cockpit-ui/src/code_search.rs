@@ -79,7 +79,11 @@ impl CodeSearch {
         if let Some((round, query)) = tended.ask {
             for &kind in self.kinds {
                 let inbox = self.inbox.clone();
-                send(kind, &query, Box::new(move |answer| inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((round, kind, answer))));
+                send(
+                    kind,
+                    &query,
+                    Box::new(move |answer| inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((round, kind, answer))),
+                );
             }
         }
         if self.is_out() {
@@ -176,7 +180,8 @@ impl CodeSearch {
             for hit in &found.hits {
                 let Some(value) = value(*kind, hit) else { continue };
                 // (The server's word for a file nothing stands for is "file".)
-                let detail = if hit.detail.is_empty() || hit.detail == what { what.to_owned() } else { format!("{what} · {}", hit.detail) };
+                let detail =
+                    if hit.detail.is_empty() || hit.detail == what { what.to_owned() } else { format!("{what} · {}", hit.detail) };
                 out.push(Choice::new(value, hit.label.clone()).detail(Some(detail)).glyph(icon, crate::theme::colors().accent));
             }
             // The last listed of a kind says what wasn't: more matches than
@@ -206,7 +211,16 @@ mod tests {
     use super::*;
 
     fn found(labels: &[&str]) -> NetResult<Found> {
-        let hit = |label: &str| Hit { kind: SearchKind::Files, key: None, label: label.into(), detail: String::new(), file: None, line: None, callable: false, data: None };
+        let hit = |label: &str| Hit {
+            kind: SearchKind::Files,
+            key: None,
+            label: label.into(),
+            detail: String::new(),
+            file: None,
+            line: None,
+            callable: false,
+            data: None,
+        };
         let hits = labels.iter().map(|l| hit(l)).collect::<Vec<_>>();
         Ok(Found { total: hits.len(), hits, ..Found::default() })
     }
@@ -237,7 +251,11 @@ mod tests {
         assert_eq!(search.rows_of(), Some(""), "the rows shown are still the last round's");
         search.answer(first.0, SearchKind::Symbols, found(&["alpha"]));
         let next = search.tend(0.3).ask.unwrap();
-        assert_eq!((search.rows_of(), labels(&search)), (Some("a"), vec!["alpha".to_owned(), "a.rs".to_owned()]), "whole, symbols then files");
+        assert_eq!(
+            (search.rows_of(), labels(&search)),
+            (Some("a"), vec!["alpha".to_owned(), "a.rs".to_owned()]),
+            "whole, symbols then files"
+        );
         assert_eq!(next.1, "ab", "what was typed meanwhile, asked once it's back");
 
         // An answer for a round gone is dropped: it doesn't complete the
@@ -292,7 +310,10 @@ mod tests {
         let mut search = CodeSearch::new(KINDS);
         let mut sent: Vec<(SearchKind, String, Reply)> = Vec::new();
         assert_eq!(search.drive("a", &ctx, |k, q, reply| sent.push((k, q.to_owned(), reply))), None);
-        assert_eq!(sent.iter().map(|(k, q, _)| (*k, q.as_str())).collect::<Vec<_>>(), vec![(SearchKind::Symbols, "a"), (SearchKind::Files, "a")]);
+        assert_eq!(
+            sent.iter().map(|(k, q, _)| (*k, q.as_str())).collect::<Vec<_>>(),
+            vec![(SearchKind::Symbols, "a"), (SearchKind::Files, "a")]
+        );
         for (kind, _, reply) in sent.drain(..) {
             reply(if kind == SearchKind::Files { found(&["a.rs"]) } else { Err(crate::net::NetError::other("down")) });
         }
@@ -315,8 +336,21 @@ mod tests {
         let mut search = CodeSearch::new(&[SearchKind::Files]);
         search.typed("a");
         let (round, _) = search.tend(0.0).ask.unwrap();
-        let hit = |label: &str| Hit { kind: SearchKind::Files, key: None, label: label.into(), detail: "file".into(), file: None, line: None, callable: false, data: None };
-        search.answer(round, SearchKind::Files, Ok(Found { hits: vec![hit("a.rs"), hit("b.rs"), hit("left out")], total: 9, ..Found::default() }));
+        let hit = |label: &str| Hit {
+            kind: SearchKind::Files,
+            key: None,
+            label: label.into(),
+            detail: "file".into(),
+            file: None,
+            line: None,
+            callable: false,
+            data: None,
+        };
+        search.answer(
+            round,
+            SearchKind::Files,
+            Ok(Found { hits: vec![hit("a.rs"), hit("b.rs"), hit("left out")], total: 9, ..Found::default() }),
+        );
         search.tend(0.1);
         let rows = search.rows(|_, hit| (hit.label != "left out").then(|| hit.label.clone()));
         let details: Vec<&str> = rows.iter().map(|c| c.detail.as_deref().unwrap_or_default()).collect();

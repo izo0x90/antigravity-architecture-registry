@@ -29,7 +29,9 @@ impl IntoResponse for ArchError {
             ServiceError::NotFound(_) => StatusCode::NOT_FOUND,
             ServiceError::InvalidOp(_) => StatusCode::BAD_REQUEST,
             ServiceError::Forbidden(_) => StatusCode::FORBIDDEN,
-            ServiceError::Io(_) | ServiceError::Corrupt(_) | ServiceError::Index(_) | ServiceError::Poisoned => StatusCode::INTERNAL_SERVER_ERROR,
+            ServiceError::Io(_) | ServiceError::Corrupt(_) | ServiceError::Index(_) | ServiceError::Poisoned => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         (status, Json(serde_json::json!({ "error": self.0.to_string() }))).into_response()
     }
@@ -107,12 +109,24 @@ struct SearchQuery {
 
 /// Symbols, files or lines matching `q`; each hit names the card it stands
 /// for.
-async fn search(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Query(q): Query<SearchQuery>) -> Result<Json<arch_service::Found>, Response> {
+async fn search(
+    _: Needs<can::ViewRead>,
+    State(state): State<ProjectState>,
+    Query(q): Query<SearchQuery>,
+) -> Result<Json<arch_service::Found>, Response> {
     let within = match &q.changed {
-        Some(range) => Some(crate::routes::changes::changed_files(state.changes.clone(), range).await.map_err(|e| crate::routes::changes::ChangesFailed(e).into_response())?),
+        Some(range) => Some(
+            crate::routes::changes::changed_files(state.changes.clone(), range)
+                .await
+                .map_err(|e| crate::routes::changes::ChangesFailed(e).into_response())?,
+        ),
         None => None,
     };
-    Ok(Json(blocking(&state.arch, move |a| a.search(&q.q, q.kind, &q.source, q.limit, within.as_ref())).await.map_err(|e| ArchError(e).into_response())?))
+    Ok(Json(
+        blocking(&state.arch, move |a| a.search(&q.q, q.kind, &q.source, q.limit, within.as_ref()))
+            .await
+            .map_err(|e| ArchError(e).into_response())?,
+    ))
 }
 
 // An argument it doesn't know is refused, never ignored.
@@ -124,7 +138,11 @@ struct CodeQuery {
 
 /// One file as the analysis has it: colours and what each named place
 /// refers to, from what's kept (nothing when the file changed since).
-async fn code_analysis(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Query(q): Query<CodeQuery>) -> ArchResult<arch_graph::code::CodeAnalysis> {
+async fn code_analysis(
+    _: Needs<can::ViewRead>,
+    State(state): State<ProjectState>,
+    Query(q): Query<CodeQuery>,
+) -> ArchResult<arch_graph::code::CodeAnalysis> {
     Ok(Json(blocking(&state.arch, move |a| a.code_analysis(&q.path)).await?))
 }
 
@@ -145,10 +163,17 @@ struct CodeBlock {
 
 /// Code blocks' colours, each as a file of its language is coloured (none:
 /// no language pack knows its fence), in the order asked.
-async fn code_highlight(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Json(ask): Json<HighlightAsk>) -> ArchResult<Vec<Option<arch_graph::code::Highlights>>> {
+async fn code_highlight(
+    _: Needs<can::ViewRead>,
+    State(state): State<ProjectState>,
+    Json(ask): Json<HighlightAsk>,
+) -> ArchResult<Vec<Option<arch_graph::code::Highlights>>> {
     let size: usize = ask.blocks.iter().map(|b| b.text.len()).sum();
     if size > arch_graph::code::HIGHLIGHT_MOST {
-        return Err(ArchError(ServiceError::InvalidOp(format!("{size} bytes of code blocks is too much to colour at once (the most is {})", arch_graph::code::HIGHLIGHT_MOST))));
+        return Err(ArchError(ServiceError::InvalidOp(format!(
+            "{size} bytes of code blocks is too much to colour at once (the most is {})",
+            arch_graph::code::HIGHLIGHT_MOST
+        ))));
     }
     Ok(Json(blocking(&state.arch, move |a| Ok(ask.blocks.iter().map(|b| a.highlight(&b.language, &b.text)).collect())).await?))
 }
@@ -162,7 +187,12 @@ struct SourceQuery {
     source: Source,
 }
 
-async fn component(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Path(id): Path<String>, Query(q): Query<SourceQuery>) -> ArchResult<arch_service::ComponentDetail> {
+async fn component(
+    _: Needs<can::ViewRead>,
+    State(state): State<ProjectState>,
+    Path(id): Path<String>,
+    Query(q): Query<SourceQuery>,
+) -> ArchResult<arch_service::ComponentDetail> {
     Ok(Json(blocking(&state.arch, move |a| a.component(&ComponentId::new(id), &q.source)).await?))
 }
 
@@ -177,7 +207,11 @@ struct AtQuery {
 }
 
 /// The component enclosing a code location (reveal-in-graph from the code view).
-async fn component_at(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Query(q): Query<AtQuery>) -> ArchResult<arch_graph::Component> {
+async fn component_at(
+    _: Needs<can::ViewRead>,
+    State(state): State<ProjectState>,
+    Query(q): Query<AtQuery>,
+) -> ArchResult<arch_graph::Component> {
     Ok(Json(blocking(&state.arch, move |a| a.component_at(&q.file, q.line, &q.source)).await?))
 }
 
@@ -190,7 +224,11 @@ struct FileQuery {
     source: Source,
 }
 
-async fn file_view(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Query(q): Query<FileQuery>) -> ArchResult<arch_graph::FileView> {
+async fn file_view(
+    _: Needs<can::ViewRead>,
+    State(state): State<ProjectState>,
+    Query(q): Query<FileQuery>,
+) -> ArchResult<arch_graph::FileView> {
     Ok(Json(blocking(&state.arch, move |a| a.file_view(&q.path, &q.source)).await?))
 }
 
@@ -204,7 +242,11 @@ struct IngestBody {
     full: bool,
 }
 
-async fn ingest(_: Needs<can::CodeCheck>, State(state): State<ProjectState>, body: Option<Json<IngestBody>>) -> ArchResult<arch_service::IngestReport> {
+async fn ingest(
+    _: Needs<can::CodeCheck>,
+    State(state): State<ProjectState>,
+    body: Option<Json<IngestBody>>,
+) -> ArchResult<arch_service::IngestReport> {
     let (scope, full) = body.map(|b| (b.0.scope, b.0.full)).unwrap_or_default();
     Ok(Json(
         blocking(&state.arch, move |a| {
@@ -234,7 +276,11 @@ async fn unproven(_: Needs<can::ViewRead>, State(state): State<ProjectState>) ->
     Ok(Json(state.arch.unproven_calls()?))
 }
 
-async fn navigate(_: Needs<can::ViewDrive>, State(state): State<ProjectState>, Json(request): Json<ViewRequest>) -> Result<StatusCode, ArchError> {
+async fn navigate(
+    _: Needs<can::ViewDrive>,
+    State(state): State<ProjectState>,
+    Json(request): Json<ViewRequest>,
+) -> Result<StatusCode, ArchError> {
     blocking(&state.arch, move |a| a.request_view(request, Requester::User)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -253,7 +299,11 @@ struct NewPlan {
     kind: arch_graph::PlanKind,
 }
 
-async fn create_plan(_: Needs<can::PlanEdit>, State(state): State<ProjectState>, Json(body): Json<NewPlan>) -> ArchResult<arch_graph::Plan> {
+async fn create_plan(
+    _: Needs<can::PlanEdit>,
+    State(state): State<ProjectState>,
+    Json(body): Json<NewPlan>,
+) -> ArchResult<arch_graph::Plan> {
     Ok(Json(blocking(&state.arch, move |a| a.create_plan(&body.id, &body.title, &body.description, body.kind)).await?))
 }
 
@@ -297,7 +347,11 @@ async fn get_plan(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Pa
     Ok(Json(blocking(&state.arch, move |a| a.plan(&plan)).await?))
 }
 
-async fn delete_plan(_: Needs<can::PlansApprove>, State(state): State<ProjectState>, Path(plan): Path<String>) -> Result<StatusCode, ArchError> {
+async fn delete_plan(
+    _: Needs<can::PlansApprove>,
+    State(state): State<ProjectState>,
+    Path(plan): Path<String>,
+) -> Result<StatusCode, ArchError> {
     let plan = plan_id(&plan)?;
     let p = plan.clone();
     blocking(&state.arch, move |a| a.delete_plan(&p)).await?;
@@ -311,7 +365,12 @@ struct Ops {
 }
 
 /// Applies operations in order; stops at the first one that fails.
-async fn apply_ops(_: Needs<can::PlanEdit>, State(state): State<ProjectState>, Path(plan): Path<String>, Json(body): Json<Ops>) -> ArchResult<arch_graph::Plan> {
+async fn apply_ops(
+    _: Needs<can::PlanEdit>,
+    State(state): State<ProjectState>,
+    Path(plan): Path<String>,
+    Json(body): Json<Ops>,
+) -> ArchResult<arch_graph::Plan> {
     let plan = plan_id(&plan)?;
     Ok(Json(
         blocking(&state.arch, move |a| {
@@ -342,7 +401,12 @@ struct NextQuery {
 }
 
 /// Components ready for detailed design (`plan`) or for code (`build`), in dependency order.
-async fn next_actionable(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Path(plan): Path<String>, Query(q): Query<NextQuery>) -> ArchResult<Vec<ComponentId>> {
+async fn next_actionable(
+    _: Needs<can::ViewRead>,
+    State(state): State<ProjectState>,
+    Path(plan): Path<String>,
+    Query(q): Query<NextQuery>,
+) -> ArchResult<Vec<ComponentId>> {
     let plan = plan_id(&plan)?;
     Ok(Json(
         blocking(&state.arch, move |a| {
@@ -360,7 +424,11 @@ struct ContractResponse {
     markdown: String,
 }
 
-async fn contract(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Path((plan, id)): Path<(String, String)>) -> ArchResult<ContractResponse> {
+async fn contract(
+    _: Needs<can::ViewRead>,
+    State(state): State<ProjectState>,
+    Path((plan, id)): Path<(String, String)>,
+) -> ArchResult<ContractResponse> {
     let plan = plan_id(&plan)?;
     let slice = blocking(&state.arch, move |a| a.contract(&plan, &ComponentId::new(id))).await?;
     Ok(Json(ContractResponse { markdown: slice.to_markdown(), slice }))
@@ -371,7 +439,12 @@ struct VerifyBody {
     goal: Stage,
 }
 
-async fn verify(_: Needs<can::CodeCheck>, State(state): State<ProjectState>, Path((plan, id)): Path<(String, String)>, Json(body): Json<VerifyBody>) -> ArchResult<arch_service::Verification> {
+async fn verify(
+    _: Needs<can::CodeCheck>,
+    State(state): State<ProjectState>,
+    Path((plan, id)): Path<(String, String)>,
+    Json(body): Json<VerifyBody>,
+) -> ArchResult<arch_service::Verification> {
     let plan = plan_id(&plan)?;
     Ok(Json(blocking(&state.arch, move |a| a.verify(&plan, &ComponentId::new(id), body.goal)).await?))
 }
@@ -384,7 +457,12 @@ struct ApproveBody {
 }
 
 /// The cockpit's approval button. Agents have no equivalent tool.
-async fn approve(_: Needs<can::PlansApprove>, State(state): State<ProjectState>, Path((plan, id)): Path<(String, String)>, Json(body): Json<ApproveBody>) -> ArchResult<arch_graph::Approval> {
+async fn approve(
+    _: Needs<can::PlansApprove>,
+    State(state): State<ProjectState>,
+    Path((plan, id)): Path<(String, String)>,
+    Json(body): Json<ApproveBody>,
+) -> ArchResult<arch_graph::Approval> {
     let plan = plan_id(&plan)?;
     let actor = user(&body.by)?;
     Ok(Json(blocking(&state.arch, move |a| a.approve(&plan, &ComponentId::new(id), body.to, &actor)).await?))
@@ -397,11 +475,19 @@ struct RefreshBody {
 }
 
 /// Re-reads changed files and re-verifies the planned components they affect.
-async fn refresh(_: Needs<can::CodeCheck>, State(state): State<ProjectState>, Json(body): Json<RefreshBody>) -> ArchResult<arch_service::Refresh> {
+async fn refresh(
+    _: Needs<can::CodeCheck>,
+    State(state): State<ProjectState>,
+    Json(body): Json<RefreshBody>,
+) -> ArchResult<arch_service::Refresh> {
     let paths = body
         .paths
         .iter()
-        .map(|p| arch_graph::RepoPath::new(p).map(|p| state.arch.root().join(p.as_str())).map_err(|e| ArchError(ServiceError::InvalidOp(e.to_string()))))
+        .map(|p| {
+            arch_graph::RepoPath::new(p)
+                .map(|p| state.arch.root().join(p.as_str()))
+                .map_err(|e| ArchError(ServiceError::InvalidOp(e.to_string())))
+        })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(blocking(&state.arch, move |a| a.refresh(&paths)).await?))
 }
@@ -421,13 +507,22 @@ struct ToolsBody {
     component: Option<String>,
 }
 
-async fn run_tools(_: Needs<can::CodeCheck>, State(state): State<ProjectState>, Path(plan): Path<String>, body: Option<Json<ToolsBody>>) -> ArchResult<arch_service::ToolsReport> {
+async fn run_tools(
+    _: Needs<can::CodeCheck>,
+    State(state): State<ProjectState>,
+    Path(plan): Path<String>,
+    body: Option<Json<ToolsBody>>,
+) -> ArchResult<arch_service::ToolsReport> {
     let plan = plan_id(&plan)?;
     let only = body.and_then(|b| b.0.component).map(ComponentId::new);
     Ok(Json(blocking(&state.arch, move |a| a.run_tools(&plan, only.as_ref())).await?))
 }
 
-async fn review(_: Needs<can::CodeCheck>, State(state): State<ProjectState>, Path((plan, id)): Path<(String, String)>) -> ArchResult<arch_service::ReviewsReport> {
+async fn review(
+    _: Needs<can::CodeCheck>,
+    State(state): State<ProjectState>,
+    Path((plan, id)): Path<(String, String)>,
+) -> ArchResult<arch_service::ReviewsReport> {
     let plan = plan_id(&plan)?;
     Ok(Json(blocking(&state.arch, move |a| a.review(&plan, &ComponentId::new(id))).await?))
 }
@@ -446,13 +541,22 @@ struct ByBody {
     by: String,
 }
 
-async fn mark_reviewed(_: Needs<can::PlansApprove>, State(state): State<ProjectState>, Path(plan): Path<String>, Json(body): Json<ByBody>) -> ArchResult<arch_graph::ReviewSnapshot> {
+async fn mark_reviewed(
+    _: Needs<can::PlansApprove>,
+    State(state): State<ProjectState>,
+    Path(plan): Path<String>,
+    Json(body): Json<ByBody>,
+) -> ArchResult<arch_graph::ReviewSnapshot> {
     let plan = plan_id(&plan)?;
     let actor = user(&body.by)?;
     Ok(Json(blocking(&state.arch, move |a| a.mark_reviewed(&plan, &actor)).await?))
 }
 
-async fn review_diff(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Path(plan): Path<String>) -> ArchResult<arch_graph::PlanDiff> {
+async fn review_diff(
+    _: Needs<can::ViewRead>,
+    State(state): State<ProjectState>,
+    Path(plan): Path<String>,
+) -> ArchResult<arch_graph::PlanDiff> {
     let plan = plan_id(&plan)?;
     Ok(Json(blocking(&state.arch, move |a| a.review_diff(&plan)).await?))
 }

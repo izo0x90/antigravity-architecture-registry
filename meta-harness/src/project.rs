@@ -52,14 +52,20 @@ pub fn analyze_to(root: &Path, out: &Path) -> Result<String, SetupError> {
     let setup = analysis_setup(root)?;
     let store = arch_service::temporary_facts(&setup.limits)?;
     let ready = std::time::Duration::from_secs(setup.limits.servers.ready_s);
-    let service = arch_service::ArchitectureService::open(root, setup.packs, setup.types, Box::new(arch_service::MemoryPlans::default()), store)?
-        .with_limits(setup.limits)
-        .with_rules(setup.rules)
-        .with_servers(&setup.catalog);
+    let service =
+        arch_service::ArchitectureService::open(root, setup.packs, setup.types, Box::new(arch_service::MemoryPlans::default()), store)?
+            .with_limits(setup.limits)
+            .with_rules(setup.rules)
+            .with_servers(&setup.catalog);
     let report = service.ingest(root)?;
     let waited = service.wait_for_servers(ready)?;
     let proven = service.observed()?.relations().filter(|r| r.proven_by.is_some()).count();
-    let servers: String = service.index_status().servers.iter().map(|s| format!("\n{}: {:?}{}", s.language, s.state, s.reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default())).collect();
+    let servers: String = service
+        .index_status()
+        .servers
+        .iter()
+        .map(|s| format!("\n{}: {:?}{}", s.language, s.state, s.reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default()))
+        .collect();
     let summary = format!(
         "{} files read; {} components, {} relations, {proven} confirmed by the languages' servers{}{servers}",
         report.files,

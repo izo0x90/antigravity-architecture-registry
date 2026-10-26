@@ -2,18 +2,16 @@
 
 use agent_client_protocol::schema::v1 as acp;
 use harness_contracts::{
-    ConfigCategory, ConfigChoice, ConfigControl, ConfigKind, ContentBlock, Diff,
-    FileLocation, ItemStatus, ModeOption, ModelOption, PlanStep, SlashCommand, StepStatus, SubagentStatus, ToolKind, TurnStatus, Usage,
+    ConfigCategory, ConfigChoice, ConfigControl, ConfigKind, ContentBlock, Diff, FileLocation, ItemStatus, ModeOption, ModelOption,
+    PlanStep, SlashCommand, StepStatus, SubagentStatus, ToolKind, TurnStatus, Usage,
 };
 
 pub fn content_block(block: &acp::ContentBlock) -> ContentBlock {
     match block {
         acp::ContentBlock::Text(t) => ContentBlock::Text { text: t.text.clone() },
-        acp::ContentBlock::Image(i) => ContentBlock::Image {
-            mime_type: i.mime_type.clone(),
-            data_base64: Some(i.data.clone()),
-            uri: i.uri.clone(),
-        },
+        acp::ContentBlock::Image(i) => {
+            ContentBlock::Image { mime_type: i.mime_type.clone(), data_base64: Some(i.data.clone()), uri: i.uri.clone() }
+        }
         acp::ContentBlock::ResourceLink(l) => ContentBlock::ResourceLink { uri: l.uri.clone(), name: Some(l.name.clone()) },
         acp::ContentBlock::Resource(r) => match &r.resource {
             acp::EmbeddedResourceResource::TextResourceContents(t) => {
@@ -29,11 +27,9 @@ pub fn content_block(block: &acp::ContentBlock) -> ContentBlock {
 pub fn tool_content(content: &acp::ToolCallContent) -> ContentBlock {
     match content {
         acp::ToolCallContent::Content(c) => content_block(&c.content),
-        acp::ToolCallContent::Diff(d) => ContentBlock::Diff(Diff {
-            path: d.path.display().to_string(),
-            old_text: d.old_text.clone(),
-            new_text: d.new_text.clone(),
-        }),
+        acp::ToolCallContent::Diff(d) => {
+            ContentBlock::Diff(Diff { path: d.path.display().to_string(), old_text: d.old_text.clone(), new_text: d.new_text.clone() })
+        }
         acp::ToolCallContent::Terminal(t) => ContentBlock::Text { text: format!("[terminal {}]", t.terminal_id) },
         _ => ContentBlock::Unsupported,
     }
@@ -145,10 +141,9 @@ pub fn config_controls(options: &[acp::SessionConfigOption]) -> Vec<ConfigContro
                 acp::SessionConfigKind::Select(select) => {
                     let choices = match &select.options {
                         acp::SessionConfigSelectOptions::Ungrouped(list) => list.iter().map(|c| choice(c, None)).collect(),
-                        acp::SessionConfigSelectOptions::Grouped(groups) => groups
-                            .iter()
-                            .flat_map(|g| g.options.iter().map(|c| choice(c, Some(&g.name))))
-                            .collect(),
+                        acp::SessionConfigSelectOptions::Grouped(groups) => {
+                            groups.iter().flat_map(|g| g.options.iter().map(|c| choice(c, Some(&g.name)))).collect()
+                        }
                         _ => Vec::new(),
                     };
                     ConfigKind::Select { choices, current: select.current_value.to_string() }
@@ -205,7 +200,13 @@ pub fn session_update(params: serde_json::Value) -> Option<(String, Update)> {
         "session_message" => Update::Message(SessionMessage {
             from: text("senderSessionId"),
             to: text("recipientSessionId"),
-            text: update.get("content").and_then(serde_json::Value::as_array).into_iter().flatten().filter_map(|b| b.get("text").and_then(serde_json::Value::as_str)).collect(),
+            text: update
+                .get("content")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|b| b.get("text").and_then(serde_json::Value::as_str))
+                .collect(),
         }),
         // Its parts as they stream: the whole one comes as `session_message`.
         "session_message_chunk" => return None,
@@ -230,7 +231,10 @@ pub enum Update {
     /// A message between the agent and a sub-agent (its task, its answer).
     Message(SessionMessage),
     /// Of a kind it can't read (`why`).
-    Unread { kind: String, why: String },
+    Unread {
+        kind: String,
+        why: String,
+    },
 }
 
 #[derive(Debug, Default)]

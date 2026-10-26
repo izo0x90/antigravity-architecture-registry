@@ -70,7 +70,15 @@ impl Timing {
 
     pub(crate) fn done(self, slow_ms: u64, at: String) -> Timed {
         let total = ms(self.started);
-        Timed { what: self.what.to_owned(), asked: self.asked, at, ms: total, stages: self.stages, size: self.size, slow: total > slow_ms as f64 }
+        Timed {
+            what: self.what.to_owned(),
+            asked: self.asked,
+            at,
+            ms: total,
+            stages: self.stages,
+            size: self.size,
+            slow: total > slow_ms as f64,
+        }
     }
 }
 

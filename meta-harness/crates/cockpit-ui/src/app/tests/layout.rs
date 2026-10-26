@@ -19,13 +19,21 @@ fn the_layout_comes_back_as_it_was_saved() {
     assert_eq!((fresh.desk.marks.clone(), fresh.desk.jumps.clone()), (saved.marks.clone(), saved.jumps.clone()));
     let graph_place = |s: &SavedUi| s.views.iter().find(|(p, _)| p.kind == BufferKind::Graph).map(|(_, p)| p.clone());
     assert_eq!(fresh.desk.graph().place(), graph_place(&saved).unwrap(), "the graph where it was, the same card selected");
-    let code = fresh.saved_ui().views.into_iter().find(|(p, _)| p.kind == BufferKind::Code).and_then(|(_, place)| place.read::<crate::code::CodePlace>());
+    let code = fresh
+        .saved_ui()
+        .views
+        .into_iter()
+        .find(|(p, _)| p.kind == BufferKind::Code)
+        .and_then(|(_, place)| place.read::<crate::code::CodePlace>());
     assert_eq!(code.map(|c| c.line), Some(6));
     // A cockpit that has loaded nothing loads the saved file, even one
     // named like the file it starts on.
     let mut opened = new_app();
     let mut only_code = saved.clone();
-    only_code.views = vec![(BufferId::new(BufferKind::Code, 0), Place::of(&crate::code::CodePlace { file: opened.desk.code().current_file.clone(), line: 3 }))];
+    only_code.views = vec![(
+        BufferId::new(BufferKind::Code, 0),
+        Place::of(&crate::code::CodePlace { file: opened.desk.code().current_file.clone(), line: 3 }),
+    )];
     opened.restore_saved(only_code);
     assert!(opened.desk.code().is_loading, "the saved file is fetched");
 }
@@ -143,7 +151,10 @@ fn a_count_before_a_go_to_names_the_panel_it_opens_in() {
     assert!(app.note.as_deref().unwrap_or_default().contains("There are 3 panels"), "{:?}", app.note);
     // The first panel: the code opens there (the chat put away).
     keys(&ctx, &mut app, "1gd");
-    assert_eq!((app.desk.panels.focused(), app.desk.panels.kind(0), app.desk.code().current_file.as_str()), (0, BufferKind::Code, "src/a.rs"));
+    assert_eq!(
+        (app.desk.panels.focused(), app.desk.panels.kind(0), app.desk.code().current_file.as_str()),
+        (0, BufferKind::Code, "src/a.rs")
+    );
     // One past the last: a new panel, with a code view of its own.
     app.desk.panels.focus(1);
     frame(&ctx, &mut app, vec![]);
@@ -179,13 +190,19 @@ fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
     frame(&ctx, &mut app, vec![]);
     app.desk.panels.focus(0);
     frame(&ctx, &mut app, vec![]);
-    assert_eq!((app.desk.chat().ui.slot.as_str(), app.desk.chat().ui.input.text.as_str(), app.desk.chat().active_thread().map(|t| t.to_string())), ("lead", "to the lead", Some("t".into())));
+    assert_eq!(
+        (app.desk.chat().ui.slot.as_str(), app.desk.chat().ui.input.text.as_str(), app.desk.chat().active_thread().map(|t| t.to_string())),
+        ("lead", "to the lead", Some("t".into()))
+    );
     assert!(!app.desk.chat().actions().iter().any(|a| a.id == "agent.close"), "the lead isn't closed");
     // Each view's draft is to be saved for its slot (the server keeps them
     // as their own record, not in the layout).
     frame(&ctx, &mut app, vec![]);
     let drafts = app.desk.shared.drafts.get();
-    assert_eq!((drafts.to_save(&harness_contracts::SlotId::new("lead")), drafts.to_save(&harness_contracts::SlotId::new("sub-1"))), (Some("to the lead"), Some("to the reviewer")));
+    assert_eq!(
+        (drafts.to_save(&harness_contracts::SlotId::new("lead")), drafts.to_save(&harness_contracts::SlotId::new("sub-1"))),
+        (Some("to the lead"), Some("to the reviewer"))
+    );
     drop(drafts);
     let saved = serde_json::to_value(app.saved_ui()).unwrap();
     assert!(!saved.to_string().contains("to the lead"), "the draft isn't in the layout: {saved}");
@@ -194,9 +211,16 @@ fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
     let (ctx, mut fresh) = full_app();
     fresh.restore_saved(serde_json::from_value(saved).unwrap());
     // The lead's draft links a file: it comes back linked.
-    let link = harness_contracts::Link { start: 0, end: 5, to: harness_contracts::Linked::Thing { subject: harness_contracts::Subject::CodeFile { path: "a.rs".into() } }, include: harness_contracts::Include::Whole };
+    let link = harness_contracts::Link {
+        start: 0,
+        end: 5,
+        to: harness_contracts::Linked::Thing { subject: harness_contracts::Subject::CodeFile { path: "a.rs".into() } },
+        include: harness_contracts::Include::Whole,
+    };
     let linked = harness_contracts::Message { text: "@a.rs to the lead".into(), links: vec![link.clone()] };
-    fresh.desk.shared.drafts.get_mut().arrived([(harness_contracts::SlotId::new("lead"), linked), (harness_contracts::SlotId::new("sub-1"), "to the reviewer".into())].into());
+    fresh.desk.shared.drafts.get_mut().arrived(
+        [(harness_contracts::SlotId::new("lead"), linked), (harness_contracts::SlotId::new("sub-1"), "to the reviewer".into())].into(),
+    );
     let view = |app: &mut CockpitApp, buffer| {
         app.use_buffer(buffer);
         frame(&ctx, app, vec![]);
@@ -212,10 +236,18 @@ fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
     let still = fresh.config.net.save_after_ms as f64 / 1000.0;
     frame_at(&ctx, &mut fresh, vec![], 10.0);
     let asked = bodies(&fresh, "POST /api/links/check");
-    assert_eq!(asked, [serde_json::json!({ "text": "@a.rs to the lead", "links": [{ "start": 0, "end": 5, "to": { "kind": "thing", "subject": { "kind": "code_file", "path": "a.rs" } }, "include": "whole" }] })]);
+    assert_eq!(
+        asked,
+        [
+            serde_json::json!({ "text": "@a.rs to the lead", "links": [{ "start": 0, "end": 5, "to": { "kind": "thing", "subject": { "kind": "code_file", "path": "a.rs" } }, "include": "whole" }] })
+        ]
+    );
     // Its link changed (a pointer now): not asked again at once; the answer
     // about the link as it was is dropped; asked once it's still a moment.
-    let pointer = harness_contracts::Message { text: "@a.rs to the lead".into(), links: vec![harness_contracts::Link { include: harness_contracts::Include::Pointer, ..link.clone() }] };
+    let pointer = harness_contracts::Message {
+        text: "@a.rs to the lead".into(),
+        links: vec![harness_contracts::Link { include: harness_contracts::Include::Pointer, ..link.clone() }],
+    };
     fresh.desk.buffer_mut(first).and_then(|b| b.typing_box()).unwrap().restore(&pointer);
     frame_at(&ctx, &mut fresh, vec![], 20.0);
     assert!(bodies(&fresh, "POST /api/links/check").is_empty(), "not at once");
@@ -223,9 +255,16 @@ fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
     frame_at(&ctx, &mut fresh, vec![], 20.0 + still);
     assert!(!texts(&frame_at(&ctx, &mut fresh, vec![], 20.0 + still)).contains("as it was"), "an old answer: dropped");
     assert_eq!(bodies(&fresh, "POST /api/links/check").len(), 1);
-    assert!(fresh.desk.net.answer("POST /api/links/check", 200, &serde_json::json!({ "notes": ["file a.rs: too big to go in whole with the rest"] })));
+    assert!(fresh.desk.net.answer(
+        "POST /api/links/check",
+        200,
+        &serde_json::json!({ "notes": ["file a.rs: too big to go in whole with the rest"] })
+    ));
     frame_at(&ctx, &mut fresh, vec![], 21.0 + still);
-    assert!(texts(&frame_at(&ctx, &mut fresh, vec![], 21.1 + still)).contains("file a.rs: too big to go in whole"), "said before it's sent");
+    assert!(
+        texts(&frame_at(&ctx, &mut fresh, vec![], 21.1 + still)).contains("file a.rs: too big to go in whole"),
+        "said before it's sent"
+    );
 }
 
 /// A buffer kind saved in another version of itself starts new; the rest
@@ -256,18 +295,31 @@ fn the_agent_is_talked_to_from_anywhere_without_moving_anything() {
     frame(&ctx, &mut app, vec![]);
     let before = (app.desk.panels.clone(), app.desk.graph_mut().place());
     // As a browser sends it: the key down with its text, then up.
-    let t = |pressed| egui::Event::Key { key: egui::Key::T, physical_key: Some(egui::Key::T), pressed, repeat: false, modifiers: Default::default() };
+    let t = |pressed| egui::Event::Key {
+        key: egui::Key::T,
+        physical_key: Some(egui::Key::T),
+        pressed,
+        repeat: false,
+        modifiers: Default::default(),
+    };
     frame(&ctx, &mut app, vec![t(true), egui::Event::Text("t".into())]);
     frame(&ctx, &mut app, vec![t(false)]);
     frame(&ctx, &mut app, vec![]);
     let chat = BufferId::new(BufferKind::Chat, crate::quick_look::PANE);
-    assert_eq!((app.quick_look.as_ref().map(|q| q.buffer), app.input_mode), (Some(chat), InputMode::Insert { at: Host::Look }), "t: the lead's chat in the quick look, typing");
+    assert_eq!(
+        (app.quick_look.as_ref().map(|q| q.buffer), app.input_mode),
+        (Some(chat), InputMode::Insert { at: Host::Look }),
+        "t: the lead's chat in the quick look, typing"
+    );
     assert_eq!(app.desk.chat().ui.slot.as_str(), "lead");
     frame(&ctx, &mut app, key("what calls step?"));
     assert_eq!(app.desk.chat().ui.input.text, "what calls step?", "typing goes into it, not to the keys");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert!(app.desk.chat().ui.input.text.is_empty(), "sent");
-    assert!(matches!(app.desk.shared.agents.get().state(&harness_contracts::SlotId::new(harness_contracts::LEAD)), crate::agents::AgentState::CantRun(e) if e.contains("no harness instance")), "it went to the lead (no harness here)");
+    assert!(
+        matches!(app.desk.shared.agents.get().state(&harness_contracts::SlotId::new(harness_contracts::LEAD)), crate::agents::AgentState::CantRun(e) if e.contains("no harness instance")),
+        "it went to the lead (no harness here)"
+    );
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert_eq!((app.quick_look.is_some(), app.input_mode), (true, InputMode::Normal), "Escape stops typing");
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
@@ -282,9 +334,17 @@ fn typing_in_the_quick_look_stays_there_over_a_chat_or_a_discussion() {
         focus(&ctx, &mut app, kind);
         if kind == BufferKind::Discussion {
             let on = harness_contracts::Subject::Plan { plan: PlanId::new("p").unwrap() };
-            told(&app, harness_contracts::ClientEvent::DiscussionUpdated { discussion: crate::discussions::tests::discussion(1, on, harness_contracts::DiscussionStatus::Open) });
+            told(
+                &app,
+                harness_contracts::ClientEvent::DiscussionUpdated {
+                    discussion: crate::discussions::tests::discussion(1, on, harness_contracts::DiscussionStatus::Open),
+                },
+            );
             frame(&ctx, &mut app, vec![]);
-            app.desk.view_mut(BufferKind::Discussion).show_target(&crate::nav::Target::Discussion(harness_contracts::DiscussionId::new("d1"))).unwrap();
+            app.desk
+                .view_mut(BufferKind::Discussion)
+                .show_target(&crate::nav::Target::Discussion(harness_contracts::DiscussionId::new("d1")))
+                .unwrap();
         }
         // The panel's own box has the keyboard first: what's typed goes in it.
         app.input_mode = InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) };
@@ -310,6 +370,10 @@ fn typing_in_the_quick_look_stays_there_over_a_chat_or_a_discussion() {
             BufferKind::Chat => app.desk.chat().ui.input.text.clone(),
             _ => app.desk.typed::<crate::discussion::DiscussionView>(BufferKind::Discussion).writing.text.clone(),
         };
-        assert_eq!((in_look.as_str(), in_panel.as_str()), ("hello", ""), "over a {kind:?}: typing goes into the quick look, not the panel under it");
+        assert_eq!(
+            (in_look.as_str(), in_panel.as_str()),
+            ("hello", ""),
+            "over a {kind:?}: typing goes into the quick look, not the panel under it"
+        );
     }
 }

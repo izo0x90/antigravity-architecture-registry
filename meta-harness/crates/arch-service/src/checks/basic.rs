@@ -9,7 +9,15 @@ use code_analyzer::{Ignores, PackSet, module_symbol};
 use super::component;
 
 /// Unknown types and the location rules, per planned component.
-pub(super) fn components(plan: &Plan, graph: &Graph, root: &Path, ignores: &Ignores, packs: &PackSet, types: &TypeSystem, report: &mut Report) {
+pub(super) fn components(
+    plan: &Plan,
+    graph: &Graph,
+    root: &Path,
+    ignores: &Ignores,
+    packs: &PackSet,
+    types: &TypeSystem,
+    report: &mut Report,
+) {
     for planned in &plan.components {
         let Some(merged) = graph.component(&planned.id) else { continue };
         if !types.contains(&merged.type_name) {
@@ -84,22 +92,32 @@ fn location(c: &arch_graph::Component, graph: &Graph, root: &Path, ignores: &Ign
     let absolute = root.join(path);
     if !absolute.exists() && absolute.parent().is_some_and(|dir| !dir.is_dir()) {
         report.push(
-            Finding::error(FindingCode::InvalidLocation, component(&c.id), format!("{} would be a new file in a directory that doesn't exist", proposed.file))
-                .suggest("place it in an existing directory, or plan the directory's module first"),
+            Finding::error(
+                FindingCode::InvalidLocation,
+                component(&c.id),
+                format!("{} would be a new file in a directory that doesn't exist", proposed.file),
+            )
+            .suggest("place it in an existing directory, or plan the directory's module first"),
         );
     }
     // The proposed file must be the parent's own file, or be the parent module.
     if let Some(parent_id) = &proposed.parent
         && let Some(parent) = graph.component(parent_id)
     {
-        let parent_symbol = parent.anchor.as_ref().map(|a| a.symbol.clone()).or(parent.proposed.as_ref().map(|p| p.symbol.clone())).unwrap_or_default();
+        let parent_symbol =
+            parent.anchor.as_ref().map(|a| a.symbol.clone()).or(parent.proposed.as_ref().map(|p| p.symbol.clone())).unwrap_or_default();
         let same_file = parent.file() == Some(&proposed.file);
         let file_module = module_symbol(root, &proposed.file, pack);
         if !same_file && file_module != parent_symbol {
             report.push(Finding::error(
                 FindingCode::InvalidLocation,
                 component(&c.id),
-                format!("its parent {} lives in {}, but {} is module {file_module}", parent.id, parent.file().map_or("?", |f| f.as_str()), proposed.file),
+                format!(
+                    "its parent {} lives in {}, but {} is module {file_module}",
+                    parent.id,
+                    parent.file().map_or("?", |f| f.as_str()),
+                    proposed.file
+                ),
             ));
         }
     }
@@ -122,7 +140,8 @@ pub(super) fn touch_points(plan: &Plan, graph: &Graph, report: &mut Report) {
     }
     let existing = |id: &arch_graph::ComponentId| graph.provenance(id).observed && !new.contains(&id);
     let tied = plan.relations.iter().any(|r| {
-        r.kind != RelationKind::Contains && ((new.contains(&&r.source) && existing(&r.target)) || (new.contains(&&r.target) && existing(&r.source)))
+        r.kind != RelationKind::Contains
+            && ((new.contains(&&r.source) && existing(&r.target)) || (new.contains(&&r.target) && existing(&r.source)))
     });
     if !tied {
         report.push(

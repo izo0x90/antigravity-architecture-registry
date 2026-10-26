@@ -44,10 +44,13 @@ impl Commands {
             // A prompt drawn again (Ctrl-L, a list of completions, Ctrl-C):
             // the same command, waiting at its new place.
             (Seen::Prompt, Some(kept)) if kept.waiting() => {
-                (kept.command.prompt, kept.command.input, kept.command.input_col, kept.command.text, kept.changed) = (at.line, at.line, at.col, String::new(), seq);
+                (kept.command.prompt, kept.command.input, kept.command.input_col, kept.command.text, kept.changed) =
+                    (at.line, at.line, at.col, String::new(), seq);
             }
             (Seen::Prompt, _) => self.add(at, seq),
-            (Seen::Input, Some(kept)) if kept.waiting() => (kept.command.input, kept.command.input_col, kept.changed) = (at.line, at.col, seq),
+            (Seen::Input, Some(kept)) if kept.waiting() => {
+                (kept.command.input, kept.command.input_col, kept.changed) = (at.line, at.col, seq)
+            }
             (Seen::Typed(text), Some(kept)) if kept.waiting() => (kept.command.text, kept.changed) = (text.clone(), seq),
             (Seen::Started, open) => {
                 // No prompt was marked (the shell's prompt is set up after
@@ -63,7 +66,8 @@ impl Commands {
                 let ran = kept.started.map_or(Duration::ZERO, |s| s.elapsed());
                 // Output that didn't end its line ends with the line.
                 let end = if at.col > 0 { at.line + 1 } else { at.line };
-                (kept.command.end, kept.command.code, kept.command.ran_ms, kept.changed) = (Some(end), *code, Some(ran.as_millis() as u64), seq);
+                (kept.command.end, kept.command.code, kept.command.ran_ms, kept.changed) =
+                    (Some(end), *code, Some(ran.as_millis() as u64), seq);
                 return Some((*code, ran));
             }
             _ => {}
@@ -73,7 +77,17 @@ impl Commands {
 
     fn add(&mut self, at: At, seq: u64) {
         self.next += 1;
-        let command = TerminalCommand { id: self.next, prompt: at.line, input: at.line, input_col: at.col, output: None, end: None, text: String::new(), code: None, ran_ms: None };
+        let command = TerminalCommand {
+            id: self.next,
+            prompt: at.line,
+            input: at.line,
+            input_col: at.col,
+            output: None,
+            end: None,
+            text: String::new(),
+            code: None,
+            ran_ms: None,
+        };
         self.list.push(Kept { command, started: None, changed: seq });
         if self.list.len() > MOST {
             self.list.remove(0);
@@ -168,7 +182,10 @@ mod tests {
         let all = commands.since(None);
         assert_eq!(all.iter().map(|c| (c.id, c.prompt)).collect::<Vec<_>>(), [(1, 10), (2, 15)], "{all:?}");
         let first = &all[0];
-        assert_eq!((first.input, first.input_col, first.output, first.end, first.code, first.text.as_str()), (10, 2, Some(11), Some(14), Some(1), "make"));
+        assert_eq!(
+            (first.input, first.input_col, first.output, first.end, first.code, first.text.as_str()),
+            (10, 2, Some(11), Some(14), Some(1), "make")
+        );
         assert_eq!(commands.since(Some(5)).len(), 1, "only the one changed after");
     }
 

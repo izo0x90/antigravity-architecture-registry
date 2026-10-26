@@ -70,7 +70,11 @@ pub fn state(catalog: &Catalog, lock: &Lock, name: &str) -> Result<State, PackEr
     if let Some(installed) = installed {
         let entry = pack.manifest.install.iter().find(|i| i.platforms.contains(&installed.platform));
         if let Some(missing) = entry.into_iter().flat_map(|e| &e.holds).find(|f| !installed.dest.join(f).exists()) {
-            return Ok(State::Broken(format!("{} is missing (installed for {})", installed.dest.join(missing).display(), installed.platform)));
+            return Ok(State::Broken(format!(
+                "{} is missing (installed for {})",
+                installed.dest.join(missing).display(),
+                installed.platform
+            )));
         }
     }
     // A harness's program is in place.
@@ -85,9 +89,15 @@ pub fn state(catalog: &Catalog, lock: &Lock, name: &str) -> Result<State, PackEr
     let checked = match &tool.check {
         Some(Check::Acp { acp }) => match installed {
             None => None,
-            Some(_) => Some(acp::version(&harness_launch(catalog, lock, name)?, Duration::from_secs(acp.timeout_s)).and_then(|v| acp::read_version(&v, acp.version.as_deref()))),
+            Some(_) => Some(
+                acp::version(&harness_launch(catalog, lock, name)?, Duration::from_secs(acp.timeout_s))
+                    .and_then(|v| acp::read_version(&v, acp.version.as_deref())),
+            ),
         },
-        Some(Check::Command(_)) => Some(tool_version(pack, dest.as_deref(), catalog.timeouts.check)?.ok_or_else(|| format!("{} doesn't answer its version check", tool.name))),
+        Some(Check::Command(_)) => Some(
+            tool_version(pack, dest.as_deref(), catalog.timeouts.check)?
+                .ok_or_else(|| format!("{} doesn't answer its version check", tool.name)),
+        ),
         None => None,
     };
     match &tool.check {
@@ -96,7 +106,8 @@ pub fn state(catalog: &Catalog, lock: &Lock, name: &str) -> Result<State, PackEr
             Some(Err(_)) if installed.is_none() => Ok(State::Missing),
             Some(Err(why)) => Ok(State::Broken(why)),
             Some(Ok(found)) => {
-                let range = semver::VersionReq::parse(&tool.supports).map_err(|e| PackError::Manifest { pack: name.to_owned(), reason: e.to_string() })?;
+                let range = semver::VersionReq::parse(&tool.supports)
+                    .map_err(|e| PackError::Manifest { pack: name.to_owned(), reason: e.to_string() })?;
                 match semver::Version::parse(&found) {
                     Ok(v) if range.matches(&v) => Ok(State::Ready { tool_version: Some(found) }),
                     _ => Ok(State::OutOfRange { found, supports: tool.supports.clone() }),
@@ -131,7 +142,13 @@ pub fn tool_version(pack: &Pack, dest: Option<&Path>, limit: Duration) -> Result
 /// What `command` prints (stdout and stderr) within `limit`; None if it
 /// can't be run or doesn't end in time (it's stopped then).
 fn output_within(command: &str, args: &[String], limit: Duration) -> Option<String> {
-    let mut child = std::process::Command::new(command).args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().ok()?;
+    let mut child = std::process::Command::new(command)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
     let read = |pipe: Option<Box<dyn Read + Send>>| {
         std::thread::spawn(move || {
             let mut text = String::new();
@@ -209,7 +226,8 @@ pub fn install(catalog: &Catalog, name: &str, platform: &PlatformDef) -> Result<
             // The harness answers over ACP, or the install failed.
             Some(Check::Acp { acp }) => {
                 let launch = fill_launch(pack, launch_of(pack, entry), &dest)?;
-                let found = acp::version(&launch, Duration::from_secs(acp.timeout_s)).and_then(|v| acp::read_version(&v, acp.version.as_deref()));
+                let found =
+                    acp::version(&launch, Duration::from_secs(acp.timeout_s)).and_then(|v| acp::read_version(&v, acp.version.as_deref()));
                 Some(found.map_err(|why| fail(format!("the installed harness fails its check: {why}")))?)
             }
             _ => tool_version(pack, Some(&dest), catalog.timeouts.check)?,
@@ -251,7 +269,14 @@ pub fn install(catalog: &Catalog, name: &str, platform: &PlatformDef) -> Result<
 }
 
 /// Runs the steps into `staging`; returns the checksums verified.
-fn run_steps(catalog: &Catalog, pack: &Pack, entry: &Install, platform: &PlatformDef, staging: &Path, dest: &Path) -> Result<Vec<String>, PackError> {
+fn run_steps(
+    catalog: &Catalog,
+    pack: &Pack,
+    entry: &Install,
+    platform: &PlatformDef,
+    staging: &Path,
+    dest: &Path,
+) -> Result<Vec<String>, PackError> {
     let name = pack.name();
     let fail = |reason: String| PackError::Install { pack: name.to_owned(), reason };
     let mut values = base_values(pack, Some(dest));
@@ -303,7 +328,10 @@ fn run_steps(catalog: &Catalog, pack: &Pack, entry: &Install, platform: &Platfor
             }
             Step::EnsureGroup(g) => {
                 let group = fill(&g.name)?;
-                let tools = platform.groups.as_ref().ok_or_else(|| fail(format!("platforms.toml doesn't say how {} keeps its groups", platform.name)))?;
+                let tools = platform
+                    .groups
+                    .as_ref()
+                    .ok_or_else(|| fail(format!("platforms.toml doesn't say how {} keeps its groups", platform.name)))?;
                 let create: Vec<&str> = tools.create.iter().map(String::as_str).collect();
                 if steps::ensure_group(&group, Path::new(&tools.file), &create, steps::is_root(), timeouts.run).map_err(fail)? {
                     tracing::info!(pack = name, step = i, %group, "created the system group");
@@ -334,7 +362,11 @@ fn run_steps(catalog: &Catalog, pack: &Pack, entry: &Install, platform: &Platfor
                     }
                     Err(e) => return Err(fail(format!("{}: {e}", append.display()))),
                 };
-                let members = p.members.iter().map(|m| glob::Pattern::new(m).map_err(|e| fail(format!("{m}: {e}")))).collect::<Result<Vec<_>, _>>()?;
+                let members = p
+                    .members
+                    .iter()
+                    .map(|m| glob::Pattern::new(m).map_err(|e| fail(format!("{m}: {e}"))))
+                    .collect::<Result<Vec<_>, _>>()?;
                 let file = staging.join(fill(&p.file)?);
                 let changed = match &p.keep_size {
                     Some(k) => steps::patch_archive_in_place(&file, &members, &addition, k.block.as_bytes(), k.pad.as_bytes()[0]),
@@ -484,7 +516,9 @@ pub fn font_face(catalog: &Catalog, lock: &Lock, name: &str) -> Result<PathBuf, 
     match state(catalog, lock, name)? {
         State::Ready { .. } => {}
         State::Missing => return Err(PackError::NotInstalled(name.to_owned())),
-        state @ (State::Outdated { .. } | State::OutOfRange { .. }) => return Err(PackError::Outdated { pack: name.to_owned(), state: state.to_string() }),
+        state @ (State::Outdated { .. } | State::OutOfRange { .. }) => {
+            return Err(PackError::Outdated { pack: name.to_owned(), state: state.to_string() });
+        }
         state @ State::Broken(_) => return Err(PackError::Broken { pack: name.to_owned(), state: state.to_string() }),
     }
     let installed = lock.packs.get(name).ok_or_else(|| PackError::NotInstalled(name.to_owned()))?;
@@ -591,4 +625,3 @@ pub fn server_launch(catalog: &Catalog, lock: &Lock, name: &str, project: &Path)
         cache,
     })
 }
-

@@ -119,7 +119,15 @@ pub struct ChangesUi {
 
 impl Default for ChangesUi {
     fn default() -> Self {
-        Self { context: 3, more_context: 10, open_up_to_files: 30, open_up_to_lines: 600, refresh_s: 5.0, side_by_side_from: 900.0, deleted_in_code: true }
+        Self {
+            context: 3,
+            more_context: 10,
+            open_up_to_files: 30,
+            open_up_to_lines: 600,
+            refresh_s: 5.0,
+            side_by_side_from: 900.0,
+            deleted_in_code: true,
+        }
     }
 }
 
@@ -138,7 +146,13 @@ pub struct ChatUi {
 
 impl Default for ChatUi {
     fn default() -> Self {
-        Self { shows: Verbosity::default(), indicator: IndicatorKind::default(), receiving_s: 1.5, quiet_after_s: 60.0, subagent_ended_s: 6.0 }
+        Self {
+            shows: Verbosity::default(),
+            indicator: IndicatorKind::default(),
+            receiving_s: 1.5,
+            quiet_after_s: 60.0,
+            subagent_ended_s: 6.0,
+        }
     }
 }
 
@@ -160,7 +174,13 @@ pub trait Named: Sized + Copy + PartialEq + 'static {
 /// One of a setting's choices, by name.
 pub fn named<'de, D: serde::Deserializer<'de>, T: Named>(to: D) -> Result<T, D::Error> {
     let name = String::deserialize(to)?;
-    T::named(&name).ok_or_else(|| serde::de::Error::custom(format!("unknown {} `{name}` (there are: {})", T::WHAT, T::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", "))))
+    T::named(&name).ok_or_else(|| {
+        serde::de::Error::custom(format!(
+            "unknown {} `{name}` (there are: {})",
+            T::WHAT,
+            T::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", ")
+        ))
+    })
 }
 
 /// A setting's choice read and written by its name (`Named`), wherever
@@ -290,7 +310,12 @@ impl UiConfig {
         merge(&mut table, user);
         // A named preset (`preset = "classic"`) lays its own sections over the rest.
         if let Some(name) = table.get("preset").and_then(|p| p.as_str()).filter(|p| !p.is_empty()).map(str::to_owned) {
-            let preset = table.get("presets").and_then(|p| p.get(&name)).and_then(|p| p.as_table()).cloned().ok_or_else(|| format!("ui config: no preset `{name}` in [presets]"))?;
+            let preset = table
+                .get("presets")
+                .and_then(|p| p.get(&name))
+                .and_then(|p| p.as_table())
+                .cloned()
+                .ok_or_else(|| format!("ui config: no preset `{name}` in [presets]"))?;
             merge(&mut table, preset);
         }
         let config: Self = toml::Value::Table(table).try_into().map_err(|e: toml::de::Error| format!("ui config: {e}"))?;

@@ -5,8 +5,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
 use arch_graph::TypeSystem;
@@ -15,7 +15,8 @@ use arch_service::{ArchitectureService, MemoryPlans};
 mod common;
 
 /// The plan's tables.
-const PLAN_TABLES: [&str; 11] = ["meta", "files", "components", "refs", "relations", "flows", "placeholders", "rule_hits", "highlights", "servers", "gate_writes"];
+const PLAN_TABLES: [&str; 11] =
+    ["meta", "files", "components", "refs", "relations", "flows", "placeholders", "rule_hits", "highlights", "servers", "gate_writes"];
 /// Rows no file owns: the servers' status, and in
 /// meta only the plan's two keys (the schema version, the packs'
 /// fingerprints). Any other row without a file is a write "for no file".
@@ -46,11 +47,21 @@ fn db(root: &Path) -> rusqlite::Connection {
 }
 
 fn tables(db: &rusqlite::Connection) -> BTreeSet<String> {
-    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
 }
 
 fn columns(db: &rusqlite::Connection, table: &str) -> Vec<String> {
-    db.prepare(&format!("SELECT name FROM pragma_table_info('{table}')")).unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+    db.prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
 }
 
 /// One logged write: table, insert/update/delete, the owning file ("*"
@@ -70,8 +81,16 @@ fn log_writes(db: &rusqlite::Connection) {
     for table in tables(db).into_iter().filter(|t| t != "gate_writes") {
         let cols = columns(db, &table);
         // meta's rows are owned by their key.
-        let owner = |row: &str| cols.iter().find(|c| *c == "file" || *c == "path" || (table == "meta" && *c == "key")).map_or("'*'".to_owned(), |c| format!("{row}.\"{c}\""));
-        let changed = cols.iter().map(|c| format!("CASE WHEN OLD.\"{c}\" IS NOT NEW.\"{c}\" THEN '{c},' ELSE '' END")).collect::<Vec<_>>().join(" || ");
+        let owner = |row: &str| {
+            cols.iter()
+                .find(|c| *c == "file" || *c == "path" || (table == "meta" && *c == "key"))
+                .map_or("'*'".to_owned(), |c| format!("{row}.\"{c}\""))
+        };
+        let changed = cols
+            .iter()
+            .map(|c| format!("CASE WHEN OLD.\"{c}\" IS NOT NEW.\"{c}\" THEN '{c},' ELSE '' END"))
+            .collect::<Vec<_>>()
+            .join(" || ");
         let changed = if changed.is_empty() { "''".to_owned() } else { changed };
         db.execute_batch(&format!(
             "CREATE TRIGGER IF NOT EXISTS gate_{table}_i AFTER INSERT ON \"{table}\" BEGIN INSERT INTO gate_writes VALUES ('{table}', 'insert', {}, ''); END;
@@ -89,7 +108,13 @@ fn log_writes(db: &rusqlite::Connection) {
 /// change would lose them, and its writes would go unseen).
 fn triggers_intact(db: &rusqlite::Connection) {
     for table in tables(db).into_iter().filter(|t| t != "gate_writes") {
-        let n: i64 = db.query_row("SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?1 AND name LIKE 'gate_%'", [&table], |r| r.get(0)).unwrap();
+        let n: i64 = db
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?1 AND name LIKE 'gate_%'",
+                [&table],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(n, 3, "{table} was rebuilt during the change: its writes weren't all seen");
     }
 }
@@ -98,7 +123,14 @@ fn writes(db: &rusqlite::Connection) -> Vec<Write> {
     triggers_intact(db);
     db.prepare("SELECT tbl, op, owner, changed FROM gate_writes")
         .unwrap()
-        .query_map([], |r| Ok(Write { table: r.get(0)?, op: r.get(1)?, owner: r.get::<_, Option<String>>(2)?.unwrap_or_else(|| "*".into()), changed: r.get(3)? }))
+        .query_map([], |r| {
+            Ok(Write {
+                table: r.get(0)?,
+                op: r.get(1)?,
+                owner: r.get::<_, Option<String>>(2)?.unwrap_or_else(|| "*".into()),
+                changed: r.get(3)?,
+            })
+        })
         .unwrap()
         .map(Result::unwrap)
         .collect()
@@ -137,8 +169,20 @@ fn files_by_use(service: &ArchitectureService) -> Vec<String> {
 /// itself, and the files with refs whose target was in it, or whose name it
 /// defines now or defined before.
 fn may_relink(before: &rusqlite::Connection, names_after: &BTreeSet<String>, file: &str) -> BTreeSet<String> {
-    let ids: BTreeSet<String> = before.prepare("SELECT id FROM components WHERE file = ?1").unwrap().query_map([file], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
-    let mut names: BTreeSet<String> = before.prepare("SELECT name FROM components WHERE file = ?1").unwrap().query_map([file], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    let ids: BTreeSet<String> = before
+        .prepare("SELECT id FROM components WHERE file = ?1")
+        .unwrap()
+        .query_map([file], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let mut names: BTreeSet<String> = before
+        .prepare("SELECT name FROM components WHERE file = ?1")
+        .unwrap()
+        .query_map([file], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
     names.extend(names_after.iter().cloned());
     let mut out = BTreeSet::from([file.to_owned()]);
     let mut refs = before.prepare("SELECT file, name, target FROM refs").unwrap();
@@ -162,7 +206,11 @@ fn a_one_file_change_writes_only_its_rows_and_those_of_the_files_it_relinks() {
     let ranked = files_by_use(&service);
     let file = if tables(&conn).contains("refs") {
         let all = conn.query_row("SELECT count(*) FROM files", [], |r| r.get::<_, i64>(0)).unwrap() as usize;
-        ranked.iter().find(|f| may_relink(&conn, &BTreeSet::new(), f).len() * 2 <= all).cloned().expect("a file whose change can re-link at most half the repo")
+        ranked
+            .iter()
+            .find(|f| may_relink(&conn, &BTreeSet::new(), f).len() * 2 <= all)
+            .cloned()
+            .expect("a file whose change can re-link at most half the repo")
     } else {
         ranked[0].clone()
     };
@@ -178,16 +226,34 @@ fn a_one_file_change_writes_only_its_rows_and_those_of_the_files_it_relinks() {
     let written = writes(&conn);
     assert!(written.iter().any(|w| w.owner == file), "the changed file's own rows weren't written");
     let not_a_file = |w: &&Write| w.table == SERVERS || (w.table == "meta" && META_KEYS.contains(&w.owner.as_str()));
-    let no_file: BTreeSet<_> = written.iter().filter(|w| (w.owner == "*" || w.table == "meta") && !not_a_file(w)).map(|w| (&w.table, &w.op, &w.owner)).collect();
+    let no_file: BTreeSet<_> =
+        written.iter().filter(|w| (w.owner == "*" || w.table == "meta") && !not_a_file(w)).map(|w| (&w.table, &w.op, &w.owner)).collect();
     assert!(no_file.is_empty(), "rows that belong to no one file were written: {no_file:?}");
     plan_schema(&conn);
-    let names_after: BTreeSet<String> = conn.prepare("SELECT name FROM components WHERE file = ?1").unwrap().query_map([&file], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    let names_after: BTreeSet<String> = conn
+        .prepare("SELECT name FROM components WHERE file = ?1")
+        .unwrap()
+        .query_map([&file], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
     let allowed = may_relink(&rusqlite::Connection::open(&snapshot).unwrap(), &names_after, &file);
     let all = conn.query_row("SELECT count(*) FROM files", [], |r| r.get::<_, i64>(0)).unwrap() as usize;
     println!("gate one_file file={file} may_relink={} of {all} files", allowed.len());
     assert!(allowed.len() * 2 <= all, "{file} can re-link {} of {all} files: too wide to tell a whole-repo rewrite apart", allowed.len());
-    let extra: BTreeSet<_> = written.iter().filter(|w| w.owner != "*" && w.table != "meta" && w.table != SERVERS).map(|w| w.owner.clone()).filter(|by| !allowed.contains(by)).collect();
-    assert!(extra.is_empty(), "{} files' rows written that {file} can't re-link (of {} allowed), e.g. {:?}", extra.len(), allowed.len(), extra.iter().take(5).collect::<Vec<_>>());
+    let extra: BTreeSet<_> = written
+        .iter()
+        .filter(|w| w.owner != "*" && w.table != "meta" && w.table != SERVERS)
+        .map(|w| w.owner.clone())
+        .filter(|by| !allowed.contains(by))
+        .collect();
+    assert!(
+        extra.is_empty(),
+        "{} files' rows written that {file} can't re-link (of {} allowed), e.g. {:?}",
+        extra.len(),
+        allowed.len(),
+        extra.iter().take(5).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -208,8 +274,15 @@ fn a_content_identical_touch_relinks_nothing_writes_only_its_stamp_and_says_noth
     assert!(Arc::ptr_eq(&graph, &service.observed().unwrap()), "nothing was re-linked: the graph is the same one");
     assert_eq!(events.load(Ordering::SeqCst), 0, "no event for a touch");
     for w in writes(&conn) {
-        assert_eq!((w.table.as_str(), w.op.as_str(), w.owner.as_str()), ("files", "update", file.as_str()), "only the touched file's stamp may be written: {w:?}");
-        assert!(w.changed.split(',').filter(|c| !c.is_empty()).all(|c| c == "size" || c == "modified"), "more than the stamp changed: {w:?}");
+        assert_eq!(
+            (w.table.as_str(), w.op.as_str(), w.owner.as_str()),
+            ("files", "update", file.as_str()),
+            "only the touched file's stamp may be written: {w:?}"
+        );
+        assert!(
+            w.changed.split(',').filter(|c| !c.is_empty()).all(|c| c == "size" || c == "modified"),
+            "more than the stamp changed: {w:?}"
+        );
     }
     plan_schema(&conn);
 }
@@ -226,7 +299,8 @@ fn a_restart_with_nothing_changed_reads_and_relinks_nothing_from_rows() {
     let report = service.ingest(dir.path()).unwrap();
     assert_eq!((report.read, report.parsed), (0, 0), "a restart with nothing changed read files: {report:?}");
     // Nothing re-linked: no file's rows were written again.
-    let relinked: BTreeSet<_> = writes(&conn).into_iter().filter(|w| w.owner != "*" && w.table != "meta" && w.table != SERVERS).map(|w| w.owner).collect();
+    let relinked: BTreeSet<_> =
+        writes(&conn).into_iter().filter(|w| w.owner != "*" && w.table != "meta" && w.table != SERVERS).map(|w| w.owner).collect();
     assert!(relinked.is_empty(), "a restart with nothing changed re-linked {relinked:?}");
     assert_eq!(service.observed().unwrap().relations().count(), relations);
     // The graph came from the plan's rows.

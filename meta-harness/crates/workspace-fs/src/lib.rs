@@ -42,10 +42,7 @@ pub fn is_inside_root(root: &Path, candidate: &Path) -> bool {
     candidate.strip_prefix(root).is_ok()
 }
 
-pub fn resolve_client_file_path(
-    allowed_roots: &[PathBuf],
-    request_path: &str,
-) -> Result<PathBuf, WorkspaceFsError> {
+pub fn resolve_client_file_path(allowed_roots: &[PathBuf], request_path: &str) -> Result<PathBuf, WorkspaceFsError> {
     let raw_path = Path::new(request_path);
     let resolved = if raw_path.is_absolute() {
         raw_path.to_path_buf()
@@ -69,17 +66,11 @@ pub fn resolve_client_file_path(
     });
     let real = canonicalize_ancestor(&resolved);
 
-    let canonical_roots: Vec<PathBuf> = allowed_roots
-        .iter()
-        .map(|r| fs::canonicalize(r).unwrap_or_else(|_| r.clone()))
-        .collect();
+    let canonical_roots: Vec<PathBuf> = allowed_roots.iter().map(|r| fs::canonicalize(r).unwrap_or_else(|_| r.clone())).collect();
 
     let inside = canonical_roots.iter().any(|root| is_inside_root(root, &real));
     if !inside {
-        return Err(WorkspaceFsError::Rejected { reason: format!(
-            "Path '{}' is outside the session workspace.",
-            request_path
-        ) });
+        return Err(WorkspaceFsError::Rejected { reason: format!("Path '{}' is outside the session workspace.", request_path) });
     }
 
     Ok(real)
@@ -105,36 +96,26 @@ fn canonicalize_ancestor(path: &Path) -> PathBuf {
     resolved
 }
 
-pub fn read_client_text_file(
-    allowed_roots: &[PathBuf],
-    request: &ReadTextFileRequest,
-) -> Result<ReadTextFileResponse, WorkspaceFsError> {
+pub fn read_client_text_file(allowed_roots: &[PathBuf], request: &ReadTextFileRequest) -> Result<ReadTextFileResponse, WorkspaceFsError> {
     let file_path = resolve_client_file_path(allowed_roots, &request.path)?;
-    let meta = fs::metadata(&file_path).map_err(|_| {
-        WorkspaceFsError::Rejected { reason: format!("File '{}' not found.", request.path) }
-    })?;
+    let meta =
+        fs::metadata(&file_path).map_err(|_| WorkspaceFsError::Rejected { reason: format!("File '{}' not found.", request.path) })?;
 
     if !meta.is_file() || meta.len() > CLIENT_FILE_MAX_BYTES {
-        return Err(WorkspaceFsError::Rejected { reason: format!(
-            "File '{}' is not a readable text file under {} bytes.",
-            request.path, CLIENT_FILE_MAX_BYTES
-        ) });
+        return Err(WorkspaceFsError::Rejected {
+            reason: format!("File '{}' is not a readable text file under {} bytes.", request.path, CLIENT_FILE_MAX_BYTES),
+        });
     }
 
-    let text = fs::read_to_string(&file_path).map_err(|e| {
-        WorkspaceFsError::Rejected { reason: format!("Could not read '{}': {}", request.path, e) }
-    })?;
+    let text = fs::read_to_string(&file_path)
+        .map_err(|e| WorkspaceFsError::Rejected { reason: format!("Could not read '{}': {}", request.path, e) })?;
 
     if request.line.is_none() && request.limit.is_none() {
         return Ok(ReadTextFileResponse { content: text });
     }
 
     let lines: Vec<&str> = text.split('\n').collect();
-    let start = request
-        .line
-        .map(|l| l.saturating_sub(1))
-        .unwrap_or(0)
-        .min(lines.len());
+    let start = request.line.map(|l| l.saturating_sub(1)).unwrap_or(0).min(lines.len());
     let end = match request.limit {
         Some(limit) => (start + limit).min(lines.len()),
         None => lines.len(),
@@ -149,10 +130,9 @@ pub fn write_client_text_file(
     request: &WriteTextFileRequest,
 ) -> Result<WriteTextFileResponse, WorkspaceFsError> {
     if request.content.len() as u64 > CLIENT_FILE_MAX_BYTES {
-        return Err(WorkspaceFsError::Rejected { reason: format!(
-            "Payload for file '{}' exceeds maximum allowed size of {} bytes.",
-            request.path, CLIENT_FILE_MAX_BYTES
-        ) });
+        return Err(WorkspaceFsError::Rejected {
+            reason: format!("Payload for file '{}' exceeds maximum allowed size of {} bytes.", request.path, CLIENT_FILE_MAX_BYTES),
+        });
     }
 
     let file_path = resolve_client_file_path(allowed_roots, &request.path)?;
@@ -162,19 +142,11 @@ pub fn write_client_text_file(
     if let Ok(meta) = fs::symlink_metadata(&file_path)
         && meta.file_type().is_symlink()
     {
-        let target = fs::canonicalize(&file_path).map_err(|_| WorkspaceFsError::Rejected { reason: format!(
-            "'{}' is a link to something that isn't there.",
-            request.path
-        ) })?;
-        let canonical_roots: Vec<PathBuf> = allowed_roots
-            .iter()
-            .map(|r| fs::canonicalize(r).unwrap_or_else(|_| r.clone()))
-            .collect();
+        let target = fs::canonicalize(&file_path)
+            .map_err(|_| WorkspaceFsError::Rejected { reason: format!("'{}' is a link to something that isn't there.", request.path) })?;
+        let canonical_roots: Vec<PathBuf> = allowed_roots.iter().map(|r| fs::canonicalize(r).unwrap_or_else(|_| r.clone())).collect();
         if !canonical_roots.iter().any(|r| is_inside_root(r, &target)) {
-            return Err(WorkspaceFsError::Rejected { reason: format!(
-                "Symlink target for '{}' escapes session workspace.",
-                request.path
-            ) });
+            return Err(WorkspaceFsError::Rejected { reason: format!("Symlink target for '{}' escapes session workspace.", request.path) });
         }
     }
 

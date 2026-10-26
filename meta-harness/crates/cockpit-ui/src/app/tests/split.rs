@@ -16,6 +16,7 @@ fn the_shell_is_split_as_agreed() {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = vec![("app.rs".to_owned(), std::fs::read_to_string(src.join("app.rs")).unwrap().lines().count())];
     walk(&src.join("app"), &mut files);
-    let big: Vec<_> = files.iter().filter(|(_, n)| *n > 900).collect();
+    // (1,500 lines: since the code is formatted, 2026-10-26.)
+    let big: Vec<_> = files.iter().filter(|(_, n)| *n > 1500).collect();
     assert!(big.is_empty(), "split these further: {big:?}");
 }

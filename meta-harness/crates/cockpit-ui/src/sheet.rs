@@ -75,7 +75,11 @@ impl Sheet {
 pub enum Item<'a> {
     Action(&'a Offered),
     /// Going to the line typed (its number, said as a label).
-    Line { number: usize, label: String, bound: &'a Bound },
+    Line {
+        number: usize,
+        label: String,
+        bound: &'a Bound,
+    },
     Inform(&'a Inform),
 }
 
@@ -125,7 +129,9 @@ impl<'a> Listed<'a> {
             Reach::Everything => {
                 // In a section, as the menus hold them (a menu's in its
                 // order, then those in none), then by what they do.
-                let menu = |o: &Offered| o.bound.leader.as_ref().and_then(|l| sheet.groups.iter().position(|(k, _)| Some(k) == l.first())).unwrap_or(usize::MAX);
+                let menu = |o: &Offered| {
+                    o.bound.leader.as_ref().and_then(|l| sheet.groups.iter().position(|(k, _)| Some(k) == l.first())).unwrap_or(usize::MAX)
+                };
                 for layer in Layer::ALL {
                     let mut these: Vec<&Offered> = offered.iter().filter(|o| o.bound.layer == layer).collect();
                     if these.is_empty() {
@@ -164,7 +170,9 @@ impl<'a> Listed<'a> {
         self.entries
             .iter()
             .map(|(section, item)| match item {
-                Item::Action(o) => (*section, o.bound.action.id.as_str(), o.bound.action.label.as_str(), o.bound.action.detail.as_str(), o.applies),
+                Item::Action(o) => {
+                    (*section, o.bound.action.id.as_str(), o.bound.action.label.as_str(), o.bound.action.detail.as_str(), o.applies)
+                }
                 Item::Line { label, bound, .. } => (*section, bound.action.id.as_str(), label.as_str(), "", true),
                 Item::Inform(inform) => (*section, inform.keys.as_str(), inform.does.as_str(), "", true),
             })
@@ -253,27 +261,41 @@ impl<'a> Listed<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::actions::{Action, Origin, Param, PRIMARY, MINOR, When};
+    use crate::actions::{Action, MINOR, Origin, PRIMARY, Param, When};
 
     /// An action offered: its id (its label too), layer, leader path,
     /// whether it applies, and what it takes.
     fn offered(id: &str, layer: Layer, leader: &str, applies: bool, param: Param) -> Offered {
-        let action = Action::new(id, id, format!("does {id}"), ()).param(param).when(When::Target).importance(if id.ends_with('!') { PRIMARY } else { MINOR });
+        let action = Action::new(id, id, format!("does {id}"), ()).param(param).when(When::Target).importance(if id.ends_with('!') {
+            PRIMARY
+        } else {
+            MINOR
+        });
         let leader = (!leader.is_empty()).then(|| leader.chars().collect());
         Offered { bound: Bound { action, origin: Origin::Shell, leader, keys: Vec::new(), gestures: Vec::new(), layer }, applies }
     }
 
     fn sheet(line: Option<Bound>) -> Sheet {
-        let informs = vec![Informs { title: "Pointer".into(), keys: vec![Inform { keys: "tap".into(), does: "put the cursor there".into() }] }];
-        Sheet { view: "This view (Graph)".into(), host: "This panel (1)".into(), informs, groups: vec![(',', "Graph actions".into()), ('b', "Buffer".into())], line }
+        let informs =
+            vec![Informs { title: "Pointer".into(), keys: vec![Inform { keys: "tap".into(), does: "put the cursor there".into() }] }];
+        Sheet {
+            view: "This view (Graph)".into(),
+            host: "This panel (1)".into(),
+            informs,
+            groups: vec![(',', "Graph actions".into()), ('b', "Buffer".into())],
+            line,
+        }
     }
 
     /// The labels of `lines`, a title as `# title`.
     fn said(listed: &Listed<'_>, lines: &[Line]) -> Vec<String> {
-        lines.iter().map(|l| match l {
-            Line::Title(_) => format!("# {}", listed.row(*l).label),
-            Line::Entry(_) => listed.row(*l).label.to_owned(),
-        }).collect()
+        lines
+            .iter()
+            .map(|l| match l {
+                Line::Title(_) => format!("# {}", listed.row(*l).label),
+                Line::Entry(_) => listed.row(*l).label.to_owned(),
+            })
+            .collect()
     }
 
     fn all(listed: &Listed<'_>) -> Vec<usize> {
@@ -284,7 +306,12 @@ mod tests {
     /// number typed lists going to that line first.
     #[test]
     fn here_lists_what_applies_closest_first_and_a_number_its_line_first() {
-        let actions = [offered("zoom", Layer::On, "", true, Param::None), offered("away", Layer::Everywhere, "", true, Param::None), offered("idle", Layer::On, "", false, Param::None), offered("apply", Layer::On, "", true, Param::None)];
+        let actions = [
+            offered("zoom", Layer::On, "", true, Param::None),
+            offered("away", Layer::Everywhere, "", true, Param::None),
+            offered("idle", Layer::On, "", false, Param::None),
+            offered("apply", Layer::On, "", true, Param::None),
+        ];
         let line = offered("nav.line", Layer::Everywhere, "", true, Param::Text { hint: String::new(), start: String::new() }).bound;
         let sheet = sheet(Some(line));
         let listed = Listed::of(&actions, &sheet, Reach::Here, "");
@@ -311,7 +338,21 @@ mod tests {
         let sheet = sheet(None);
         let listed = Listed::of(&actions, &sheet, Reach::Everything, "");
         let order = all(&listed);
-        assert_eq!(said(&listed, &listed.lines(&order)), ["# On what you're on", "on it", "# This view (Graph)", "in graph", "in buffer", "in none", "# Everywhere", "everywhere", "# Pointer", "put the cursor there"]);
+        assert_eq!(
+            said(&listed, &listed.lines(&order)),
+            [
+                "# On what you're on",
+                "on it",
+                "# This view (Graph)",
+                "in graph",
+                "in buffer",
+                "in none",
+                "# Everywhere",
+                "everywhere",
+                "# Pointer",
+                "put the cursor there"
+            ]
+        );
         // Matched: the sections ordered by their best, each under its title.
         let everywhere = (0..listed.len()).find(|e| listed.haystack(*e).starts_with("everywhere")).unwrap();
         let lines = listed.lines(&[everywhere, 0]);
@@ -330,7 +371,11 @@ mod tests {
     #[test]
     fn one_that_doesnt_apply_is_faded_and_refused_only_when_it_asks_for_a_value() {
         let choice = Param::Choice(vec![crate::actions::Choice::new("a", "A")]);
-        let actions = [offered("asks", Layer::On, "", false, choice), offered("runs", Layer::On, "", false, Param::None), offered("fine", Layer::On, "", true, Param::None)];
+        let actions = [
+            offered("asks", Layer::On, "", false, choice),
+            offered("runs", Layer::On, "", false, Param::None),
+            offered("fine", Layer::On, "", true, Param::None),
+        ];
         let sheet = sheet(None);
         let listed = Listed::of(&actions, &sheet, Reach::Everything, "");
         let lines = listed.lines(&all(&listed));

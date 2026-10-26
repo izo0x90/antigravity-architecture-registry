@@ -136,15 +136,31 @@ pub fn keyed<'a>(waiting: impl IntoIterator<Item = &'a RuntimeRequest>, on: Opti
 /// the inbox): opening its page, when it has one, and each answer, placed
 /// as `at` says. `page` and `answer` are the caller's commands for them (an
 /// answer by its option's id).
-pub fn offer<C: 'static>(request: &RuntimeRequest, at: Offer<'_>, page: impl FnOnce(String) -> C, answer: impl Fn(String) -> C) -> Vec<Action> {
+pub fn offer<C: 'static>(
+    request: &RuntimeRequest,
+    at: Offer<'_>,
+    page: impl FnOnce(String) -> C,
+    answer: impl Fn(String) -> C,
+) -> Vec<Action> {
     let act = |id: &str, label: &str, detail: &str, command: C| Action::new(id, label, detail, command).focused().group(Group::Act);
     let mut out = Vec::new();
     if let Some(url) = self::page(request) {
-        out.push(place_page(act(&format!("request.{}.page", request.id), &format!("Open the page: {}", request.title), "The page the agent asks you to open, in a new tab", page(url)), at.under));
+        out.push(place_page(
+            act(
+                &format!("request.{}.page", request.id),
+                &format!("Open the page: {}", request.title),
+                "The page the agent asks you to open, in a new tab",
+                page(url),
+            ),
+            at.under,
+        ));
     }
     for one in answers(request) {
         let one = if at.keyed { one } else { Answer { alias: None, ..one } };
-        out.push(one.place(act(&one.id, &one.label, "Answers the agent's request this way", answer(one.option.clone())).importance(PRIMARY), at.under));
+        out.push(one.place(
+            act(&one.id, &one.label, "Answers the agent's request this way", answer(one.option.clone())).importance(PRIMARY),
+            at.under,
+        ));
     }
     out
 }

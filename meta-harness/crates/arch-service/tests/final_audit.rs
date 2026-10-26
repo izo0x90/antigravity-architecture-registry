@@ -7,7 +7,10 @@
 
 use std::path::PathBuf;
 
-use arch_graph::{Component, ComponentId, FindingCode, Param, Plan, PlanId, Provenance, ProposedLocation, Relation, RelationKind, RepoPath, Schemas, Signature, Stage, Status, TypeSystem};
+use arch_graph::{
+    Component, ComponentId, FindingCode, Param, Plan, PlanId, ProposedLocation, Provenance, Relation, RelationKind, RepoPath, Schemas,
+    Signature, Stage, Status, TypeSystem,
+};
 use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp};
 
 mod common;
@@ -58,15 +61,42 @@ fn sig(params: Vec<Param>, returns: &str) -> Option<Signature> {
     Some(Signature { params, returns: Some(returns.into()), qualifiers: vec![] })
 }
 
-fn add(r: &Repo, name: &str, type_name: &str, parent: &ComponentId, signature: Option<Signature>) -> Result<Plan, arch_service::ServiceError> {
+fn add(
+    r: &Repo,
+    name: &str,
+    type_name: &str,
+    parent: &ComponentId,
+    signature: Option<Signature>,
+) -> Result<Plan, arch_service::ServiceError> {
     r.s.apply(
         &pid(),
-        PlanOp::AddComponent { name: name.into(), type_name: type_name.into(), description: format!("{name} does it."), parent: Some(parent.clone()), file: None, signature, schemas: None, spec: None },
+        PlanOp::AddComponent {
+            name: name.into(),
+            type_name: type_name.into(),
+            description: format!("{name} does it."),
+            parent: Some(parent.clone()),
+            file: None,
+            signature,
+            schemas: None,
+            spec: None,
+        },
     )
 }
 
 fn relate(r: &Repo, a: &ComponentId, b: &ComponentId) {
-    r.s.apply(&pid(), PlanOp::Relate { kind: RelationKind::Calls, source: a.clone(), target: b.clone(), order: None, ports: None, note: None, expects: None }).unwrap();
+    r.s.apply(
+        &pid(),
+        PlanOp::Relate {
+            kind: RelationKind::Calls,
+            source: a.clone(),
+            target: b.clone(),
+            order: None,
+            ports: None,
+            note: None,
+            expects: None,
+        },
+    )
+    .unwrap();
 }
 
 fn approve(r: &Repo, id: &ComponentId) {
@@ -87,16 +117,27 @@ fn verify(r: &Repo, id: &ComponentId) -> (Option<Stage>, Vec<FindingCode>) {
 #[test]
 fn methods_verify_without_their_receiver_in_the_plan() {
     // Rust: planned `flush(n: usize) -> usize`, written with `&self`.
-    let r = repo(&[("Cargo.toml", "[package]\nname = \"app\"\n"), ("src/lib.rs", "pub struct Store;\n\nimpl Store {\n    fn check(&self) {}\n}\n")]);
+    let r = repo(&[
+        ("Cargo.toml", "[package]\nname = \"app\"\n"),
+        ("src/lib.rs", "pub struct Store;\n\nimpl Store {\n    fn check(&self) {}\n}\n"),
+    ]);
     let rs = |s: &str| ComponentId::for_symbol("rust", s);
     r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "flush", "function", &rs("app::Store"), sig(vec![param("n", "usize")], "usize")).unwrap();
     relate(&r, &rs("app::Store::flush"), &rs("app::Store::check"));
     approve(&r, &rs("app::Store::flush"));
-    write(&r, "src/lib.rs", "pub struct Store;\n\nimpl Store {\n    fn check(&self) {}\n\n    pub fn flush(&self, n: usize) -> usize {\n        self.check();\n        n\n    }\n}\n");
+    write(
+        &r,
+        "src/lib.rs",
+        "pub struct Store;\n\nimpl Store {\n    fn check(&self) {}\n\n    pub fn flush(&self, n: usize) -> usize {\n        self.check();\n        n\n    }\n}\n",
+    );
     assert_eq!(verify(&r, &rs("app::Store::flush")), (Some(Stage::Implemented), vec![]));
     // A real difference after the receiver still shows, with a diff.
-    write(&r, "src/lib.rs", "pub struct Store;\n\nimpl Store {\n    fn check(&self) {}\n\n    pub fn flush(&mut self, n: u8) -> usize {\n        self.check();\n        n as usize\n    }\n}\n");
+    write(
+        &r,
+        "src/lib.rs",
+        "pub struct Store;\n\nimpl Store {\n    fn check(&self) {}\n\n    pub fn flush(&mut self, n: u8) -> usize {\n        self.check();\n        n as usize\n    }\n}\n",
+    );
     let v = r.s.verify(&pid(), &rs("app::Store::flush"), Stage::Implemented).unwrap();
     let mismatch = v.report.findings.iter().find(|f| f.code == FindingCode::SignatureMismatch).expect("type differs");
     assert!(mismatch.message.contains("parameter 'n': planned type usize, code has u8"), "{}", mismatch.message);
@@ -107,7 +148,11 @@ fn methods_verify_without_their_receiver_in_the_plan() {
     add(&r, "flush", "function", &py("counter.Counter"), sig(vec![param("n", "int")], "int")).unwrap();
     relate(&r, &py("counter.Counter.flush"), &py("counter.Counter.check"));
     approve(&r, &py("counter.Counter.flush"));
-    write(&r, "counter.py", "class Counter:\n    def check(self):\n        return 1\n\n    def flush(self, n: int) -> int:\n        self.check()\n        return n\n");
+    write(
+        &r,
+        "counter.py",
+        "class Counter:\n    def check(self):\n        return 1\n\n    def flush(self, n: int) -> int:\n        self.check()\n        return n\n",
+    );
     assert_eq!(verify(&r, &py("counter.Counter.flush")), (Some(Stage::Implemented), vec![]));
 }
 
@@ -167,7 +212,11 @@ fn python_and_typescript_stubs_and_dead_calls_dont_pass() {
         let r = python_run_calls_clean();
         write(&r, "app.py", &format!("{head}{body}"));
         assert_eq!(verify(&r, &py("app.run")), (None, vec![FindingCode::PlaceholderRemains]), "{case}");
-        assert_eq!(r.s.verify(&pid(), &py("app.run"), Stage::Skeleton).unwrap().advanced_to, Some(Stage::Skeleton), "{case}: a skeleton is fine");
+        assert_eq!(
+            r.s.verify(&pid(), &py("app.run"), Stage::Skeleton).unwrap().advanced_to,
+            Some(Stage::Skeleton),
+            "{case}: a skeleton is fine"
+        );
     }
     let r = python_run_calls_clean();
     write(&r, "app.py", &format!("{head}def run(text: str) -> str:\n    pass\n"));
@@ -188,18 +237,26 @@ fn python_and_typescript_stubs_and_dead_calls_dont_pass() {
     write(&r, "app.py", &format!("{head}def run(text: str) -> str:\n    if text:\n        return clean(text)\n    return text\n"));
     assert_eq!(verify(&r, &py("app.run")), (Some(Stage::Implemented), vec![]), "a runtime condition counts as live");
     // Interface stubs aren't placeholders.
-    let r = repo(&[("proto.py", "from typing import Protocol\n\n\nclass Sink(Protocol):\n    def put(self, x: int) -> int:\n        ...\n")]);
+    let r =
+        repo(&[("proto.py", "from typing import Protocol\n\n\nclass Sink(Protocol):\n    def put(self, x: int) -> int:\n        ...\n")]);
     assert!(r.s.observed().unwrap().component(&py("proto.Sink.put")).unwrap().placeholders.is_empty());
 
     // TypeScript.
     let ts = |s: &str| ComponentId::for_symbol("typescript", s);
     for (case, body, ok) in [
-        ("while (false)", "export function run(text: string): string {\n  while (false) {\n    clean(text);\n  }\n  return text;\n}\n", false),
+        (
+            "while (false)",
+            "export function run(text: string): string {\n  while (false) {\n    clean(text);\n  }\n  return text;\n}\n",
+            false,
+        ),
         ("after return", "export function run(text: string): string {\n  return text;\n  clean(text);\n}\n", false),
         ("if (!true)", "export function run(text: string): string {\n  if (!true) {\n    clean(text);\n  }\n  return text;\n}\n", false),
         ("live", "export function run(text: string): string {\n  return clean(text);\n}\n", true),
     ] {
-        let r = repo(&[("helpers.ts", "export function clean(text: string): string {\n  return text.trim();\n}\n"), ("app.ts", "import { clean } from \"./helpers\";\n")]);
+        let r = repo(&[
+            ("helpers.ts", "export function clean(text: string): string {\n  return text.trim();\n}\n"),
+            ("app.ts", "import { clean } from \"./helpers\";\n"),
+        ]);
         r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
         add(&r, "run", "function", &ts("app"), sig(vec![param("text", "string")], "string")).unwrap();
         relate(&r, &ts("app.run"), &ts("helpers.clean"));
@@ -231,8 +288,20 @@ fn ignored_or_hidden_files_cant_be_planned_into() {
     r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     r.s.apply(&pid(), PlanOp::SetGreenfield { greenfield: true }).unwrap();
     for file in ["gen/x.rs", ".hidden/y.rs"] {
-        let err = r.s
-            .apply(&pid(), PlanOp::AddComponent { name: "z".into(), type_name: "module".into(), description: "Z.".into(), parent: None, file: Some(file.into()), signature: None, schemas: None, spec: None })
+        let err =
+            r.s.apply(
+                &pid(),
+                PlanOp::AddComponent {
+                    name: "z".into(),
+                    type_name: "module".into(),
+                    description: "Z.".into(),
+                    parent: None,
+                    file: Some(file.into()),
+                    signature: None,
+                    schemas: None,
+                    spec: None,
+                },
+            )
             .unwrap_err()
             .to_string();
         assert!(err.contains("git-ignored or hidden"), "{file}: {err}");
@@ -247,7 +316,12 @@ fn ignored_or_hidden_files_cant_be_planned_into() {
         status: Status::New,
         stage: Stage::Declared,
         anchor: None,
-        proposed: Some(ProposedLocation { language: "rust".into(), file: RepoPath::new("gen/x.rs").unwrap(), parent: None, symbol: "app::gen_x".into() }),
+        proposed: Some(ProposedLocation {
+            language: "rust".into(),
+            file: RepoPath::new("gen/x.rs").unwrap(),
+            parent: None,
+            symbol: "app::gen_x".into(),
+        }),
         signature: Some(Signature::default()),
         schemas: Schemas::default(),
         spec: None,
@@ -255,7 +329,10 @@ fn ignored_or_hidden_files_cant_be_planned_into() {
     });
     common::put_plan(&r.s, &r.root, &plan);
     let report = r.s.validate(&pid()).unwrap();
-    assert!(report.findings.iter().any(|f| f.code == FindingCode::InvalidLocation && f.message.contains("gen/x.rs is git-ignored or hidden")), "{report:?}");
+    assert!(
+        report.findings.iter().any(|f| f.code == FindingCode::InvalidLocation && f.message.contains("gen/x.rs is git-ignored or hidden")),
+        "{report:?}"
+    );
 }
 
 #[test]
@@ -295,7 +372,11 @@ fn loops_come_after_what_they_depend_on_and_before_their_dependents() {
     let mut lone = Plan::new("lone", "Lone");
     lone.components.push(plan.component(&rs("app::a")).unwrap().clone());
     lone.relations.push(Relation::new(RelationKind::Calls, rs("app::a"), rs("app::a"), Provenance::PLANNED));
-    assert_eq!(arch_service::topological(&lone, &arch_graph::Graph::merge(arch_graph::Graph::default(), std::slice::from_ref(&lone)), r.s.types()).len(), 1);
+    assert_eq!(
+        arch_service::topological(&lone, &arch_graph::Graph::merge(arch_graph::Graph::default(), std::slice::from_ref(&lone)), r.s.types())
+            .len(),
+        1
+    );
 }
 
 #[test]

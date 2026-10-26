@@ -90,9 +90,7 @@ pub struct Tool {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(untagged)]
 pub enum Check {
-    Acp {
-        acp: AcpCheck,
-    },
+    Acp { acp: AcpCheck },
     Command(CommandCheck),
 }
 
@@ -416,7 +414,8 @@ impl Manifest {
                     if re.captures_len() < 2 {
                         return Err(fail("tool.check.version needs a group for the version".into()));
                     }
-                    let allowed: BTreeSet<&str> = CHECK_PLACEHOLDERS.into_iter().filter(|n| *n != "tool_version" || tool.version.is_some()).collect();
+                    let allowed: BTreeSet<&str> =
+                        CHECK_PLACEHOLDERS.into_iter().filter(|n| *n != "tool_version" || tool.version.is_some()).collect();
                     for text in std::iter::once(&check.command).chain(&check.args) {
                         template::check(text, &allowed).map_err(|e| fail(format!("tool.check: {e}")))?;
                     }
@@ -490,7 +489,8 @@ impl Manifest {
                         Step::Download(d) => {
                             template::expand(&d.url, &values).map_err(|e| fail(format!("{at}: {e}")))?;
                             for text in std::iter::once(&d.into).chain(d.save_as.as_ref()) {
-                                inside(&template::expand(text, &values).map_err(|e| fail(format!("{at}: {e}")))?).map_err(|e| fail(format!("{at}: {e}")))?;
+                                inside(&template::expand(text, &values).map_err(|e| fail(format!("{at}: {e}")))?)
+                                    .map_err(|e| fail(format!("{at}: {e}")))?;
                             }
                             let sum = template::expand(&d.sha256, &values).map_err(|e| fail(format!("{at}: {e}")))?;
                             if sum.len() != 64 || !sum.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
@@ -498,14 +498,17 @@ impl Manifest {
                             }
                             match (d.unpack, &d.save_as) {
                                 (Unpack::None, None) => return Err(fail(format!("{at}: a download that isn't unpacked needs save_as"))),
-                                (Unpack::Zip | Unpack::TarGz | Unpack::Deb, Some(_)) => return Err(fail(format!("{at}: save_as is for downloads that aren't unpacked"))),
+                                (Unpack::Zip | Unpack::TarGz | Unpack::Deb, Some(_)) => {
+                                    return Err(fail(format!("{at}: save_as is for downloads that aren't unpacked")));
+                                }
                                 _ => {}
                             }
                             if d.unpack == Unpack::None && !d.extract.is_empty() {
                                 return Err(fail(format!("{at}: extract is for downloads that are unpacked")));
                             }
                             for path in &d.extract {
-                                inside(&template::expand(path, &values).map_err(|e| fail(format!("{at}: {e}")))?).map_err(|e| fail(format!("{at}: extract: {e}")))?;
+                                inside(&template::expand(path, &values).map_err(|e| fail(format!("{at}: {e}")))?)
+                                    .map_err(|e| fail(format!("{at}: extract: {e}")))?;
                             }
                         }
                         Step::Run(c) => {
@@ -534,11 +537,13 @@ impl Manifest {
                             for text in [&c.store, &c.subject] {
                                 template::expand(text, &values).map_err(|e| fail(format!("{at}: {e}")))?;
                             }
-                            inside(&template::expand(&c.save_as, &values).map_err(|e| fail(format!("{at}: {e}")))?).map_err(|e| fail(format!("{at}: system_ca.save_as: {e}")))?;
+                            inside(&template::expand(&c.save_as, &values).map_err(|e| fail(format!("{at}: {e}")))?)
+                                .map_err(|e| fail(format!("{at}: system_ca.save_as: {e}")))?;
                         }
                         Step::PatchArchive(p) => {
                             for text in [&p.file, &p.append] {
-                                inside(&template::expand(text, &values).map_err(|e| fail(format!("{at}: {e}")))?).map_err(|e| fail(format!("{at}: patch_archive: {e}")))?;
+                                inside(&template::expand(text, &values).map_err(|e| fail(format!("{at}: {e}")))?)
+                                    .map_err(|e| fail(format!("{at}: patch_archive: {e}")))?;
                             }
                             if p.members.is_empty() {
                                 return Err(fail(format!("{at}: patch_archive.members is empty")));
@@ -567,7 +572,8 @@ impl Manifest {
             if !server.requires.iter().any(|r| r == "textDocument/definition") {
                 return Err(fail("server.requires must include textDocument/definition".into()));
             }
-            let allowed: BTreeSet<&str> = SERVER_PLACEHOLDERS.into_iter().filter(|n| *n != "tool_version" || known.contains("tool_version")).collect();
+            let allowed: BTreeSet<&str> =
+                SERVER_PLACEHOLDERS.into_iter().filter(|n| *n != "tool_version" || known.contains("tool_version")).collect();
             for text in std::iter::once(&server.command).chain(&server.args).chain(server.env.values()) {
                 template::check(text, &allowed).map_err(|e| fail(format!("server: {e}")))?;
             }
@@ -581,8 +587,14 @@ impl Manifest {
                 return Err(fail(format!("server.args: '{arg}' names a folder in the project: caches go outside it (use {{cache}})")));
             }
         }
-        let allowed: BTreeSet<&str> = LAUNCH_PLACEHOLDERS.into_iter().filter(|n| *n != "tool_version" || known.contains("tool_version")).collect();
-        let launches = self.provides.as_ref().map(|p| ("provides.launch".to_owned(), &p.launch)).into_iter().chain(self.install.iter().enumerate().filter_map(|(i, e)| e.launch.as_ref().map(|l| (format!("install[{i}].launch"), l))));
+        let allowed: BTreeSet<&str> =
+            LAUNCH_PLACEHOLDERS.into_iter().filter(|n| *n != "tool_version" || known.contains("tool_version")).collect();
+        let launches = self
+            .provides
+            .as_ref()
+            .map(|p| ("provides.launch".to_owned(), &p.launch))
+            .into_iter()
+            .chain(self.install.iter().enumerate().filter_map(|(i, e)| e.launch.as_ref().map(|l| (format!("install[{i}].launch"), l))));
         for (at, launch) in launches {
             if self.provides.is_none() {
                 return Err(fail(format!("{at}: only harness packs are launched")));

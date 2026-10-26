@@ -8,7 +8,9 @@ use nah_things::{Attached, AttachedThing, Things};
 
 /// What `text` says at `link` (its span; none: a span that isn't in it).
 fn said_at(text: &str, link: &Link) -> Option<String> {
-    (link.start < link.end).then(|| text.chars().skip(link.start).take(link.end - link.start).collect::<String>()).filter(|s| s.chars().count() == link.end - link.start)
+    (link.start < link.end)
+        .then(|| text.chars().skip(link.start).take(link.end - link.start).collect::<String>())
+        .filter(|s| s.chars().count() == link.end - link.start)
 }
 
 /// A part for each tag or thing `links` link (in `text`), with every link
@@ -41,7 +43,18 @@ pub(crate) fn attached(tags: &nah_tags::Tags, things: &Things, text: &str, links
                         Some(said) if said.trim_start_matches('@') != what => format!("{said} ({what})"),
                         _ => format!("@{what}"),
                     };
-                    Attached { heading, include: link.include, things: vec![AttachedThing { read_by: format!("`thing_read` (\"{what}\")"), what, subject, kept: None, whole: "`thing_read`" }], gone: false }
+                    Attached {
+                        heading,
+                        include: link.include,
+                        things: vec![AttachedThing {
+                            read_by: format!("`thing_read` (\"{what}\")"),
+                            what,
+                            subject,
+                            kept: None,
+                            whole: "`thing_read`",
+                        }],
+                        gone: false,
+                    }
                 }
             };
             out.push((vec![link.clone()], part));

@@ -49,12 +49,18 @@ fn the_old_registry_imports_into_a_plan_matched_to_code() {
     assert_eq!(spec.invariants[0].kind, InvariantKind::PreCondition);
     assert_eq!(spec.logic_steps.len(), 2);
     assert!(!spec.tasks.is_empty());
-    assert_eq!(validate.schemas.inputs.as_ref().unwrap()["properties"]["request"], serde_json::json!({"$ref": "calculation_request"}), "title references become $refs");
+    assert_eq!(
+        validate.schemas.inputs.as_ref().unwrap()["properties"]["request"],
+        serde_json::json!({"$ref": "calculation_request"}),
+        "title references become $refs"
+    );
     let logger = plan.component(&id_of("audit_logger_log")).unwrap();
     assert_eq!((logger.status, logger.stage), (Status::New, Stage::Declared), "no approvals are carried over");
     assert_eq!(logger.schemas.side_effects[0].target, "fs");
     // Structure, ordered calls and the workflow.
-    let has = |kind: RelationKind, a: &str, b: &str| plan.relations.iter().any(|r| r.kind == kind && r.source == id_of(a) && r.target == id_of(b));
+    let has = |kind: RelationKind, a: &str, b: &str| {
+        plan.relations.iter().any(|r| r.kind == kind && r.source == id_of(a) && r.target == id_of(b))
+    };
     assert!(has(RelationKind::Contains, "calculator_service", "calculator_service_calculate"));
     assert!(has(RelationKind::Calls, "calculator_client_run", "calculator_service_calculate"));
     let order = |b: &str| plan.relations.iter().find(|r| r.kind == RelationKind::Calls && r.target == id_of(b)).unwrap().order;
@@ -67,7 +73,9 @@ fn the_old_registry_imports_into_a_plan_matched_to_code() {
     assert!(reasons.iter().any(|r| r.starts_with("component audit_logger_log stage: was 'implemented'")), "{reasons:#?}");
     assert!(!reasons.iter().any(|r| r.contains("expected_")), "call-site expectations are carried, not dropped: {reasons:#?}");
     // Call-site expectations travel with the call, references converted.
-    let call = |a: &str, b: &str| plan.relations.iter().find(|r| r.kind == RelationKind::Calls && r.source == id_of(a) && r.target == id_of(b)).unwrap();
+    let call = |a: &str, b: &str| {
+        plan.relations.iter().find(|r| r.kind == RelationKind::Calls && r.source == id_of(a) && r.target == id_of(b)).unwrap()
+    };
     let expects = call("calculator_client_run", "calculator_service_calculate").expects.as_ref().unwrap();
     assert_eq!(expects.inputs.as_ref().unwrap()["properties"]["request"], serde_json::json!({"$ref": "calculation_request"}));
     assert_eq!(expects.outputs.as_ref().unwrap()["properties"]["result"], serde_json::json!({"$ref": "calculation_result"}));

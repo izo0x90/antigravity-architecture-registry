@@ -45,7 +45,10 @@ impl super::GraphState {
                 self.selection = Some(first.clone());
                 self.reveal_after_fit = Some((first, crate::viewport::Show::InView));
             }
-            None => self.note = Some(format!("Opened {}: nothing more came to show.", tree.card(&parent).map_or(parent.as_str(), |c| c.label.as_str()))),
+            None => {
+                self.note =
+                    Some(format!("Opened {}: nothing more came to show.", tree.card(&parent).map_or(parent.as_str(), |c| c.label.as_str())))
+            }
         }
     }
 }

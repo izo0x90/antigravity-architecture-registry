@@ -58,10 +58,19 @@ pub fn render(tree: &Tree, config: &TreeConfig) -> String {
     let _ = writeln!(out, "{} cards, {} levels deep.", tree.cards.len(), depth);
     if let Some(cut) = &tree.cut {
         if cut.shown < cut.asked {
-            let _ = writeln!(out, "Cut: showing {} of {} levels; {} more not shown (go into a card, or ask for less depth).", cut.shown, cut.asked, cut.hidden);
+            let _ = writeln!(
+                out,
+                "Cut: showing {} of {} levels; {} more not shown (go into a card, or ask for less depth).",
+                cut.shown, cut.asked, cut.hidden
+            );
         }
         if cut.starts_left_out > 0 {
-            let _ = writeln!(out, "Showing the first {} starting points of {} (most reached first); pick a root to see another.", tree.roots.len(), tree.roots.len() as u32 + cut.starts_left_out);
+            let _ = writeln!(
+                out,
+                "Showing the first {} starting points of {} (most reached first); pick a root to see another.",
+                tree.roots.len(),
+                tree.roots.len() as u32 + cut.starts_left_out
+            );
         }
     }
     if !tree.path.is_empty() {

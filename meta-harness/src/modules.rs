@@ -180,7 +180,11 @@ pub struct HarnessState {
 
 impl Module for HarnessState {
     fn routes(&self) -> Router {
-        routes::harness::routes().merge(routes::slots::routes()).merge(routes::events::routes()).merge(routes::tool_servers::routes()).with_state(self.clone())
+        routes::harness::routes()
+            .merge(routes::slots::routes())
+            .merge(routes::events::routes())
+            .merge(routes::tool_servers::routes())
+            .with_state(self.clone())
     }
 }
 
@@ -264,7 +268,13 @@ pub struct ProjectState {
 
 impl Module for ProjectState {
     fn routes(&self) -> Router {
-        routes::files::routes().merge(routes::changes::routes()).merge(routes::mcp::routes()).merge(crate::arch::routes()).merge(crate::graph::routes()).merge(crate::queue::routes()).with_state(self.clone())
+        routes::files::routes()
+            .merge(routes::changes::routes())
+            .merge(routes::mcp::routes())
+            .merge(crate::arch::routes())
+            .merge(crate::graph::routes())
+            .merge(crate::queue::routes())
+            .with_state(self.clone())
     }
 }
 
@@ -314,9 +324,11 @@ impl AppState {
         let stopping = Shutdown::default();
         // What a message links (a tag, a thing) is handed on with it, as
         // far as the slot told may read it.
-        let (tags, things, slots, access, discussions) = (p.tags.clone(), p.things.clone(), Arc::downgrade(&p.slots), gate.access.clone(), p.discussions.clone());
+        let (tags, things, slots, access, discussions) =
+            (p.tags.clone(), p.things.clone(), Arc::downgrade(&p.slots), gate.access.clone(), p.discussions.clone());
         p.slots.expand_prompts_with(Arc::new(move |message: harness_contracts::Message, reader: Option<&harness_contracts::SlotId>| {
-            let (links, attached): (Vec<_>, Vec<_>) = crate::linking::attached(&tags, &things, &message.text, &message.links).into_iter().unzip();
+            let (links, attached): (Vec<_>, Vec<_>) =
+                crate::linking::attached(&tags, &things, &message.text, &message.links).into_iter().unzip();
             let slot = reader.and_then(|id| slots.upgrade().and_then(|s| s.get(id).map(|slot| (s, slot))));
             let (texts, notes) = match (reader, slot) {
                 (None, _) => things.attach(&attached, &|_| true),
@@ -333,18 +345,45 @@ impl AppState {
         Ok(Self {
             server: ServerState { gate: gate.clone(), shutdown: stopping.clone() },
             home: HomeState { gate: gate.clone(), stopping: stopping.clone(), home },
-            cockpit: CockpitState { gate: gate.clone(), stopping: stopping.clone(), state: p.state, remote: p.remote, packs_at: p.arch.root().to_path_buf() },
-            harness: HarnessState { gate: gate.clone(), stopping: stopping.clone(), registry: p.registry, sessions: p.sessions.clone(), slots: p.slots.clone(), hub: p.hub, tool_servers: p.tool_servers, root: p.arch.root().to_path_buf() },
+            cockpit: CockpitState {
+                gate: gate.clone(),
+                stopping: stopping.clone(),
+                state: p.state,
+                remote: p.remote,
+                packs_at: p.arch.root().to_path_buf(),
+            },
+            harness: HarnessState {
+                gate: gate.clone(),
+                stopping: stopping.clone(),
+                registry: p.registry,
+                sessions: p.sessions.clone(),
+                slots: p.slots.clone(),
+                hub: p.hub,
+                tool_servers: p.tool_servers,
+                root: p.arch.root().to_path_buf(),
+            },
             notify: NotifyState { gate: gate.clone(), notify: p.notify },
             terminals: p.terminals.map(|terminals| TerminalsState { gate: gate.clone(), stopping: stopping.clone(), terminals }),
             tags: TagsState { gate: gate.clone(), tags: p.tags },
             discussions: DiscussionsState { gate: gate.clone(), discussions: p.discussions, slots: p.slots.clone(), things: p.things },
-            project: ProjectState { gate, arch: p.arch, queue: p.queue, sessions: p.sessions, slots: p.slots, mcp_state: p.mcp_state, changes: p.changes, timeline: p.timeline },
+            project: ProjectState {
+                gate,
+                arch: p.arch,
+                queue: p.queue,
+                sessions: p.sessions,
+                slots: p.slots,
+                mcp_state: p.mcp_state,
+                changes: p.changes,
+                timeline: p.timeline,
+            },
         })
     }
 
     pub fn modules(&self) -> Vec<&dyn Module> {
         let terminals = self.terminals.as_ref().map(|t| t as &dyn Module);
-        [&self.server as &dyn Module, &self.cockpit, &self.home, &self.harness, &self.notify, &self.project, &self.tags, &self.discussions].into_iter().chain(terminals).collect()
+        [&self.server as &dyn Module, &self.cockpit, &self.home, &self.harness, &self.notify, &self.project, &self.tags, &self.discussions]
+            .into_iter()
+            .chain(terminals)
+            .collect()
     }
 }

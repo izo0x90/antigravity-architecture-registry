@@ -27,7 +27,8 @@ pub fn version(launch: &HarnessLaunch, limit: Duration) -> Result<String, String
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("{}: {e}", launch.program))?;
-    let request = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1, "clientCapabilities": {}}});
+    let request =
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1, "clientCapabilities": {}}});
     let sent = child.stdin.as_mut().map(|stdin| writeln!(stdin, "{request}").and_then(|()| stdin.flush()));
     let stdout = child.stdout.take();
     // What it says on stderr, the last lines kept (for why it failed); read
@@ -92,5 +93,8 @@ pub fn version(launch: &HarnessLaunch, limit: Duration) -> Result<String, String
 pub fn read_version(answered: &str, pattern: Option<&str>) -> Result<String, String> {
     let Some(pattern) = pattern else { return Ok(answered.to_owned()) };
     let re = regex::Regex::new(pattern).map_err(|e| e.to_string())?;
-    re.captures(answered).and_then(|c| c.get(1)).map(|m| m.as_str().to_owned()).ok_or_else(|| format!("its version '{answered}' doesn't match {pattern}"))
+    re.captures(answered)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_owned())
+        .ok_or_else(|| format!("its version '{answered}' doesn't match {pattern}"))
 }

@@ -8,8 +8,8 @@ mod alerts;
 mod keys;
 mod page;
 
-use wasm_bindgen::prelude::*;
 use crate::app::CockpitApp;
+use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WebHandle {
@@ -26,9 +26,7 @@ impl Default for WebHandle {
 impl WebHandle {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        Self {
-            runner: eframe::WebRunner::new(),
-        }
+        Self { runner: eframe::WebRunner::new() }
     }
 
     #[wasm_bindgen]

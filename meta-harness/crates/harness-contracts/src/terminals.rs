@@ -30,7 +30,9 @@ pub enum TerminalStatus {
     Running,
     /// The shell exited (its code, when it had one), or the server
     /// restarted under it.
-    Ended { code: Option<i32> },
+    Ended {
+        code: Option<i32>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -272,10 +274,18 @@ pub struct Mods {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TerminalInput {
-    Text { text: String },
-    Key { key: TermKey, #[serde(default)] mods: Mods },
+    Text {
+        text: String,
+    },
+    Key {
+        key: TermKey,
+        #[serde(default)]
+        mods: Mods,
+    },
     /// Pasted text (bracketed, when the program asked for that).
-    Paste { text: String },
+    Paste {
+        text: String,
+    },
 }
 
 /// What a terminal's program or shell did that the user may want to hear
@@ -285,10 +295,15 @@ pub enum TerminalInput {
 pub enum TerminalNews {
     Bell,
     /// The shell ended (its code when it had one).
-    Ended { code: Option<i32> },
+    Ended {
+        code: Option<i32>,
+    },
     /// A command ran this long and finished (with its code, when the shell
     /// said it).
-    Finished { code: Option<i32>, ran_ms: u64 },
+    Finished {
+        code: Option<i32>,
+        ran_ms: u64,
+    },
 }
 
 /// A match of a search through a terminal's lines.
@@ -326,22 +341,40 @@ pub enum ToTerminal {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum FromTerminal {
-    Screen { update: ScreenUpdate },
+    Screen {
+        update: ScreenUpdate,
+    },
     /// Lines of the scrollback asked for (they never change), from the one
     /// numbered `from` (the oldest kept, when an older one was asked for).
     /// Every `Lines` asked for is answered by one, maybe short.
-    Lines { from: u64, rows: Vec<Row> },
+    Lines {
+        from: u64,
+        rows: Vec<Row>,
+    },
     /// Rows that scrolled off the reader's screen and changed after it was
     /// last sent them, sent before the update that moves the screen: the
     /// rest are as the reader had them (`ReaderScreen::take`).
-    ScrolledOff { lines: Vec<(u64, Row)> },
-    Found { query: String, found: Vec<Found> },
+    ScrolledOff {
+        lines: Vec<(u64, Row)>,
+    },
+    Found {
+        query: String,
+        found: Vec<Found>,
+    },
     /// Where the lines asked about are now (none: another start of the
     /// shell, or laid out anew longer ago than is followed).
-    LineNow { shell: u64, first: u64, last: u64, now: Option<(u64, u64)> },
+    LineNow {
+        shell: u64,
+        first: u64,
+        last: u64,
+        now: Option<(u64, u64)>,
+    },
     /// A command's output as text (lines that wrapped joined; none: there's
     /// no such command now).
-    CommandOutput { command: u64, text: Option<String> },
+    CommandOutput {
+        command: u64,
+        text: Option<String>,
+    },
 }
 
 #[cfg(test)]
@@ -350,7 +383,19 @@ mod tests {
 
     fn update(top: u64, rows: &[(u16, &str)], full: bool) -> ScreenUpdate {
         let rows = rows.iter().map(|(r, t)| (*r, vec![Run { text: (*t).into(), style: Style::default(), wide: false }])).collect();
-        ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 3 }, full, rows, cursor: Cursor::default(), top, oldest: 0, alternate: false, title: String::new(), shell: 1, commands: Vec::new() }
+        ScreenUpdate {
+            seq: 1,
+            size: TermSize { cols: 80, rows: 3 },
+            full,
+            rows,
+            cursor: Cursor::default(),
+            top,
+            oldest: 0,
+            alternate: false,
+            title: String::new(),
+            shell: 1,
+            commands: Vec::new(),
+        }
     }
 
     fn text(row: &Row) -> String {

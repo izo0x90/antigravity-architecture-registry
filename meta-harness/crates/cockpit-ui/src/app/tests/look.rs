@@ -13,7 +13,10 @@ fn the_quick_look_shows_the_full_card_over_the_graph_and_says_how_links_are_know
     peek_key(&ctx, &mut app, false, 1.05);
     assert!(app.quick_look.is_some(), "a tap keeps it open");
     assert!(app.bound_actions().iter().all(|b| b.action.id != "spec.pin"), "held on its card: nothing to pin");
-    assert_eq!((app.focused_kind(), app.desk.panels.focused_kind(), app.desk.spec().target.as_ref().map(|t| t.as_str())), (BufferKind::Spec, BufferKind::Graph, Some("rust:a::step")));
+    assert_eq!(
+        (app.focused_kind(), app.desk.panels.focused_kind(), app.desk.spec().target.as_ref().map(|t| t.as_str())),
+        (BufferKind::Spec, BufferKind::Graph, Some("rust:a::step"))
+    );
     // Its links say how they're known: a data flow and a call only
     // matched by name, a call confirmed by the language's analyzer.
     let id = ComponentId::new("rust:a::step");
@@ -32,7 +35,11 @@ fn the_quick_look_shows_the_full_card_over_the_graph_and_says_how_links_are_know
     assert!(text.contains("run") && !text.contains("run (matched by name)"), "the confirmed one reads plainly: {text}");
     let before = (app.desk.spec_mut().cursor, app.desk.graph_mut().selection.clone());
     frame_at(&ctx, &mut app, key("j"), 1.2);
-    assert_eq!((app.desk.spec().cursor, app.desk.graph().selection.clone()), (before.0 + 1, before.1), "j moves in the card, not the graph");
+    assert_eq!(
+        (app.desk.spec().cursor, app.desk.graph().selection.clone()),
+        (before.0 + 1, before.1),
+        "j moves in the card, not the graph"
+    );
     // Escape closes it; the spec follows the graph again.
     frame_at(&ctx, &mut app, press(egui::Key::Escape, false), 1.3);
     assert!(app.quick_look.is_none() && !app.desk.spec().pinned);
@@ -59,7 +66,10 @@ fn the_quick_look_key_is_shown_wherever_keys_are_listed() {
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert_eq!(app.input_mode, InputMode::Normal);
     let menu = leader_entries(&bound, &['q']);
-    assert!(menu.iter().any(|e| matches!(e, LeaderEntry::Action { key: 'q', index } if bound[*index].action.id == "quicklook.toggle")), "Space q q opens it");
+    assert!(
+        menu.iter().any(|e| matches!(e, LeaderEntry::Action { key: 'q', index } if bound[*index].action.id == "quicklook.toggle")),
+        "Space q q opens it"
+    );
     // On nothing, it isn't offered.
     app.desk.graph_mut().select(None);
     frame(&ctx, &mut app, vec![]);
@@ -82,7 +92,11 @@ fn the_quick_look_goes_to_a_column_and_says_when_theres_nothing_to_look_at() {
     assert_eq!(to_panel.key_hint(), "Space q c");
     app.invoke(Invocation { action: to_panel.action, origin: to_panel.origin, value: None }, &ctx);
     assert!(app.quick_look.is_none());
-    assert_eq!((app.focused_kind(), app.desk.spec().target.as_ref().map(|t| t.as_str())), (BufferKind::Spec, Some("rust:a::step")), "the same card, in a panel, focused");
+    assert_eq!(
+        (app.focused_kind(), app.desk.spec().target.as_ref().map(|t| t.as_str())),
+        (BufferKind::Spec, Some("rust:a::step")),
+        "the same card, in a panel, focused"
+    );
     assert!(app.desk.panels.panel_of_kind(BufferKind::Graph).is_some(), "beside the graph");
 }
 

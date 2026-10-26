@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
 
 use arch_graph::tree::{Input, Mark, Tree, TreeConfig, TreeRequest, ViewKind, Way};
-use arch_graph::{CodeAnchor, Component, ComponentId, Graph, Plan, PlanId, Provenance, Relation, RelationKind, RepoPath, Span, Stage, Status, TypeSystem};
+use arch_graph::{
+    CodeAnchor, Component, ComponentId, Graph, Plan, PlanId, Provenance, Relation, RelationKind, RepoPath, Span, Stage, Status, TypeSystem,
+};
 
 use super::*;
-use crate::buffer::Buffer;
 use crate::actions::ActionProvider;
+use crate::buffer::Buffer;
 use crate::nav::{Fold, Navigable, Step, Target};
 
 fn component(symbol: &str, ty: &str) -> Component {
@@ -16,7 +18,14 @@ fn component(symbol: &str, ty: &str) -> Component {
         description: String::new(),
         status: Status::Existing,
         stage: Stage::Implemented,
-        anchor: Some(CodeAnchor { language: "rust".into(), file: RepoPath::new("src/a.rs").unwrap(), symbol: symbol.into(), syntax_kind: "function_item".into(), span: Span { start_line: 1, end_line: 3, start_byte: 0, end_byte: 9 }, content_hash: String::new() }),
+        anchor: Some(CodeAnchor {
+            language: "rust".into(),
+            file: RepoPath::new("src/a.rs").unwrap(),
+            symbol: symbol.into(),
+            syntax_kind: "function_item".into(),
+            span: Span { start_line: 1, end_line: 3, start_byte: 0, end_byte: 9 },
+            content_hash: String::new(),
+        }),
         proposed: None,
         signature: None,
         schemas: Default::default(),
@@ -28,7 +37,15 @@ fn component(symbol: &str, ty: &str) -> Component {
 /// a { run, step, save, log }, b { util }: run -> step -> save, run -> log.
 pub(crate) fn sample_graph() -> Graph {
     let mut g = Graph::default();
-    for (s, ty) in [("a", "module"), ("a::run", "function"), ("a::step", "function"), ("a::save", "function"), ("a::log", "function"), ("b", "module"), ("b::util", "function")] {
+    for (s, ty) in [
+        ("a", "module"),
+        ("a::run", "function"),
+        ("a::step", "function"),
+        ("a::save", "function"),
+        ("a::log", "function"),
+        ("b", "module"),
+        ("b::util", "function"),
+    ] {
         g.upsert_component(component(s, ty), Provenance::OBSERVED);
     }
     let id = |s: &str| ComponentId::new(format!("rust:{s}"));
@@ -46,7 +63,19 @@ pub(crate) fn sample_graph() -> Graph {
 /// The tree the server would send for `request` over `graph`.
 pub(crate) fn tree_of(graph: &Graph, plan: Option<&Plan>, request: TreeRequest) -> Tree {
     let (config, types, others) = (TreeConfig::defaults().unwrap(), TypeSystem::defaults().unwrap(), BTreeMap::new());
-    let input = Input { graph, plan, other_plans: &others, config: &config, types: &types, budget: 400, link_budget: 300, flows: None, out_of_time: &|| false, layout_out_of_time: &|| false, entries: &entries() };
+    let input = Input {
+        graph,
+        plan,
+        other_plans: &others,
+        config: &config,
+        types: &types,
+        budget: 400,
+        link_budget: 300,
+        flows: None,
+        out_of_time: &|| false,
+        layout_out_of_time: &|| false,
+        entries: &entries(),
+    };
     arch_graph::tree::build(&input, &request)
 }
 
@@ -54,7 +83,19 @@ pub(crate) fn tree_of(graph: &Graph, plan: Option<&Plan>, request: TreeRequest) 
 /// keeping to `cap` cards.
 pub(crate) fn change_of(graph: &Graph, held: &Tree, card: &str, cap: usize) -> arch_graph::tree::Expanded {
     let (config, types, others) = (TreeConfig::defaults().unwrap(), TypeSystem::defaults().unwrap(), BTreeMap::new());
-    let input = Input { graph, plan: None, other_plans: &others, config: &config, types: &types, budget: 400, link_budget: 300, flows: None, out_of_time: &|| false, layout_out_of_time: &|| false, entries: &entries() };
+    let input = Input {
+        graph,
+        plan: None,
+        other_plans: &others,
+        config: &config,
+        types: &types,
+        budget: 400,
+        link_budget: 300,
+        flows: None,
+        out_of_time: &|| false,
+        layout_out_of_time: &|| false,
+        entries: &entries(),
+    };
     arch_graph::tree::expand(&input, held, card, 1, cap).1
 }
 
@@ -65,7 +106,11 @@ fn entries() -> Vec<arch_graph::tree::EntryPoint> {
 
 /// Calls down from run, three levels.
 pub(crate) fn sample_tree() -> Tree {
-    tree_of(&sample_graph(), None, TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(3), ..TreeRequest::default() })
+    tree_of(
+        &sample_graph(),
+        None,
+        TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(3), ..TreeRequest::default() },
+    )
 }
 
 /// Contains from the top, two levels.
@@ -79,7 +124,14 @@ pub(crate) fn with_detail(g: &mut GraphState, key: &str, file: &str, start: u32,
     let graph = sample_graph();
     let id = ComponentId::new(key);
     let mut c = graph.component(&id).unwrap().clone();
-    c.anchor = Some(CodeAnchor { language: "rust".into(), file: RepoPath::new(file).unwrap(), symbol: key.trim_start_matches("rust:").into(), syntax_kind: "function_item".into(), span: Span { start_line: start, end_line: end, start_byte: 0, end_byte: 1 }, content_hash: String::new() });
+    c.anchor = Some(CodeAnchor {
+        language: "rust".into(),
+        file: RepoPath::new(file).unwrap(),
+        symbol: key.trim_start_matches("rust:").into(),
+        syntax_kind: "function_item".into(),
+        span: Span { start_line: start, end_line: end, start_byte: 0, end_byte: 1 },
+        content_hash: String::new(),
+    });
     let detail = arch_graph::ComponentDetail {
         alignment: arch_graph::Alignment::Observed,
         outgoing: graph.outgoing(&id, None).cloned().collect(),
@@ -87,21 +139,45 @@ pub(crate) fn with_detail(g: &mut GraphState, key: &str, file: &str, start: u32,
         component: c,
         code: None,
         stale: false,
-            references: Vec::new(),
+        references: Vec::new(),
     };
     g.details.insert((key.to_owned(), g.nav.source.clone()), Detail::Ready(Box::new(detail)));
 }
 
 /// A graph waiting for its first tree (nothing in flight, nothing shown).
 pub(crate) fn loading() -> GraphState {
-    GraphState { config: Some(TreeConfig::defaults().unwrap()), config_requested: true, plans_stale: false, stale: false, load: Load::Loading, ..Default::default() }
+    GraphState {
+        config: Some(TreeConfig::defaults().unwrap()),
+        config_requested: true,
+        plans_stale: false,
+        stale: false,
+        load: Load::Loading,
+        ..Default::default()
+    }
 }
 
 /// A graph showing `tree`, settled where it asked (nothing to fetch).
 pub(crate) fn showing(tree: Tree) -> GraphState {
     let r = &tree.request;
-    let nav = Nav { view: r.view, source: r.source.clone(), root: r.root.clone(), way: r.way, depth: r.depth, opened: r.opened.clone(), closed: r.closed.clone(), full_code: r.full_code, only_changed: r.only.is_some() };
-    let mut g = GraphState { config: Some(TreeConfig::defaults().unwrap()), config_requested: true, plans_stale: false, stale: false, nav, ..Default::default() };
+    let nav = Nav {
+        view: r.view,
+        source: r.source.clone(),
+        root: r.root.clone(),
+        way: r.way,
+        depth: r.depth,
+        opened: r.opened.clone(),
+        closed: r.closed.clone(),
+        full_code: r.full_code,
+        only_changed: r.only.is_some(),
+    };
+    let mut g = GraphState {
+        config: Some(TreeConfig::defaults().unwrap()),
+        config_requested: true,
+        plans_stale: false,
+        stale: false,
+        nav,
+        ..Default::default()
+    };
     g.set_tree(tree);
     g
 }
@@ -121,7 +197,23 @@ fn the_graph_offers_one_small_set_of_actions() {
     }
     // Depth, flip, switch view, pick source; finding where to start; the camera;
     // back along the path; the legend.
-    assert_eq!(all, ["graph.depth_less", "graph.depth_more", "graph.find", "graph.fit", "graph.fit_card", "graph.flip", "graph.legend", "graph.path", "graph.plan", "graph.view", "graph.zoom_in", "graph.zoom_out"]);
+    assert_eq!(
+        all,
+        [
+            "graph.depth_less",
+            "graph.depth_more",
+            "graph.find",
+            "graph.fit",
+            "graph.fit_card",
+            "graph.flip",
+            "graph.legend",
+            "graph.path",
+            "graph.plan",
+            "graph.view",
+            "graph.zoom_in",
+            "graph.zoom_out"
+        ]
+    );
     // A selection adds going into it.
     g.select(Some("rust:a::step".into()));
     assert!(ids(&g).contains(&"graph.go_in".to_owned()));
@@ -130,7 +222,22 @@ fn the_graph_offers_one_small_set_of_actions() {
     g.agent = Some(AgentMove { what: "x".into(), select: None, return_to: Nav::default(), return_selection: None });
     assert!(ids(&g).contains(&"graph.full_code".to_owned()) && ids(&g).contains(&"graph.agent_return".to_owned()));
     // The old ways of seeing more or less are gone.
-    for gone in ["graph.focus", "graph.unfocus", "graph.level", "graph.coarser", "graph.finer", "graph.show_all", "graph.story", "graph.reached_by", "graph.follow", "graph.next_call", "graph.up", "graph.next_view", "graph.refresh", "graph.close_inspector"] {
+    for gone in [
+        "graph.focus",
+        "graph.unfocus",
+        "graph.level",
+        "graph.coarser",
+        "graph.finer",
+        "graph.show_all",
+        "graph.story",
+        "graph.reached_by",
+        "graph.follow",
+        "graph.next_call",
+        "graph.up",
+        "graph.next_view",
+        "graph.refresh",
+        "graph.close_inspector",
+    ] {
         assert!(!ids(&g).contains(&gone.to_owned()), "{gone}");
     }
     // The keys for them are gone from the keymap too.
@@ -158,7 +265,11 @@ fn going_in_and_back_walk_a_trail_of_roots() {
     g.set_tree(tree_of(&sample_graph(), None, g.nav.request()));
     assert_eq!(g.selection.as_deref(), Some("rust:a::step"), "with what was selected then");
     // No trail: out to what holds the root (Contains), else the starting points.
-    let mut boxes = showing(tree_of(&sample_graph(), None, TreeRequest { view: ViewKind::Contains, root: Some("rust:a".into()), depth: Some(1), ..TreeRequest::default() }));
+    let mut boxes = showing(tree_of(
+        &sample_graph(),
+        None,
+        TreeRequest { view: ViewKind::Contains, root: Some("rust:a".into()), depth: Some(1), ..TreeRequest::default() },
+    ));
     assert!(boxes.leave() == Step::Done && boxes.nav.root.is_none());
     assert!(matches!(boxes.leave(), Step::Nothing(_)), "already at the top");
     // The trail's crumbs go back to any step.
@@ -172,7 +283,11 @@ fn going_in_and_back_walk_a_trail_of_roots() {
 
 #[test]
 fn opening_and_closing_a_card_ask_the_server_and_nothing_moves_by_itself() {
-    let mut g = showing(tree_of(&sample_graph(), None, TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(1), ..TreeRequest::default() }));
+    let mut g = showing(tree_of(
+        &sample_graph(),
+        None,
+        TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(1), ..TreeRequest::default() },
+    ));
     g.select(Some("rust:a::step".into()));
     assert!(g.selected_card().unwrap().more > 0);
     let before = g.tree.as_ref().unwrap().cards.len();
@@ -286,7 +401,12 @@ fn missing(message: &str) -> crate::net::NetError {
 fn the_agent_moves_the_view_and_the_user_can_return() {
     let mut g = showing(sample_tree());
     g.select(Some("rust:a::log".into()));
-    let request = arch_graph::ViewRequest { view: Some(ViewKind::Contains), root: Some("rust:a".into()), select: Some("rust:a::save".into()), ..Default::default() };
+    let request = arch_graph::ViewRequest {
+        view: Some(ViewKind::Contains),
+        root: Some("rust:a".into()),
+        select: Some("rust:a::save".into()),
+        ..Default::default()
+    };
     g.on_event(&arch_graph::ArchEvent::ViewRequested { request: Box::new(request), by: arch_graph::Requester::Agent });
     assert_eq!((g.nav.view, g.nav.root.as_deref()), (ViewKind::Contains, Some("rust:a")));
     let agent = g.agent.clone().unwrap();
@@ -329,9 +449,25 @@ fn plan_marks_show_on_cards() {
     new.stage = Stage::Declared;
     new.anchor = None;
     plan.components.push(new);
-    plan.relations.push(Relation::new(RelationKind::Calls, ComponentId::new("rust:a::run"), ComponentId::new("rust:a::audit"), Provenance::PLANNED));
+    plan.relations.push(Relation::new(
+        RelationKind::Calls,
+        ComponentId::new("rust:a::run"),
+        ComponentId::new("rust:a::audit"),
+        Provenance::PLANNED,
+    ));
     let graph = Graph::merge(sample_graph(), std::slice::from_ref(&plan));
-    let tree = tree_of(&graph, Some(&plan), TreeRequest { view: ViewKind::Calls, source: arch_graph::Source::Plan(plan.id.clone()), root: Some("rust:a::run".into()), depth: Some(1), full_code: true, ..TreeRequest::default() });
+    let tree = tree_of(
+        &graph,
+        Some(&plan),
+        TreeRequest {
+            view: ViewKind::Calls,
+            source: arch_graph::Source::Plan(plan.id.clone()),
+            root: Some("rust:a::run".into()),
+            depth: Some(1),
+            full_code: true,
+            ..TreeRequest::default()
+        },
+    );
     let g = showing(tree);
     assert_eq!(g.card("rust:a::audit").unwrap().mark, Mark::New);
     assert!(g.actions().iter().any(|a| a.id == "graph.full_code"));
@@ -455,7 +591,11 @@ fn the_camera_zooms_and_fits_from_keys_and_buttons_within_the_trees_limits() {
     g.command(actions::GraphCommand::FitCard, None);
     g.camera = g.aimed();
     let card = g.to_screen(&g.card("rust:a::step").unwrap().rect);
-    assert!(g.canvas.contains_rect(card) && zoom(&g) == 2.0, "on the screen, as near the middle as the tree's edges let it: {card:?} at {}", zoom(&g));
+    assert!(
+        g.canvas.contains_rect(card) && zoom(&g) == 2.0,
+        "on the screen, as near the middle as the tree's edges let it: {card:?} at {}",
+        zoom(&g)
+    );
     // A wide tree: out to all of it, and never panned off it.
     let mut g = showing(wide_tree());
     g.canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
@@ -471,7 +611,13 @@ fn the_camera_zooms_and_fits_from_keys_and_buttons_within_the_trees_limits() {
     let whole = g.to_screen(&arch_graph::tree::Rect { x: 0.0, y: 0.0, w: all.0, h: all.1 });
     assert!(whole.top() <= g.canvas.top() + crate::theme::look().space_xxxl + 0.5, "no further than the top's edge: {whole:?}");
     let keymap = include_str!("../../config/default.toml");
-    for bound in ["\"graph.zoom_in\" = { leader = \"g i\", keys = [\"i\"] }", "\"graph.zoom_out\" = { leader = \"g o\", keys = [\"o\"] }", "\"graph.fit\" = { leader = \"g z\", keys = [\"z z\"] }", "\"graph.fit_card\" = { leader = \"g Z\", keys = [\"z f\"] }", "\"graph.go_in\" = { leader = \"g f\", keys = [\"g f\"] }"] {
+    for bound in [
+        "\"graph.zoom_in\" = { leader = \"g i\", keys = [\"i\"] }",
+        "\"graph.zoom_out\" = { leader = \"g o\", keys = [\"o\"] }",
+        "\"graph.fit\" = { leader = \"g z\", keys = [\"z z\"] }",
+        "\"graph.fit_card\" = { leader = \"g Z\", keys = [\"z f\"] }",
+        "\"graph.go_in\" = { leader = \"g f\", keys = [\"g f\"] }",
+    ] {
         assert!(keymap.contains(bound), "{bound}");
     }
 }
@@ -494,7 +640,11 @@ fn keys_follow_the_layout_a_tree_by_its_columns_boxes_at_their_depth() {
     assert_eq!(g.selection.as_deref(), Some("rust:a::step"), "Backspace: what it hangs from, as h");
     assert!(g.goes(Dir::Left).is_ok() && g.nav.root.as_deref() == Some("rust:a::run"), "the root stays");
     // Closed: l opens it and goes to its first once it shows.
-    let mut g = showing(tree_of(&sample_graph(), None, TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(1), ..TreeRequest::default() }));
+    let mut g = showing(tree_of(
+        &sample_graph(),
+        None,
+        TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(1), ..TreeRequest::default() },
+    ));
     g.select(Some("rust:a::step".into()));
     assert_eq!(g.goes(Dir::Right), Ok(Goes::OpenFirst("rust:a::step".into())));
     let held = g.tree.clone().unwrap();
@@ -511,7 +661,10 @@ fn keys_follow_the_layout_a_tree_by_its_columns_boxes_at_their_depth() {
     let inside = g.selection.clone().unwrap();
     assert_eq!(g.card(&inside).unwrap().parent.as_deref(), Some("rust:a"), "Enter: into it");
     let siblings: Vec<_> = [Dir::Left, Dir::Down, Dir::Up, Dir::Right].into_iter().filter_map(|d| g.goes(d).ok()).collect();
-    assert!(!siblings.is_empty() && siblings.iter().all(|s| matches!(s, Goes::To(k) if g.card(k).unwrap().parent.as_deref() == Some("rust:a"))), "its siblings first: {siblings:?}");
+    assert!(
+        !siblings.is_empty() && siblings.iter().all(|s| matches!(s, Goes::To(k) if g.card(k).unwrap().parent.as_deref() == Some("rust:a"))),
+        "its siblings first: {siblings:?}"
+    );
     assert_eq!(g.leave(), Step::Done);
     assert_eq!(g.selection.as_deref(), Some("rust:a"), "Backspace: out to what holds it");
 }
@@ -522,7 +675,14 @@ fn changed_components_get_a_badge_and_only_they_show_when_asked() {
     assert!(!ids(&g).contains(&"graph.only_changed".to_owned()), "nothing changed: no switch");
     let comparison = harness_contracts::changes::Comparison::default();
     let step = ComponentId::new("rust:a::step");
-    let changed = |id: &ComponentId, direct: bool| harness_contracts::changes::ComponentChanges { component: id.as_str().into(), file: "src/a.rs".into(), added: 2, removed: 1, runs: vec![(2, 2)], direct };
+    let changed = |id: &ComponentId, direct: bool| harness_contracts::changes::ComponentChanges {
+        component: id.as_str().into(),
+        file: "src/a.rs".into(),
+        added: 2,
+        removed: 1,
+        runs: vec![(2, 2)],
+        direct,
+    };
     let module = ComponentId::new("rust:a");
     g.set_changed(BTreeMap::from([(step.clone(), changed(&step, true)), (module.clone(), changed(&module, false))]), &comparison, 1);
     assert_eq!((g.changed(&step), g.changed_read(), g.stale), (Some((2, 1)), 1, false), "a badge; the tree as it was");
@@ -530,7 +690,11 @@ fn changed_components_get_a_badge_and_only_they_show_when_asked() {
     g.command(super::actions::GraphCommand::OnlyChanged, None);
     assert!(g.nav.only_changed && g.stale, "only changed: asked again");
     assert_eq!(g.changed(&module), Some((2, 1)), "what holds it: a badge too");
-    assert_eq!(g.nav.asking(g.changed_directly()).only, Some(vec!["rust:a::step".to_owned()]), "only what changed itself (what holds it comes along)");
+    assert_eq!(
+        g.nav.asking(g.changed_directly()).only,
+        Some(vec!["rust:a::step".to_owned()]),
+        "only what changed itself (what holds it comes along)"
+    );
     g.stale = false;
     g.set_changed(BTreeMap::new(), &comparison, 2);
     assert!(g.stale, "what changed moved: asked again");
@@ -573,11 +737,18 @@ fn going_in_follows_a_line_to_a_card_drawn_in_another_branch() {
     let mut r = Relation::new(RelationKind::Calls, ComponentId::new("rust:a::step"), ComponentId::new("rust:a::log"), Provenance::OBSERVED);
     r.order = Some(9);
     graph.upsert_relation(r);
-    let mut g = showing(tree_of(&graph, None, TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(3), ..TreeRequest::default() }));
+    let mut g = showing(tree_of(
+        &graph,
+        None,
+        TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(3), ..TreeRequest::default() },
+    ));
     g.select(Some("rust:a::save".into()));
     assert!(g.goes_in().is_err(), "save calls nothing");
     g.select(Some("rust:a::step".into()));
     let leads = super::select::children(g.tree.as_ref().unwrap(), "rust:a::step");
-    assert!(leads.contains(&"rust:a::save".to_owned()) && leads.contains(&"rust:a::log".to_owned()), "its own, and log where it's drawn: {leads:?}");
+    assert!(
+        leads.contains(&"rust:a::save".to_owned()) && leads.contains(&"rust:a::log".to_owned()),
+        "its own, and log where it's drawn: {leads:?}"
+    );
     assert!(!leads.contains(&"rust:a::run".to_owned()), "not what it hangs from");
 }

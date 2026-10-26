@@ -5,7 +5,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use arch_graph::{CodeAnchor, Component, ComponentId, Graph, Provenance, Relation, RelationId, RelationKind, RepoPath, Span, Stage, Status};
+use arch_graph::{
+    CodeAnchor, Component, ComponentId, Graph, Provenance, Relation, RelationId, RelationKind, RepoPath, Span, Stage, Status,
+};
 
 use crate::link::{AmbiguousCall, ExternalCall, UnverifiedFlow};
 use crate::rows::{Evidence, FileRows, RefKind};
@@ -63,7 +65,12 @@ pub fn placeholder_macros<'a>(files: impl Iterator<Item = &'a FileRows> + Clone,
 /// A file's placeholder sites: its own, and uses of macros that are placeholders.
 pub fn placeholder_sites(file: &FileRows, macros: &BTreeMap<String, BTreeSet<String>>) -> Vec<Span> {
     let set = macros.get(&file.file.language);
-    let mut out: Vec<Span> = file.placeholders.iter().filter(|p| p.macro_name.as_ref().is_none_or(|m| set.is_some_and(|s| s.contains(m)))).map(|p| p.span).collect();
+    let mut out: Vec<Span> = file
+        .placeholders
+        .iter()
+        .filter(|p| p.macro_name.as_ref().is_none_or(|m| set.is_some_and(|s| s.contains(m))))
+        .map(|p| p.span)
+        .collect();
     out.sort_by_key(|s| s.start_byte);
     out.dedup();
     out
@@ -189,7 +196,13 @@ impl Keeper {
 
     /// Brings the graph up to date with `changed` files' rows in `files`
     /// (gone from `files`: removed).
-    pub fn update<'a>(&mut self, files: impl Iterator<Item = &'a FileRows> + Clone, get: impl Fn(&RepoPath) -> Option<&'a FileRows>, changed: &BTreeSet<RepoPath>, packs: &PackSet) {
+    pub fn update<'a>(
+        &mut self,
+        files: impl Iterator<Item = &'a FileRows> + Clone,
+        get: impl Fn(&RepoPath) -> Option<&'a FileRows>,
+        changed: &BTreeSet<RepoPath>,
+        packs: &PackSet,
+    ) {
         let mut changed = changed.clone();
         // The parts no one file owns are made again only when what the
         // files give them changed.
@@ -209,7 +222,8 @@ impl Keeper {
         if redo {
             let macros = placeholder_macros(files.clone(), packs);
             if macros != self.macros {
-                changed.extend(files.clone().filter(|f| f.placeholders.iter().any(|p| p.macro_name.is_some())).map(|f| f.file.path.clone()));
+                changed
+                    .extend(files.clone().filter(|f| f.placeholders.iter().any(|p| p.macro_name.is_some())).map(|f| f.file.path.clone()));
                 self.macros = macros;
             }
         }
@@ -243,7 +257,9 @@ impl Keeper {
             let merged = self.components.get(&id).and_then(|by| fold_components(by.values()));
             match merged {
                 None => self.graph.remove_component(&id),
-                Some(c) if !self.graph.component(&id).is_some_and(|kept| kept.identical(&c)) => self.graph.put_component(c, Provenance::OBSERVED),
+                Some(c) if !self.graph.component(&id).is_some_and(|kept| kept.identical(&c)) => {
+                    self.graph.put_component(c, Provenance::OBSERVED)
+                }
                 Some(_) => {}
             }
         }
@@ -258,7 +274,14 @@ impl Keeper {
     }
 
     /// Replaces what `source` put in; what's affected is marked dirty.
-    fn replace(&mut self, source: Source, components: Vec<Component>, relations: Vec<Relation>, dirty_components: &mut BTreeSet<ComponentId>, dirty_relations: &mut BTreeSet<RelationId>) {
+    fn replace(
+        &mut self,
+        source: Source,
+        components: Vec<Component>,
+        relations: Vec<Relation>,
+        dirty_components: &mut BTreeSet<ComponentId>,
+        dirty_relations: &mut BTreeSet<RelationId>,
+    ) {
         if let Some((old_components, old_relations)) = self.put.remove(&source) {
             for id in old_components {
                 if let Some(by) = self.components.get_mut(&id) {
@@ -352,17 +375,35 @@ pub fn observed<'a>(files: impl Iterator<Item = &'a FileRows> + Clone, packs: &P
     let all: BTreeMap<RepoPath, &FileRows> = files.clone().map(|f| (f.file.path.clone(), f)).collect();
     let changed: BTreeSet<RepoPath> = all.keys().cloned().collect();
     keeper.update(files, |p| all.get(p).copied(), &changed, packs);
-    Observed { graph: keeper.graph(), ambiguous: keeper.ambiguous(), unproven: keeper.unproven(), external: keeper.external(), unverified_flows: keeper.unverified() }
+    Observed {
+        graph: keeper.graph(),
+        ambiguous: keeper.ambiguous(),
+        unproven: keeper.unproven(),
+        external: keeper.external(),
+        unverified_flows: keeper.unverified(),
+    }
 }
 
 /// What a file's calls couldn't link, and why.
-fn unlinked_of(file: &FileRows, ambiguous: &mut Vec<AmbiguousCall>, unproven: &mut Vec<AmbiguousCall>, external: &mut BTreeSet<ExternalCall>, unverified: &mut Vec<UnverifiedFlow>) {
+fn unlinked_of(
+    file: &FileRows,
+    ambiguous: &mut Vec<AmbiguousCall>,
+    unproven: &mut Vec<AmbiguousCall>,
+    external: &mut BTreeSet<ExternalCall>,
+    unverified: &mut Vec<UnverifiedFlow>,
+) {
     for r in file.refs.iter().filter(|r| r.kind == RefKind::Call) {
         let (Some(within), Some((_, call))) = (&r.within, &r.detail.call) else { continue };
         let callee = call.callee.render();
         match r.evidence {
             Evidence::Ambiguous | Evidence::Unproven => {
-                let entry = AmbiguousCall { caller: within.clone(), callee, file: file.file.path.clone(), span: call.span, candidates: r.detail.candidates.clone() };
+                let entry = AmbiguousCall {
+                    caller: within.clone(),
+                    callee,
+                    file: file.file.path.clone(),
+                    span: call.span,
+                    candidates: r.detail.candidates.clone(),
+                };
                 if r.evidence == Evidence::Ambiguous { ambiguous.push(entry) } else { unproven.push(entry) }
             }
             Evidence::External => {
@@ -372,7 +413,14 @@ fn unlinked_of(file: &FileRows, ambiguous: &mut Vec<AmbiguousCall>, unproven: &m
         }
         if let Some(target) = &r.target {
             for (source, position, reason) in &r.detail.unverified {
-                unverified.push(UnverifiedFlow { source: source.clone(), target: target.clone(), position: *position, file: file.file.path.clone(), span: call.span, reason: reason.clone() });
+                unverified.push(UnverifiedFlow {
+                    source: source.clone(),
+                    target: target.clone(),
+                    position: *position,
+                    file: file.file.path.clone(),
+                    span: call.span,
+                    reason: reason.clone(),
+                });
             }
         }
     }
@@ -382,7 +430,9 @@ fn unlinked_of(file: &FileRows, ambiguous: &mut Vec<AmbiguousCall>, unproven: &m
 /// flowing across boundaries. `graph` holds every file's components.
 fn derived<'a>(files: impl Iterator<Item = &'a FileRows> + Clone, packs: &PackSet) -> Vec<(Option<Relation>, Option<Component>)> {
     let mut out = Vec::new();
-    let contains = |a: &ComponentId, b: &ComponentId| (a != b).then(|| Relation::new(RelationKind::Contains, a.clone(), b.clone(), Provenance::OBSERVED));
+    let contains = |a: &ComponentId, b: &ComponentId| {
+        (a != b).then(|| Relation::new(RelationKind::Contains, a.clone(), b.clone(), Provenance::OBSERVED))
+    };
     // Module hierarchy: a module contains the modules one segment below it.
     let modules: BTreeMap<(String, String), (ComponentId, RepoPath)> = files
         .clone()
@@ -456,11 +506,18 @@ fn derived<'a>(files: impl Iterator<Item = &'a FileRows> + Clone, packs: &PackSe
 pub fn entry_points<'a>(files: impl Iterator<Item = &'a FileRows>, packs: &PackSet) -> Vec<arch_graph::tree::EntryPoint> {
     let files: Vec<&FileRows> = files.collect();
     use crate::pack::BoundaryEntry;
-    let entry_of = |language: &str, boundary: &str| packs.by_name(language).and_then(|p| p.spec.boundaries.iter().find(|b| b.name == boundary)).and_then(|b| b.entry);
+    let entry_of = |language: &str, boundary: &str| {
+        packs.by_name(language).and_then(|p| p.spec.boundaries.iter().find(|b| b.name == boundary)).and_then(|b| b.entry)
+    };
     // The keys the code declares, by boundary.
     let declared: BTreeSet<(String, String)> = files
         .iter()
-        .flat_map(|f| f.flows.iter().filter(|r| r.flow.kind == FlowKind::Sends).filter_map(|r| r.flow.boundary.clone().map(|b| (b, r.flow.what.clone()))))
+        .flat_map(|f| {
+            f.flows
+                .iter()
+                .filter(|r| r.flow.kind == FlowKind::Sends)
+                .filter_map(|r| r.flow.boundary.clone().map(|b| (b, r.flow.what.clone())))
+        })
         .collect();
     // The keys each receiver takes, by boundary: one that takes a key no
     // one declares reads keys of its own (a query's fields), it doesn't
@@ -479,14 +536,21 @@ pub fn entry_points<'a>(files: impl Iterator<Item = &'a FileRows>, packs: &PackS
     for f in files {
         if let Some(pack) = packs.by_name(&f.file.language) {
             let names = &pack.spec.language.entry_names;
-            mains.extend(f.components.iter().filter(|c| c.signature.is_some() && names.contains(&c.name)).map(|c| arch_graph::tree::EntryPoint { id: c.id.clone(), why: c.name.clone() }));
+            mains.extend(
+                f.components
+                    .iter()
+                    .filter(|c| c.signature.is_some() && names.contains(&c.name))
+                    .map(|c| arch_graph::tree::EntryPoint { id: c.id.clone(), why: c.name.clone() }),
+            );
         }
         for flow in f.flows.iter().filter(|r| r.flow.kind == FlowKind::Receives) {
             let Some(boundary) = &flow.flow.boundary else { continue };
             for id in &flow.receivers {
                 let counts = match entry_of(&f.file.language, boundary) {
                     Some(BoundaryEntry::Received) => true,
-                    Some(BoundaryEntry::Declared) => takes.get(&(boundary.clone(), id.clone())).is_some_and(|keys| keys.iter().all(|k| declared.contains(&(boundary.clone(), k.clone())))),
+                    Some(BoundaryEntry::Declared) => takes
+                        .get(&(boundary.clone(), id.clone()))
+                        .is_some_and(|keys| keys.iter().all(|k| declared.contains(&(boundary.clone(), k.clone())))),
                     None => false,
                 };
                 if counts {
@@ -496,7 +560,11 @@ pub fn entry_points<'a>(files: impl Iterator<Item = &'a FileRows>, packs: &PackS
         }
     }
     mains.sort_by(|a, b| a.id.cmp(&b.id));
-    let mut received: Vec<arch_graph::tree::EntryPoint> = receivers.into_iter().filter(|(id, _)| !mains.iter().any(|m| &m.id == id)).map(|(id, why)| arch_graph::tree::EntryPoint { id, why }).collect();
+    let mut received: Vec<arch_graph::tree::EntryPoint> = receivers
+        .into_iter()
+        .filter(|(id, _)| !mains.iter().any(|m| &m.id == id))
+        .map(|(id, why)| arch_graph::tree::EntryPoint { id, why })
+        .collect();
     received.sort_by(|a, b| a.why.cmp(&b.why).then_with(|| a.id.cmp(&b.id)));
     mains.extend(received);
     mains
@@ -509,7 +577,14 @@ pub fn occurrences(file: &FileRows) -> Vec<arch_graph::code::Occurrence> {
         .components
         .iter()
         .filter(|c| c.detail.def.is_some())
-        .filter_map(|c| c.name_span.map(|s| arch_graph::code::Occurrence { start: s.start_byte, end: s.end_byte, target: Some(c.id.clone()), definition: true }))
+        .filter_map(|c| {
+            c.name_span.map(|s| arch_graph::code::Occurrence {
+                start: s.start_byte,
+                end: s.end_byte,
+                target: Some(c.id.clone()),
+                definition: true,
+            })
+        })
         .collect();
     out.extend(file.refs.iter().filter(|r| r.kind == RefKind::Call || r.kind == RefKind::Value).filter_map(|r| {
         let (_, call) = r.detail.call.as_ref()?;
@@ -586,7 +661,14 @@ fn folders(modules: &[(ComponentId, RepoPath)]) -> Vec<(Folder, Vec<ComponentId>
                         description: String::new(),
                         status: Status::Existing,
                         stage: Stage::Implemented,
-                        anchor: RepoPath::new(&path).ok().map(|file| CodeAnchor { language: "folder".into(), file, symbol: path.clone(), syntax_kind: "folder".into(), span: Span { start_line: 0, end_line: 0, start_byte: 0, end_byte: 0 }, content_hash: String::new() }),
+                        anchor: RepoPath::new(&path).ok().map(|file| CodeAnchor {
+                            language: "folder".into(),
+                            file,
+                            symbol: path.clone(),
+                            syntax_kind: "folder".into(),
+                            span: Span { start_line: 0, end_line: 0, start_byte: 0, end_byte: 0 },
+                            content_hash: String::new(),
+                        }),
                         proposed: None,
                         signature: None,
                         schemas: Default::default(),
@@ -603,4 +685,3 @@ fn folders(modules: &[(ComponentId, RepoPath)]) -> Vec<(Folder, Vec<ComponentId>
     emit(fold("", &tree), "", &mut out);
     out
 }
-

@@ -58,11 +58,17 @@ pub fn detail(n: &Notification, agents: &crate::agents::Agents) -> String {
     let slot = n.slot.as_ref().map(|s| {
         let name = store.slots.get(s).map_or_else(|| s.to_string(), |slot| slot.name.clone());
         match agents.state(s) {
-            state @ (crate::agents::AgentState::CantRun(_) | crate::agents::AgentState::NoSession { .. } | crate::agents::AgentState::Gone) => format!("{name} ({})", state.words()),
+            state @ (crate::agents::AgentState::CantRun(_)
+            | crate::agents::AgentState::NoSession { .. }
+            | crate::agents::AgentState::Gone) => format!("{name} ({})", state.words()),
             _ => name,
         }
     });
-    [slot, Some(kind_word(n.kind).to_owned()), Some(age(n.at_ms, agents.clock().now_ms()))].into_iter().flatten().collect::<Vec<_>>().join(" · ")
+    [slot, Some(kind_word(n.kind).to_owned()), Some(age(n.at_ms, agents.clock().now_ms()))]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 pub fn now_ms() -> u64 {
@@ -95,13 +101,31 @@ mod tests {
     use harness_contracts::{ClientEvent, NotificationId, NotificationState};
 
     pub(crate) fn note(id: &str, kind: NotificationKind, slot: &str, at_ms: u64) -> Notification {
-        Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: Some(SlotId::new(slot)), thread: None, request: None, terminal: None, discussion: None, title: id.into(), detail: None, at_ms, state: NotificationState::Open }
+        Notification {
+            id: NotificationId::new(id),
+            server: None,
+            level: kind.level(),
+            kind,
+            slot: Some(SlotId::new(slot)),
+            thread: None,
+            request: None,
+            terminal: None,
+            discussion: None,
+            title: id.into(),
+            detail: None,
+            at_ms,
+            state: NotificationState::Open,
+        }
     }
 
     #[test]
     fn they_are_gone_through_waiting_first() {
         let mut store = Store::default();
-        for n in [note("turn:1", NotificationKind::TurnFinished, "lead", 1), note("req:2", NotificationKind::Approval, "sub-1", 5), note("req:1", NotificationKind::Question, "sub-1", 2)] {
+        for n in [
+            note("turn:1", NotificationKind::TurnFinished, "lead", 1),
+            note("req:2", NotificationKind::Approval, "sub-1", 5),
+            note("req:1", NotificationKind::Question, "sub-1", 2),
+        ] {
             store.apply(ClientEvent::NotificationUpdated { notification: n }, 0.0);
         }
         assert_eq!(list(&store, None).iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["req:1", "req:2", "turn:1"]);
@@ -110,7 +134,9 @@ mod tests {
         // Its agent with no session running: said so (as everywhere).
         crate::status::set(crate::config::UiConfig::with_overrides("").unwrap().status);
         let mut agents = crate::agents::Agents::default();
-        agents.apply(ClientEvent::NotificationUpdated { notification: note("req:2", NotificationKind::Approval, "sub-1", now_ms() - 125_000) });
+        agents.apply(ClientEvent::NotificationUpdated {
+            notification: note("req:2", NotificationKind::Approval, "sub-1", now_ms() - 125_000),
+        });
         assert_eq!(detail(&agents.store().notifications[&id("req:2")], &agents), "sub-1 (no session running) · approval · 2 min ago");
     }
 

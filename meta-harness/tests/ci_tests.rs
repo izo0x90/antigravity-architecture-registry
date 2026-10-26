@@ -9,7 +9,10 @@ fn ci_runs_the_layout_benchmark() {
     assert!(workflow.contains("cargo bench -p arch-service --bench hot -- --test"), "{workflow}");
     assert!(workflow.contains("make check"), "lints and tests too");
     let bench = std::fs::read_to_string(root.join("crates/arch-service/benches/hot.rs")).unwrap();
-    assert!(bench.contains("arch_graph::tree::lay_out(") && bench.contains("\"layout {} depth {depth}\""), "a criterion benchmark of the layout alone");
+    assert!(
+        bench.contains("arch_graph::tree::lay_out(") && bench.contains("\"layout {} depth {depth}\""),
+        "a criterion benchmark of the layout alone"
+    );
 }
 
 #[test]

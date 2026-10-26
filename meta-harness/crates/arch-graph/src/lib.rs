@@ -9,35 +9,40 @@ mod component;
 mod cycles;
 mod events;
 mod graph;
+pub mod index;
 mod lifecycle;
 mod plan;
 mod queue;
 mod relation;
 mod report;
-mod source;
-pub mod index;
 pub mod review;
 pub mod schema;
+mod source;
 pub mod tree;
-pub mod when;
 mod types;
+pub mod when;
 mod wire;
 
 pub use anchor::{CodeAnchor, ProposedLocation, RepoPath, Span};
+pub use component::{
+    Component, ComponentId, ImplementationSpec, Invariant, InvariantKind, LogicStep, Param, Schemas, SideEffect, Signature, Task, ToolRef,
+};
 pub use events::{ArchEvent, ChangeReason, Requester, ViewRequest};
-pub use index::{IndexState, IndexStatus, IndexSummary, ServerState, ServerStatus};
-pub use component::{Component, ComponentId, ImplementationSpec, Invariant, InvariantKind, LogicStep, Param, Schemas, SideEffect, Signature, Task, ToolRef};
-pub use graph::{Alignment, Graph};
 #[cfg(any(test, feature = "testing"))]
 pub use graph::inserts as graph_inserts;
+pub use graph::{Alignment, Graph};
+pub use index::{IndexState, IndexStatus, IndexSummary, ServerState, ServerStatus};
 pub use lifecycle::{Stage, Status, can_transition};
+pub use plan::{
+    Approval, ApprovalKind, Item, ItemId, ItemState, Plan, PlanId, PlanKind, REVOKED_BY, Reference, SCHEMA_VERSION, Workflow,
+    check_schema_version,
+};
 pub use queue::{Job, JobKind, JobState, QueueSnapshot, QueueStatus};
-pub use plan::{Approval, ApprovalKind, Item, ItemId, ItemState, Plan, PlanId, PlanKind, REVOKED_BY, Reference, SCHEMA_VERSION, Workflow, check_schema_version};
 pub use relation::{Provenance, Relation, RelationId, RelationKind};
-pub use schema::{Dsl, RefError, SchemaSet};
-pub use review::{Change, PlanDiff, ReviewSnapshot};
-pub use source::Source;
 pub use report::{CodeRef, Finding, FindingCode, Report, Severity, Target};
+pub use review::{Change, PlanDiff, ReviewSnapshot};
+pub use schema::{Dsl, RefError, SchemaSet};
+pub use source::Source;
 pub use types::{RequiredField, ResolvedType, TypeDef, TypeSystem};
 pub use wire::{ComponentDetail, FileView};
 

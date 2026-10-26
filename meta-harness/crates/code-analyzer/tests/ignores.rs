@@ -67,7 +67,8 @@ fn one_definition_of_ignored_from_every_source_the_walk_included() {
     want.sort();
     assert_eq!(walked, want);
     // Every file the walk lists, for search (not only those a pack reads).
-    let all: Vec<String> = ignores.files(&proj).into_iter().map(|p| p.strip_prefix(&proj).unwrap().to_string_lossy().into_owned()).collect();
+    let all: Vec<String> =
+        ignores.files(&proj).into_iter().map(|p| p.strip_prefix(&proj).unwrap().to_string_lossy().into_owned()).collect();
     assert!(all.iter().all(|f| !ignored.contains(&f.as_str()) && !f.starts_with('.')), "{all:?}");
     assert!(kept.iter().all(|f| all.contains(&(*f).to_owned())), "{all:?}");
     // The hand-made matcher is gone: there is one definition.
@@ -82,7 +83,12 @@ fn on_this_repo_the_files_are_gits_less_hidden_ones_and_what_nah_ignore_skips() 
         eprintln!("skipped: git isn't installed (machine-dependent)");
         return;
     };
-    let skipped: Vec<String> = std::fs::read_to_string(root.join(".nah/ignore")).unwrap().lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()).map(str::to_owned).collect();
+    let skipped: Vec<String> = std::fs::read_to_string(root.join(".nah/ignore"))
+        .unwrap()
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .map(str::to_owned)
+        .collect();
     let git: std::collections::BTreeSet<String> = String::from_utf8(listed.stdout)
         .unwrap()
         .lines()
@@ -92,7 +98,11 @@ fn on_this_repo_the_files_are_gits_less_hidden_ones_and_what_nah_ignore_skips() 
         .map(str::to_owned)
         .collect();
     let started = std::time::Instant::now();
-    let ours: std::collections::BTreeSet<String> = code_analyzer::Ignores::new(&root).files(&root).iter().map(|p| p.strip_prefix(&root).unwrap().to_string_lossy().into_owned()).collect();
+    let ours: std::collections::BTreeSet<String> = code_analyzer::Ignores::new(&root)
+        .files(&root)
+        .iter()
+        .map(|p| p.strip_prefix(&root).unwrap().to_string_lossy().into_owned())
+        .collect();
     eprintln!("{} files in {:?}", ours.len(), started.elapsed());
     assert_eq!(ours.difference(&git).collect::<Vec<_>>(), Vec::<&String>::new(), "listed but git ignores them");
     assert_eq!(git.difference(&ours).collect::<Vec<_>>(), Vec::<&String>::new(), "git lists them but we skip them");
@@ -102,7 +112,9 @@ fn on_this_repo_the_files_are_gits_less_hidden_ones_and_what_nah_ignore_skips() 
 fn in_a_git_worktree_the_repositorys_exclude_still_applies() {
     let dir = tempfile::tempdir().unwrap();
     let main = dir.path().join("main");
-    let git = |args: &[&str], at: &Path| std::process::Command::new("git").arg("-C").arg(at).args(args).output().map(|o| o.status.success()).unwrap_or(false);
+    let git = |args: &[&str], at: &Path| {
+        std::process::Command::new("git").arg("-C").arg(at).args(args).output().map(|o| o.status.success()).unwrap_or(false)
+    };
     std::fs::create_dir_all(&main).unwrap();
     if !git(&["init", "-q"], &main) {
         eprintln!("skipped: git isn't installed (machine-dependent)");

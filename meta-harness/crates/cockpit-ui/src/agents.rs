@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use harness_contracts::{
-    ClientEvent, ContentBlock, InstanceId, ItemBody, McpServer, ModelSelection, NativeId, ProviderSnapshot, ProviderStatus, RequestId, RequestResponse, RuntimePolicy, SavedSession, SessionKey, Slot, SlotId, SteerInput, ThreadId, ThreadStatus,
-    ToolServers, LEAD,
+    ClientEvent, ContentBlock, InstanceId, ItemBody, LEAD, McpServer, ModelSelection, NativeId, ProviderSnapshot, ProviderStatus,
+    RequestId, RequestResponse, RuntimePolicy, SavedSession, SessionKey, Slot, SlotId, SteerInput, ThreadId, ThreadStatus, ToolServers,
 };
 
 use crate::net::{NetClient, NetResult, OpenSlotSession, SlotOpened};
@@ -98,36 +98,84 @@ impl AgentState {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Act {
     /// A session in the slot: a new one, or a saved one.
-    Open { resume: Option<NativeId> },
+    Open {
+        resume: Option<NativeId>,
+    },
     /// A prompt to the slot (its session opened first if it isn't
     /// running); `add`: into the turn it's running.
-    Prompt { message: harness_contracts::Message, add: bool },
+    Prompt {
+        message: harness_contracts::Message,
+        add: bool,
+    },
     /// An answer to an agent's request.
-    Answer { thread: ThreadId, request: RequestId, response: RequestResponse },
+    Answer {
+        thread: ThreadId,
+        request: RequestId,
+        response: RequestResponse,
+    },
     /// The harness's saved sessions, listed (to pick one).
-    ListSaved { instance: InstanceId },
-    DeleteSaved { instance: InstanceId, native: NativeId },
-    SwitchSession { key: SessionKey },
-    SetHarness { instance: InstanceId },
+    ListSaved {
+        instance: InstanceId,
+    },
+    DeleteSaved {
+        instance: InstanceId,
+        native: NativeId,
+    },
+    SwitchSession {
+        key: SessionKey,
+    },
+    SetHarness {
+        instance: InstanceId,
+    },
     /// A sub-slot on a harness (the chat that asked shows it).
-    NewSlot { instance: InstanceId },
+    NewSlot {
+        instance: InstanceId,
+    },
     CloseSlot,
-    CloseSession { key: SessionKey },
-    Stop { thread: ThreadId },
+    CloseSession {
+        key: SessionKey,
+    },
+    Stop {
+        thread: ThreadId,
+    },
     /// One sub-agent's work stopped, the turn going on.
-    StopSubagent { thread: ThreadId, id: harness_contracts::SubagentId },
-    Reprobe { instance: InstanceId },
-    Steer { thread: ThreadId, input: SteerInput },
-    Settings { policy: RuntimePolicy, model: Option<ModelSelection> },
+    StopSubagent {
+        thread: ThreadId,
+        id: harness_contracts::SubagentId,
+    },
+    Reprobe {
+        instance: InstanceId,
+    },
+    Steer {
+        thread: ThreadId,
+        input: SteerInput,
+    },
+    Settings {
+        policy: RuntimePolicy,
+        model: Option<ModelSelection>,
+    },
     /// The project's tool servers (the slot's session restarts with them).
     ToolServers(Vec<McpServer>),
-    SignIn { instance: InstanceId, method: String },
-    FinishSignIn { instance: InstanceId, answer: String },
-    SignOut { instance: InstanceId },
-    StopSigningIn { instance: InstanceId, id: u64 },
+    SignIn {
+        instance: InstanceId,
+        method: String,
+    },
+    FinishSignIn {
+        instance: InstanceId,
+        answer: String,
+    },
+    SignOut {
+        instance: InstanceId,
+    },
+    StopSigningIn {
+        instance: InstanceId,
+        id: u64,
+    },
     PutNoticeAway,
     /// A sign-in's end, read: off this device's chat.
-    PutSignInEndAway { id: u64 },
+    PutSignInEndAway {
+        id: u64,
+    },
     PutErrorAway,
     /// The slot's updates were seen (its chat is on screen).
     Seen,
@@ -138,19 +186,44 @@ enum Reply {
     Opened(SlotId, NetResult<SlotOpened>),
     Sent(SlotId, NetResult<()>),
     /// An answer to `request` was taken, or why not.
-    Answered { slot: SlotId, request: harness_contracts::RequestId, result: NetResult<()> },
+    Answered {
+        slot: SlotId,
+        request: harness_contracts::RequestId,
+        result: NetResult<()>,
+    },
     /// Stopping sub-agent `id` was taken, or why not.
-    Stopping { slot: SlotId, thread: ThreadId, id: harness_contracts::SubagentId, result: NetResult<()> },
+    Stopping {
+        slot: SlotId,
+        thread: ThreadId,
+        id: harness_contracts::SubagentId,
+        result: NetResult<()>,
+    },
     SlotMade(SlotId, NetResult<SlotId>),
     /// A session was ended to start again with new tool servers.
-    Restart { slot: SlotId, resume: Option<NativeId>, result: NetResult<()> },
+    Restart {
+        slot: SlotId,
+        resume: Option<NativeId>,
+        result: NetResult<()>,
+    },
     Saved(SlotId, NetResult<Vec<SavedSession>>),
-    AuthStarted { slot: SlotId, instance: InstanceId, result: NetResult<Option<harness_contracts::SignInWaiting>> },
+    AuthStarted {
+        slot: SlotId,
+        instance: InstanceId,
+        result: NetResult<Option<harness_contracts::SignInWaiting>>,
+    },
     /// What was pasted back to sign-in `id` was taken (signed in), or why not.
-    AuthFinished { slot: SlotId, instance: InstanceId, id: u64, result: NetResult<()> },
+    AuthFinished {
+        slot: SlotId,
+        instance: InstanceId,
+        id: u64,
+        result: NetResult<()>,
+    },
     /// The tool servers every session gets; after a change, the slot whose
     /// session restarts with them.
-    Tools { result: NetResult<ToolServers>, saved: Option<SlotId> },
+    Tools {
+        result: NetResult<ToolServers>,
+        saved: Option<SlotId>,
+    },
     Done(SlotId, NetResult<()>),
 }
 
@@ -388,7 +461,9 @@ impl Agents {
             if self.store.closed.contains(slot) {
                 return AgentState::Gone;
             }
-            return couldnt().or_else(|| self.harness_problem(slot).map(AgentState::CantRun)).unwrap_or(AgentState::NoSession { resume: None });
+            return couldnt()
+                .or_else(|| self.harness_problem(slot).map(AgentState::CantRun))
+                .unwrap_or(AgentState::NoSession { resume: None });
         };
         if let harness_contracts::SlotStatus::Unavailable { reason, .. } = &its.status {
             return AgentState::CantRun(format!("can't run: {reason}"));
@@ -462,7 +537,9 @@ impl Agents {
                 let mailbox = self.mailbox.clone();
                 let slot = self.store.slots.values().find(|s| s.current_thread() == Some(&thread)).map_or(slot, |s| s.id.clone());
                 self.answering.insert(request.clone());
-                net.respond(&thread, &request.clone(), &response, ctx.clone(), move |result| post(&mailbox, Reply::Answered { slot, request, result }));
+                net.respond(&thread, &request.clone(), &response, ctx.clone(), move |result| {
+                    post(&mailbox, Reply::Answered { slot, request, result })
+                });
             }
             Act::ListSaved { instance } => {
                 self.saved = None;
@@ -501,7 +578,9 @@ impl Agents {
                 if self.signing_in.insert(instance.clone()) {
                     let mailbox = self.mailbox.clone();
                     let asked = instance.clone();
-                    net.begin_auth(&instance, &method, ctx.clone(), move |result| post(&mailbox, Reply::AuthStarted { slot, instance: asked, result }));
+                    net.begin_auth(&instance, &method, ctx.clone(), move |result| {
+                        post(&mailbox, Reply::AuthStarted { slot, instance: asked, result })
+                    });
                 }
             }
             Act::FinishSignIn { instance, answer } => {
@@ -512,7 +591,9 @@ impl Agents {
                 self.pasted = Some(Pasted { instance: instance.clone(), id, finishing: true, refused: None });
                 let mailbox = self.mailbox.clone();
                 let asked = instance.clone();
-                net.complete_auth(&instance, id, &answer, ctx.clone(), move |result| post(&mailbox, Reply::AuthFinished { slot, instance: asked, id, result }));
+                net.complete_auth(&instance, id, &answer, ctx.clone(), move |result| {
+                    post(&mailbox, Reply::AuthFinished { slot, instance: asked, id, result })
+                });
             }
             Act::SignOut { instance } => net.logout(&instance, ctx.clone(), done),
             Act::StopSigningIn { instance, id } => {
@@ -578,7 +659,9 @@ impl Agents {
         let Some(session) = slot.current_session().filter(|s| s.thread.is_some()).cloned() else { return };
         let mailbox = self.mailbox.clone();
         let (for_slot, resume) = (slot.id.clone(), session.native_id.clone());
-        net.close_slot_session(&slot.id, &session.key, ctx.clone(), move |result| post(&mailbox, Reply::Restart { slot: for_slot, resume, result }));
+        net.close_slot_session(&slot.id, &session.key, ctx.clone(), move |result| {
+            post(&mailbox, Reply::Restart { slot: for_slot, resume, result })
+        });
     }
 
     /// Takes what the server answered, and asks for the tool servers once
@@ -675,7 +758,10 @@ impl Agents {
                 Reply::Tools { result: Err(e), saved } => {
                     self.errors.insert(saved.unwrap_or_else(|| SlotId::new(LEAD)), e.into());
                 }
-                Reply::Saved(slot, Err(e)) | Reply::Done(slot, Err(e)) | Reply::SlotMade(slot, Err(e)) | Reply::Restart { slot, result: Err(e), .. } => {
+                Reply::Saved(slot, Err(e))
+                | Reply::Done(slot, Err(e))
+                | Reply::SlotMade(slot, Err(e))
+                | Reply::Restart { slot, result: Err(e), .. } => {
                     self.errors.insert(slot, e.into());
                 }
                 Reply::Sent(_, Ok(())) | Reply::Done(_, Ok(())) => {}
@@ -734,7 +820,11 @@ pub(crate) mod tests {
         let (ctx, net) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"));
         agents.act(SlotId::new(LEAD), Act::Prompt { message: "hello".into(), add: false }, &net, &ctx);
         assert!(matches!(agents.state(&SlotId::new(LEAD)), AgentState::CantRun(e) if e.contains("no harness instance")));
-        assert_eq!(agents.error(&SlotId::new(LEAD)).map(String::as_str), Some("No harness instance is available yet."), "said in the lead's chat");
+        assert_eq!(
+            agents.error(&SlotId::new(LEAD)).map(String::as_str),
+            Some("No harness instance is available yet."),
+            "said in the lead's chat"
+        );
     }
 
     /// One answer to how an agent is, as every place names it: idle,
@@ -753,13 +843,30 @@ pub(crate) mod tests {
         agents.cant_open.insert(lead.clone(), "refused".into());
         assert_eq!(agents.state(&lead), AgentState::Idle);
         agents.cant_open.clear();
-        let turn = |status| ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("now"), thread_id: ThreadId::new("t"), ordinal: 2, status, failure: None, usage: None } } };
+        let turn = |status| ClientEvent::Session {
+            event: AdapterEvent::TurnUpdated {
+                turn: Turn { id: TurnId::new("now"), thread_id: ThreadId::new("t"), ordinal: 2, status, failure: None, usage: None },
+            },
+        };
         agents.apply(turn(TurnStatus::Running));
         assert_eq!(agents.state(&lead), AgentState::Working { subagents: 0 });
         assert_eq!(agents.state(&lead).words(), "working");
         // Its turn over, a sub-agent of its still at work: working.
         agents.apply(turn(TurnStatus::Completed));
-        let sub = harness_contracts::Subagent { id: harness_contracts::SubagentId::new("a"), thread_id: ThreadId::new("t"), item_id: harness_contracts::ItemId::new("i50"), title: "Helper".into(), kind: None, description: None, prompt: None, answer: None, status: harness_contracts::SubagentStatus::Running, started_ms: 0, ended_ms: None, can_cancel: false };
+        let sub = harness_contracts::Subagent {
+            id: harness_contracts::SubagentId::new("a"),
+            thread_id: ThreadId::new("t"),
+            item_id: harness_contracts::ItemId::new("i50"),
+            title: "Helper".into(),
+            kind: None,
+            description: None,
+            prompt: None,
+            answer: None,
+            status: harness_contracts::SubagentStatus::Running,
+            started_ms: 0,
+            ended_ms: None,
+            can_cancel: false,
+        };
         agents.apply(ClientEvent::Session { event: AdapterEvent::SubagentUpdated { subagent: sub } });
         assert_eq!(agents.state(&lead).words(), "1 sub-agent working");
         // No session running: its last, to resume.
@@ -767,7 +874,11 @@ pub(crate) mod tests {
         slot.sessions[0].native_id = Some(NativeId::new("n1"));
         agents.apply(ClientEvent::SlotUpdated { slot });
         assert_eq!(agents.state(&lead), AgentState::NoSession { resume: Some(NativeId::new("n1")) });
-        let discussion = crate::discussions::tests::discussion(1, harness_contracts::Subject::CodeFile { path: "a.rs".into() }, harness_contracts::DiscussionStatus::Open);
+        let discussion = crate::discussions::tests::discussion(
+            1,
+            harness_contracts::Subject::CodeFile { path: "a.rs".into() },
+            harness_contracts::DiscussionStatus::Open,
+        );
         assert_eq!(agents.whose(&discussion).0, "waiting on lead: no session running");
     }
 
@@ -785,7 +896,10 @@ pub(crate) mod tests {
             for event in [ClientEvent::Resync, ClientEvent::Replayed] {
                 agents.apply_stamped(harness_contracts::Stamped { at_ms: server_now - late_ms, event }, came);
             }
-            crate::chat::tests::conversation_events().into_iter().filter(|e| *e != ClientEvent::Replayed).for_each(|event| agents.apply_stamped(harness_contracts::Stamped { at_ms: server_now - late_ms - 3_000, event }, came));
+            crate::chat::tests::conversation_events()
+                .into_iter()
+                .filter(|e| *e != ClientEvent::Replayed)
+                .for_each(|event| agents.apply_stamped(harness_contracts::Stamped { at_ms: server_now - late_ms - 3_000, event }, came));
             let heard = agents.thread_in(&SlotId::new(LEAD)).and_then(|t| t.last_heard()).unwrap();
             let ago = (late_ms + 3_000) as f64 / 1000.0;
             assert!((agents.now - heard - ago).abs() < 0.5, "{ahead_ms} {late_ms}: heard {heard}");

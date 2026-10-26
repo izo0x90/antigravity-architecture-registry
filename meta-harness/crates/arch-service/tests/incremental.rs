@@ -46,7 +46,8 @@ fn open(root: &Path, kept: bool) -> ArchitectureService {
         true => open_facts(root, &Limits::defaults().unwrap()).unwrap(),
         false => arch_service::temporary_facts(&Limits::defaults().unwrap()).unwrap(),
     };
-    ArchitectureService::open(root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap()
+    ArchitectureService::open(root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts)
+        .unwrap()
 }
 
 /// The graph as text, in a fixed order.
@@ -116,10 +117,12 @@ fn a_file_changed_just_now_isnt_trusted_by_its_time() {
     let service = open(&root, true);
     service.ingest(&root).unwrap();
     // Same size, written now: its time can't tell a second edit in the same tick.
-    std::fs::write(root.join("src/util.rs"), std::fs::read_to_string(root.join("src/util.rs")).unwrap().replace("helper", "helpme")).unwrap();
+    std::fs::write(root.join("src/util.rs"), std::fs::read_to_string(root.join("src/util.rs")).unwrap().replace("helper", "helpme"))
+        .unwrap();
     let first = service.ingest(&root).unwrap();
     assert_eq!(first.parsed, 1);
-    std::fs::write(root.join("src/util.rs"), std::fs::read_to_string(root.join("src/util.rs")).unwrap().replace("helpme", "helpus")).unwrap();
+    std::fs::write(root.join("src/util.rs"), std::fs::read_to_string(root.join("src/util.rs")).unwrap().replace("helpme", "helpus"))
+        .unwrap();
     let second = service.ingest(&root).unwrap();
     assert_eq!(second.parsed, 1, "the second edit is seen: {second:?}");
     assert!(text(&service.observed().unwrap()).contains("helpus"));

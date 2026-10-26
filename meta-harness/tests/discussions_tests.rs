@@ -29,34 +29,67 @@ async fn until(what: &str, mut done: impl FnMut() -> bool) {
 async fn agents_read_start_reply_and_answer_discussions_and_the_slot_asked_is_told() {
     let arch = fixture_architecture();
     arch.create_plan("p", "Plan", "", arch_graph::PlanKind::Review).unwrap();
-    arch.apply(&PlanId::new("p").unwrap(), arch_service::PlanOp::AddItem { title: "Flaky test".into(), text: "It fails one run in ten.".into(), under: None }).unwrap();
+    arch.apply(
+        &PlanId::new("p").unwrap(),
+        arch_service::PlanOp::AddItem { title: "Flaky test".into(), text: "It fails one run in ten.".into(), under: None },
+    )
+    .unwrap();
     let (addr, state) = spawn_app_with(arch.clone()).await;
     let mut lead = Mcp::lead(addr).await;
     let slots = state.harness.slots.clone();
     // What the lead's session was sent (the fake harness says it back).
-    let told = || slots.read(&SlotId::new("lead"), 50).unwrap().messages.into_iter().filter_map(|(_, text)| text.strip_prefix("echo: ").map(str::to_owned)).collect::<Vec<_>>();
+    let told = || {
+        slots
+            .read(&SlotId::new("lead"), 50)
+            .unwrap()
+            .messages
+            .into_iter()
+            .filter_map(|(_, text)| text.strip_prefix("echo: ").map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
 
     // The user asks the lead about an item: the lead's session is told.
     let item = harness_contracts::Subject::PlanItem { plan: PlanId::new("p").unwrap(), item: "i1".into() };
-    let (status, body) = http(addr, "POST", "/api/discussions", Some(&json!({ "subject": item, "text": "Why does it fail?" }).to_string())).await;
+    let (status, body) =
+        http(addr, "POST", "/api/discussions", Some(&json!({ "subject": item, "text": "Why does it fail?" }).to_string())).await;
     assert_eq!(status, 200, "{body}");
-    until("the lead told", || told().iter().any(|t| t.contains("From the user (discussion d1):") && t.contains("Discussion d1 on plan p item i1: the user asks you:\n\nWhy does it fail?"))).await;
-    let (status, body) = http(addr, "POST", "/api/discussions", Some(&json!({ "subject": item, "text": "x", "asked": "nobody" }).to_string())).await;
+    until("the lead told", || {
+        told().iter().any(|t| {
+            t.contains("From the user (discussion d1):")
+                && t.contains("Discussion d1 on plan p item i1: the user asks you:\n\nWhy does it fail?")
+        })
+    })
+    .await;
+    let (status, body) =
+        http(addr, "POST", "/api/discussions", Some(&json!({ "subject": item, "text": "x", "asked": "nobody" }).to_string())).await;
     assert!(status == 400 && body.contains(r#"no agent slot \"nobody\""#), "{body}");
 
     // What waits on the lead comes first; read whole.
     let (error, listed) = lead.tool("discuss", json!({ "on": "plan p", "text": "Is this list complete?", "ask": "user" })).await;
     assert!(!error && listed.contains("Started d2 · question on plan p (open, asks the user) by lead"), "{listed}");
     let (_, listed) = lead.tool("discussions", json!({ "plan": "p" })).await;
-    assert_eq!(listed, "Waiting on you:\n- d1 · question on plan p item i1 (open, asks lead) by the user: Why does it fail?\nThe rest:\n- d2 · question on plan p (open, asks the user) by lead: Is this list complete?", "{listed}");
+    assert_eq!(
+        listed,
+        "Waiting on you:\n- d1 · question on plan p item i1 (open, asks lead) by the user: Why does it fail?\nThe rest:\n- d2 · question on plan p (open, asks the user) by lead: Is this list complete?",
+        "{listed}"
+    );
     let (_, read) = lead.tool("discussion_read", json!({ "id": "d1" })).await;
-    assert!(read.contains("Whose move: yours (lead is asked).") && read.contains("plan p item i1 now (") && read.contains("Flaky test (open)\n  It fails one run in ten.") && read.contains("- the user said ("), "{read}");
+    assert!(
+        read.contains("Whose move: yours (lead is asked).")
+            && read.contains("plan p item i1 now (")
+            && read.contains("Flaky test (open)\n  It fails one run in ten.")
+            && read.contains("- the user said ("),
+        "{read}"
+    );
     let (status, body) = http(addr, "GET", "/api/discussions/d2", None).await;
     assert_eq!((status, parse(&body)["asked"].as_str()), (200, Some("user")), "an agent asks the user");
     // The user says their answer: the lead, who asked, is told; the user settles it.
     let (status, _) = http(addr, "POST", "/api/discussions/d2/reply", Some(r#"{"text":"Yes, complete."}"#)).await;
     assert_eq!(status, 200);
-    until("the lead told the user's answer", || told().iter().any(|t| t.contains("Discussion d2 on plan p: the user said:\n\nYes, complete."))).await;
+    until("the lead told the user's answer", || {
+        told().iter().any(|t| t.contains("Discussion d2 on plan p: the user said:\n\nYes, complete."))
+    })
+    .await;
     let (status, body) = http(addr, "POST", "/api/discussions/d2/settle", Some("{}")).await;
     assert_eq!((status, parse(&body)["status"].as_str()), (200, Some("settled")), "{body}");
     until("the lead told it's settled", || told().iter().any(|t| t.contains("Discussion d2 on plan p: the user settled it"))).await;
@@ -81,7 +114,13 @@ async fn agents_read_start_reply_and_answer_discussions_and_the_slot_asked_is_to
     // (An agent can't ask itself.)
     let (error, said) = lead.tool("discuss", json!({ "on": "plan p item i1", "kind": "change_request", "text": "Mark it decided?" })).await;
     assert!(error && said.contains("can't ask yourself"), "{said}");
-    let (status, body) = http(addr, "POST", "/api/discussions", Some(&json!({ "subject": item, "kind": "change_request", "text": "Mark it decided?" }).to_string())).await;
+    let (status, body) = http(
+        addr,
+        "POST",
+        "/api/discussions",
+        Some(&json!({ "subject": item, "kind": "change_request", "text": "Mark it decided?" }).to_string()),
+    )
+    .await;
     assert_eq!(status, 200, "{body}");
     let (error, said) = lead.tool("discussion_answer", json!({ "id": "d3", "text": "No change." })).await;
     assert!(error && said.contains("name what you changed"), "{said}");
@@ -115,7 +154,13 @@ async fn a_sub_slot_asks_the_lead_only_the_lead_answers_and_the_asker_is_told() 
     // Two may share a name: asked by it, which is asked (by its id).
     let (status, body) = http(addr, "POST", "/api/slots", Some(r#"{"instanceId":"fake","name":"helper"}"#)).await;
     assert_eq!(status, 200, "{body}");
-    let (status, body) = http(addr, "POST", "/api/discussions", Some(&json!({ "subject": { "kind": "plan", "plan": "p" }, "text": "x", "asked": "helper" }).to_string())).await;
+    let (status, body) = http(
+        addr,
+        "POST",
+        "/api/discussions",
+        Some(&json!({ "subject": { "kind": "plan", "plan": "p" }, "text": "x", "asked": "helper" }).to_string()),
+    )
+    .await;
     assert!(status == 400 && body.contains("several are named so"), "{body}");
     // Nor is one named as the user is (only the user settles: `by` "user").
     for name in ["user", "You"] {
@@ -155,10 +200,27 @@ async fn a_sub_slot_asks_the_lead_only_the_lead_answers_and_the_asker_is_told() 
     assert!(!listed.contains("d2"), "not listed to it: {listed}");
     let (error, said) = lead.tool("discussion_answer", json!({ "id": "d1", "text": "Yes, done: see #notes" })).await;
     assert!(!error, "{said}");
-    let told = || slots.read(&sub_ids[0], 50).unwrap().messages.into_iter().filter_map(|(_, text)| text.strip_prefix("echo: ").map(str::to_owned)).collect::<Vec<_>>();
-    until("the helper told the answer", || told().iter().any(|t| t.contains("Discussion d1 on plan p: lead answered it:\n\nYes, done: see #notes"))).await;
+    let told = || {
+        slots
+            .read(&sub_ids[0], 50)
+            .unwrap()
+            .messages
+            .into_iter()
+            .filter_map(|(_, text)| text.strip_prefix("echo: ").map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
+    until("the helper told the answer", || {
+        told().iter().any(|t| t.contains("Discussion d1 on plan p: lead answered it:\n\nYes, done: see #notes"))
+    })
+    .await;
     // Asked by the user, the helper sees it waiting on it (by its slot, not its name).
-    let (status, body) = http(addr, "POST", "/api/discussions", Some(&json!({ "subject": { "kind": "plan", "plan": "p" }, "text": "Your view?", "asked": sub_ids[0].as_str() }).to_string())).await;
+    let (status, body) = http(
+        addr,
+        "POST",
+        "/api/discussions",
+        Some(&json!({ "subject": { "kind": "plan", "plan": "p" }, "text": "Your view?", "asked": sub_ids[0].as_str() }).to_string()),
+    )
+    .await;
     assert_eq!(status, 200, "{body}");
     let asked_helper = parse(&body)["id"].as_str().unwrap().to_owned();
     let (_, listed) = helper.tool("discussions", json!({})).await;

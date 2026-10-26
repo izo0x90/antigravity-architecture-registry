@@ -169,7 +169,18 @@ mod tests {
     #[test]
     fn what_matters_is_seen_where_it_ends_even_split_across_reads() {
         let out: &[u8] = b"\x1b]133;A;m1\x07$ \x1b]133;B;m1\x07make\x1b]633;E;make;m1\x07\x1b]133;C;m1\x07building\r\n\x1b]0;title\x07done\x1b]133;D;2;m1\x1b\\$ \x1b[31mred\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[?2026hframe\x1b[?2026l\x1b[?1049h\x1bc";
-        let want = [Seen::Prompt, Seen::Input, Seen::Typed("make".into()), Seen::Started, Seen::Finished(Some(2)), Seen::ClearedHistory, Seen::SyncStart, Seen::SyncEnd, Seen::AltScreen, Seen::Reset];
+        let want = [
+            Seen::Prompt,
+            Seen::Input,
+            Seen::Typed("make".into()),
+            Seen::Started,
+            Seen::Finished(Some(2)),
+            Seen::ClearedHistory,
+            Seen::SyncStart,
+            Seen::SyncEnd,
+            Seen::AltScreen,
+            Seen::Reset,
+        ];
         let whole = seen(&[out]);
         assert_eq!(whole.iter().map(|(_, s)| s.clone()).collect::<Vec<_>>(), want, "another OSC, colours, 2J aren't");
         for (end, s) in &whole {

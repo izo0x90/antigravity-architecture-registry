@@ -3,7 +3,10 @@
 
 use std::fmt::Write;
 
-use arch_graph::{CodeAnchor, Component, ComponentId, Graph, ImplementationSpec, Invariant, Plan, ProposedLocation, RelationKind, SchemaSet, Schemas, Signature, Span, Stage, Status, ToolRef};
+use arch_graph::{
+    CodeAnchor, Component, ComponentId, Graph, ImplementationSpec, Invariant, Plan, ProposedLocation, RelationKind, SchemaSet, Schemas,
+    Signature, Span, Stage, Status, ToolRef,
+};
 use serde_json::Value;
 
 use crate::checks::effective_with_source;
@@ -153,15 +156,24 @@ pub fn slice(plan: &Plan, planned: &Component, graph: &Graph, set: &SchemaSet) -
         outputs: outputs.map(|(v, _)| resolve(v)),
     };
     let flows = |incoming: bool| -> Vec<FlowNeighbor> {
-        let relations: Vec<_> = if incoming { graph.incoming(id, Some(RelationKind::DataFlow)).collect() } else { graph.outgoing(id, Some(RelationKind::DataFlow)).collect() };
+        let relations: Vec<_> = if incoming {
+            graph.incoming(id, Some(RelationKind::DataFlow)).collect()
+        } else {
+            graph.outgoing(id, Some(RelationKind::DataFlow)).collect()
+        };
         relations
             .into_iter()
-            .filter_map(|r| neighbor(graph, if incoming { &r.source } else { &r.target }, &r.note).map(|n| FlowNeighbor { neighbor: n, ports: r.ports.clone() }))
+            .filter_map(|r| {
+                neighbor(graph, if incoming { &r.source } else { &r.target }, &r.note)
+                    .map(|n| FlowNeighbor { neighbor: n, ports: r.ports.clone() })
+            })
             .collect()
     };
     let mut calls: Vec<(u32, Neighbor)> = graph
         .outgoing(id, Some(RelationKind::Calls))
-        .filter_map(|r| neighbor(graph, &r.target, &r.note).map(|n| (r.order.unwrap_or(u32::MAX), Neighbor { expects: r.expects.clone(), ..n })))
+        .filter_map(|r| {
+            neighbor(graph, &r.target, &r.note).map(|n| (r.order.unwrap_or(u32::MAX), Neighbor { expects: r.expects.clone(), ..n }))
+        })
         .collect();
     calls.sort_by_key(|(order, n)| (*order, n.id.clone()));
     ContractSlice {
@@ -194,10 +206,14 @@ pub fn slice(plan: &Plan, planned: &Component, graph: &Graph, set: &SchemaSet) -
 fn sig(s: &Option<Signature>) -> String {
     match s {
         Some(s) => {
-            let params: Vec<String> = s.params.iter().map(|p| match &p.ty {
-                Some(t) => format!("{}: {t}", p.name),
-                None => p.name.clone(),
-            }).collect();
+            let params: Vec<String> = s
+                .params
+                .iter()
+                .map(|p| match &p.ty {
+                    Some(t) => format!("{}: {t}", p.name),
+                    None => p.name.clone(),
+                })
+                .collect();
             match &s.returns {
                 Some(r) => format!("({}) -> {r}", params.join(", ")),
                 None => format!("({})", params.join(", ")),
@@ -209,7 +225,12 @@ fn sig(s: &Option<Signature>) -> String {
 
 fn effects(out: &mut String, prefix: &str, list: &[arch_graph::SideEffect]) {
     for e in list {
-        let _ = writeln!(out, "{prefix}`{}`{}", e.target, if e.description.is_empty() { String::new() } else { format!(": {}", e.description) });
+        let _ = writeln!(
+            out,
+            "{prefix}`{}`{}",
+            e.target,
+            if e.description.is_empty() { String::new() } else { format!(": {}", e.description) }
+        );
     }
 }
 
@@ -252,7 +273,13 @@ impl ContractSlice {
                 let _ = writeln!(out, "In the code: `{}` in {} (lines {}-{}).", a.symbol, a.file, a.span.start_line, a.span.end_line);
             }
             (None, Some(p)) => {
-                let _ = writeln!(out, "Put it in {} as `{}`{}.", p.file, p.symbol, p.parent.as_ref().map(|x| format!(", inside {x}")).unwrap_or_default());
+                let _ = writeln!(
+                    out,
+                    "Put it in {} as `{}`{}.",
+                    p.file,
+                    p.symbol,
+                    p.parent.as_ref().map(|x| format!(", inside {x}")).unwrap_or_default()
+                );
             }
             (None, None) => out.push_str("Not placed yet.\n"),
         }
@@ -289,7 +316,15 @@ impl ContractSlice {
             }
             let _ = writeln!(out, "\n## {title}");
             for n in list {
-                let _ = writeln!(out, "- `{}` {} {} — {}{}", n.name, n.type_name, sig(&n.signature), where_(n), if n.note.is_empty() { String::new() } else { format!(" ({})", n.note) });
+                let _ = writeln!(
+                    out,
+                    "- `{}` {} {} — {}{}",
+                    n.name,
+                    n.type_name,
+                    sig(&n.signature),
+                    where_(n),
+                    if n.note.is_empty() { String::new() } else { format!(" ({})", n.note) }
+                );
                 if let Some(expects) = &n.expects {
                     for (what, schema) in [("passes", &expects.inputs), ("gets back", &expects.outputs)] {
                         if let Some(schema) = schema {
@@ -303,7 +338,8 @@ impl ContractSlice {
         section(&mut out, "Must call (in order)", &self.calls);
         section(&mut out, "Called by", &self.called_by);
         section(&mut out, "Implements", &self.implements);
-        let inherited: Vec<Neighbor> = self.interface_chain.iter().filter(|n| !self.implements.iter().any(|d| d.id == n.id)).cloned().collect();
+        let inherited: Vec<Neighbor> =
+            self.interface_chain.iter().filter(|n| !self.implements.iter().any(|d| d.id == n.id)).cloned().collect();
         section(&mut out, "Through those, also implements", &inherited);
         let flows = |out: &mut String, title: &str, list: &[FlowNeighbor]| {
             if list.is_empty() {

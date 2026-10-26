@@ -62,7 +62,14 @@ impl Changes {
 
     /// What changed after `since` (all of it when `since` is none or from
     /// before the screen last changed whole).
-    pub fn since<T: EventListener>(&self, term: &Term<T>, feed: &Feed, commands: &Commands, since: Option<u64>, title: &str) -> ScreenUpdate {
+    pub fn since<T: EventListener>(
+        &self,
+        term: &Term<T>,
+        feed: &Feed,
+        commands: &Commands,
+        since: Option<u64>,
+        title: &str,
+    ) -> ScreenUpdate {
         let full = since.is_none_or(|s| s < self.whole);
         let rows = (0..term.screen_lines())
             .filter(|&r| full || since.is_some_and(|s| self.rows.get(r).copied().unwrap_or(0) > s))
@@ -74,7 +81,11 @@ impl Changes {
             size: TermSize { cols: term.columns() as u16, rows: term.screen_lines() as u16 },
             full,
             rows,
-            cursor: Cursor { row: point.line.0.max(0) as u16, col: point.column.0 as u16, visible: term.mode().contains(TermMode::SHOW_CURSOR) },
+            cursor: Cursor {
+                row: point.line.0.max(0) as u16,
+                col: point.column.0 as u16,
+                visible: term.mode().contains(TermMode::SHOW_CURSOR),
+            },
             top: feed.top(),
             oldest: feed.oldest(),
             alternate: term.mode().contains(TermMode::ALT_SCREEN),
@@ -284,7 +295,12 @@ pub fn row<T: EventListener>(term: &Term<T>, line: Line) -> Row {
     }
     // Trailing blanks in the plain style aren't sent.
     while let Some(last) = runs.last_mut() {
-        if last.wide || last.style.bg != Colour::Default || last.style.has(Style::INVERSE) || last.style.has(Style::UNDERLINE) || last.style.has(Style::STRIKE) {
+        if last.wide
+            || last.style.bg != Colour::Default
+            || last.style.has(Style::INVERSE)
+            || last.style.has(Style::UNDERLINE)
+            || last.style.has(Style::STRIKE)
+        {
             break;
         }
         let kept = last.text.trim_end_matches(' ').len();

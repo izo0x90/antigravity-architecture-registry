@@ -26,7 +26,9 @@ fn sample(dir: &Path) -> (PathBuf, ArchitectureService) {
     let root = dir.join("sample");
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample"), &root);
     let facts = arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap();
-    let service = ArchitectureService::open(&root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap();
+    let service =
+        ArchitectureService::open(&root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts)
+            .unwrap();
     service.ingest(&root).unwrap();
     (root, service)
 }

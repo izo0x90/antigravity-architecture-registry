@@ -90,7 +90,8 @@ impl StateDb {
     /// The cockpit's state as it last saved it.
     pub fn ui_state(&self) -> Result<Option<Value>, StateError> {
         self.transaction(|tx| {
-            let text: Option<String> = tx.query_row("SELECT json FROM ui_state WHERE id = 1", [], |r| r.get(0)).optional().map_err(failed)?;
+            let text: Option<String> =
+                tx.query_row("SELECT json FROM ui_state WHERE id = 1", [], |r| r.get(0)).optional().map_err(failed)?;
             text.map(|t| serde_json::from_str(&t).map_err(failed)).transpose()
         })
     }
@@ -99,7 +100,8 @@ impl StateDb {
     /// its settings): none before it ever saved.
     pub fn ui_shell(&self) -> Result<Option<Value>, StateError> {
         self.transaction(|tx| {
-            let text: Option<String> = tx.query_row("SELECT json FROM ui_shell WHERE id = 1", [], |r| r.get(0)).optional().map_err(failed)?;
+            let text: Option<String> =
+                tx.query_row("SELECT json FROM ui_shell WHERE id = 1", [], |r| r.get(0)).optional().map_err(failed)?;
             text.map(|t| serde_json::from_str(&t).map_err(failed)).transpose()
         })
     }
@@ -110,7 +112,8 @@ impl StateDb {
         }
         let text = serde_json::to_string(state).map_err(failed)?;
         self.transaction(|tx| {
-            tx.execute("INSERT INTO ui_shell (id, json) VALUES (1, ?1) ON CONFLICT (id) DO UPDATE SET json = excluded.json", params![text]).map_err(failed)?;
+            tx.execute("INSERT INTO ui_shell (id, json) VALUES (1, ?1) ON CONFLICT (id) DO UPDATE SET json = excluded.json", params![text])
+                .map_err(failed)?;
             Ok(())
         })
     }
@@ -122,7 +125,8 @@ impl StateDb {
         }
         let text = serde_json::to_string(state).map_err(failed)?;
         self.transaction(|tx| {
-            tx.execute("INSERT INTO ui_state (id, json) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET json = excluded.json", params![text]).map_err(failed)?;
+            tx.execute("INSERT INTO ui_state (id, json) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET json = excluded.json", params![text])
+                .map_err(failed)?;
             Ok(())
         })
     }
@@ -134,7 +138,8 @@ impl StateDb {
     pub fn drafts(&self) -> Result<BTreeMap<String, harness_contracts::Message>, StateError> {
         self.transaction(|tx| {
             let mut rows = tx.prepare("SELECT slot, text, links FROM drafts").map_err(failed)?;
-            let found = rows.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))).map_err(failed)?;
+            let found =
+                rows.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))).map_err(failed)?;
             found
                 .map(|row| {
                     let (slot, text, links) = row.map_err(failed)?;
@@ -173,7 +178,11 @@ impl StateDb {
     pub fn put_feedback(&self, id: &str, item: &Value) -> Result<usize, StateError> {
         let text = serde_json::to_string(item).map_err(failed)?;
         self.transaction(|tx| {
-            tx.execute("INSERT INTO feedback (id, json) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET json = excluded.json", params![id, text]).map_err(failed)?;
+            tx.execute(
+                "INSERT INTO feedback (id, json) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET json = excluded.json",
+                params![id, text],
+            )
+            .map_err(failed)?;
             tx.query_row("SELECT COUNT(*) FROM feedback", [], |r| r.get::<_, i64>(0)).map(|n| n as usize).map_err(failed)
         })
     }
@@ -188,9 +197,18 @@ impl StateDb {
     /// The last `limit` entries, newest first.
     pub fn activity(&self, limit: usize) -> Result<Vec<Activity>, StateError> {
         self.transaction(|tx| {
-            let mut stmt = tx.prepare("SELECT at_ms, actor, action, subject, detail FROM activity ORDER BY seq DESC LIMIT ?1").map_err(failed)?;
+            let mut stmt =
+                tx.prepare("SELECT at_ms, actor, action, subject, detail FROM activity ORDER BY seq DESC LIMIT ?1").map_err(failed)?;
             let rows = stmt
-                .query_map(params![limit as i64], |r| Ok(Activity { at_ms: r.get::<_, i64>(0)? as u64, actor: r.get(1)?, action: r.get(2)?, subject: r.get(3)?, detail: r.get(4)? }))
+                .query_map(params![limit as i64], |r| {
+                    Ok(Activity {
+                        at_ms: r.get::<_, i64>(0)? as u64,
+                        actor: r.get(1)?,
+                        action: r.get(2)?,
+                        subject: r.get(3)?,
+                        detail: r.get(4)?,
+                    })
+                })
                 .map_err(failed)?;
             rows.map(|r| r.map_err(failed)).collect()
         })
@@ -231,7 +249,13 @@ fn owner_only(path: &Path) -> Result<(), StateError> {
 }
 
 fn take_lock(path: &Path) -> Result<File, StateError> {
-    let mut file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|e| failed(format!("{}: {e}", path.display())))?;
     match file.try_lock() {
         Ok(()) => {
             file.set_len(0).and_then(|()| file.rewind()).and_then(|()| write!(file, "{}", std::process::id())).map_err(failed)?;

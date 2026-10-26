@@ -56,7 +56,8 @@ fn on_the_graph_the_wheel_moves_ctrl_wheel_and_pinching_zoom_and_a_flick_glides(
     // A drag moves it; let go moving and it glides on, slowing to a stop.
     let mut t = 1.0;
     let mut at = middle;
-    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    let button =
+        |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
     frame_at(&ctx, &mut app, vec![button(at, true)], t);
     for _ in 0..5 {
         (t, at) = (t + 0.016, at + egui::vec2(20.0, 0.0));
@@ -124,7 +125,11 @@ fn on_the_graph_fingers_tap_select_double_tap_go_in_drag_and_two_pinch_and_pan()
     // fingers went.
     let (z, before) = (zoom(&app), pan(&app));
     feed(&mut app, two(egui::TouchPhase::Move, a + egui::vec2(-25.0, -40.0), b + egui::vec2(25.0, -40.0)));
-    assert!((zoom(&app) - z).abs() < 1e-4 && (pan(&app).y - (before.y - 40.0)).abs() < 0.5, "moved together: it pans with them: {:?} from {before:?}", pan(&app));
+    assert!(
+        (zoom(&app) - z).abs() < 1e-4 && (pan(&app).y - (before.y - 40.0)).abs() < 0.5,
+        "moved together: it pans with them: {:?} from {before:?}",
+        pan(&app)
+    );
     feed(&mut app, two(egui::TouchPhase::End, a + egui::vec2(-25.0, -40.0), b + egui::vec2(25.0, -40.0)));
     let lifted = pan(&app);
     feed(&mut app, vec![]);
@@ -158,7 +163,11 @@ fn a_swipe_where_the_view_moves_sideways_moves_it_instead() {
     assert!(app.fingers);
     let line = app.desk.code().target_line;
     let mut flick = |app: &mut CockpitApp, dx: f32| {
-        for (phase, pos) in [(egui::TouchPhase::Start, middle), (egui::TouchPhase::Move, middle + egui::vec2(dx, 0.0)), (egui::TouchPhase::End, middle + egui::vec2(dx, 0.0))] {
+        for (phase, pos) in [
+            (egui::TouchPhase::Start, middle),
+            (egui::TouchPhase::Move, middle + egui::vec2(dx, 0.0)),
+            (egui::TouchPhase::End, middle + egui::vec2(dx, 0.0)),
+        ] {
             t += 0.05;
             frame_at(&ctx, app, finger(phase, pos), t);
         }
@@ -211,11 +220,28 @@ fn what_comes_and_goes_on_the_top_and_bottom_lines_never_moves_a_button() {
     app.desk.graph_mut().select(Some("rust:a::step".into()));
     frame(&ctx, &mut app, vec![]);
     let before = frame(&ctx, &mut app, vec![]);
-    let (group, key) = (drawn_at(&before, "Buffer  Space b").expect("a group's button"), drawn_at(&before, "f Jump to").expect("a key on the bar"));
+    let (group, key) =
+        (drawn_at(&before, "Buffer  Space b").expect("a group's button"), drawn_at(&before, "f Jump to").expect("a key on the bar"));
     let reread = drawn_at(&before, "Space I r").expect("the top bar's re-read button");
     // Something waits on you: the bell counts it, and the tray an update.
-    for (id, kind) in [("q:1", harness_contracts::NotificationKind::Question), ("turn:1", harness_contracts::NotificationKind::TurnFinished)] {
-        let notification = harness_contracts::Notification { id: harness_contracts::NotificationId::new(id), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, terminal: None, discussion: None, title: id.into(), detail: None, at_ms: 0, state: harness_contracts::NotificationState::Open };
+    for (id, kind) in
+        [("q:1", harness_contracts::NotificationKind::Question), ("turn:1", harness_contracts::NotificationKind::TurnFinished)]
+    {
+        let notification = harness_contracts::Notification {
+            id: harness_contracts::NotificationId::new(id),
+            server: None,
+            level: kind.level(),
+            kind,
+            slot: None,
+            thread: None,
+            request: None,
+            terminal: None,
+            discussion: None,
+            title: id.into(),
+            detail: None,
+            at_ms: 0,
+            state: harness_contracts::NotificationState::Open,
+        };
         app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::NotificationUpdated { notification });
     }
     // Busy (reading the view again), saying more, and a note at the bottom.

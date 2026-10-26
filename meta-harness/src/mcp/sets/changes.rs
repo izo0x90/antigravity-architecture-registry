@@ -76,7 +76,8 @@ impl Changes {
     }
 
     async fn files(changes: Arc<nah_changes::Changes>, comparison: Comparison) -> Result<String, ServiceError> {
-        let list = tokio::task::spawn_blocking(move || changes.list(&comparison, 0, nah_changes::PAGE)).await.map_err(failed)?.map_err(failed)?;
+        let list =
+            tokio::task::spawn_blocking(move || changes.list(&comparison, 0, nah_changes::PAGE)).await.map_err(failed)?.map_err(failed)?;
         let mut out = format!("{}: {} files changed\n", list.comparison, list.total);
         for f in &list.files {
             let group = if list.comparison.is_uncommitted() { format!("[{}] ", f.group.title().to_lowercase()) } else { String::new() };
@@ -92,11 +93,14 @@ impl Changes {
     }
 
     async fn file(changes: Arc<nah_changes::Changes>, comparison: Comparison, path: String, context: u32) -> Result<String, ServiceError> {
-        let groups = if comparison.is_uncommitted() { vec![Group::Staged, Group::Unstaged, Group::Untracked] } else { vec![Group::Changes] };
-        let read = tokio::task::spawn_blocking(move || groups.into_iter().map(|g| changes.file(&comparison, &path, g, context).map(|c| (g, c))).collect::<Result<Vec<_>, _>>())
-            .await
-            .map_err(failed)?
-            .map_err(failed)?;
+        let groups =
+            if comparison.is_uncommitted() { vec![Group::Staged, Group::Unstaged, Group::Untracked] } else { vec![Group::Changes] };
+        let read = tokio::task::spawn_blocking(move || {
+            groups.into_iter().map(|g| changes.file(&comparison, &path, g, context).map(|c| (g, c))).collect::<Result<Vec<_>, _>>()
+        })
+        .await
+        .map_err(failed)?
+        .map_err(failed)?;
         let mut out = String::new();
         for (group, file) in read.iter().filter(|(_, f)| !f.hunks.is_empty() || f.binary) {
             let _ = writeln!(out, "{} ({}):", file.path, group.title().to_lowercase());
@@ -123,7 +127,10 @@ impl Changes {
 
     async fn components(&self, changes: Arc<nah_changes::Changes>, comparison: Comparison) -> Result<String, ServiceError> {
         let arch = self.arch.clone();
-        let list = tokio::task::spawn_blocking(move || crate::routes::changes::component_changes(&arch, &changes, &comparison)).await.map_err(failed)?.map_err(failed)?;
+        let list = tokio::task::spawn_blocking(move || crate::routes::changes::component_changes(&arch, &changes, &comparison))
+            .await
+            .map_err(failed)?
+            .map_err(failed)?;
         let mut out = format!("{}: {} components touched\n", list.comparison, list.components.len());
         for c in &list.components {
             let own = if c.direct { "" } else { " (in its parts)" };
@@ -143,12 +150,24 @@ impl Changes {
         let mut out = String::from("Windows (newest first):\n");
         for w in read.windows.iter().rev() {
             let to = w.to.as_ref().map_or_else(|| "files".to_owned(), |t| format!("snapshot:{t}"));
-            let who = if w.working.is_empty() { "no session".to_owned() } else { w.working.iter().map(|x| format!("{} (turn {})", if x.slot.is_empty() { &x.thread } else { &x.slot }, x.turn)).collect::<Vec<_>>().join(", ") };
+            let who = if w.working.is_empty() {
+                "no session".to_owned()
+            } else {
+                w.working
+                    .iter()
+                    .map(|x| format!("{} (turn {})", if x.slot.is_empty() { &x.thread } else { &x.slot }, x.turn))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
             let _ = writeln!(out, "snapshot:{}..{to} from {}: {} files; working: {who}", w.from, ago(w.started_ms), w.files);
         }
         out.push_str("Turns:\n");
         for t in &read.turns {
-            let alongside = if t.alongside.is_empty() { String::new() } else { format!("; alongside: {}", t.alongside.iter().map(|x| x.turn.as_str()).collect::<Vec<_>>().join(", ")) };
+            let alongside = if t.alongside.is_empty() {
+                String::new()
+            } else {
+                format!("; alongside: {}", t.alongside.iter().map(|x| x.turn.as_str()).collect::<Vec<_>>().join(", "))
+            };
             let _ = writeln!(out, "turn {} (thread {}): {} files, changed {}{alongside}", t.turn, t.thread, t.files, t.comparison.range());
         }
         out.push_str("\nNext: changes with `changed` set to a window or a turn to read what changed then.");
@@ -166,7 +185,10 @@ impl ToolSet for Changes {
         match name {
             "changes" => {
                 let a: ChangesArgs = parse(args)?;
-                let changes = self.changes.clone().ok_or_else(|| ServiceError::InvalidOp("the project isn't in a git repository: no changes to read".into()))?;
+                let changes = self
+                    .changes
+                    .clone()
+                    .ok_or_else(|| ServiceError::InvalidOp("the project isn't in a git repository: no changes to read".into()))?;
                 if a.timeline {
                     let timeline = self.timeline.clone().ok_or_else(|| ServiceError::InvalidOp("no timeline here".into()))?;
                     return Self::timeline(timeline).await;

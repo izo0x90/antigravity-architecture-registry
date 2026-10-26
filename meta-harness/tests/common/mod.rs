@@ -4,12 +4,12 @@
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
+use arch_service::{ArchitectureService, FsPlans};
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use harness_contracts::*;
 use harness_core::*;
-use arch_service::{ArchitectureService, FsPlans};
 use meta_harness::mcp::{McpServerState, McpService};
 use meta_harness::modules::AppState;
 use meta_harness::server::{bridge_architecture_events, create_router};
@@ -102,11 +102,20 @@ impl SessionRuntime for FakeSession {
                 thread_id: self.thread.id.clone(),
                 turn_id: Some(turn.id.clone()),
                 item_id: None,
-                kind: if *ask == "[ask]" { RequestKind::Approval { action: harness_contracts::ToolAction::Command } } else { RequestKind::Question },
+                kind: if *ask == "[ask]" {
+                    RequestKind::Approval { action: harness_contracts::ToolAction::Command }
+                } else {
+                    RequestKind::Question
+                },
                 status: RequestStatus::Pending,
                 title: "Run cargo test".into(),
                 detail: None,
-                options: vec![ApprovalOption { id: "allow".into(), decision: ApprovalDecision::Accept, label: "Allow".into(), warning: None }],
+                options: vec![ApprovalOption {
+                    id: "allow".into(),
+                    decision: ApprovalDecision::Accept,
+                    label: "Allow".into(),
+                    warning: None,
+                }],
                 questions: Vec::new(),
                 response: None,
             };
@@ -119,13 +128,39 @@ impl SessionRuntime for FakeSession {
         // it links), then ends.
         self.emit(AdapterEvent::TurnUpdated { turn: Turn { status: TurnStatus::Running, failure: None, ..turn.clone() } });
         self.emit(AdapterEvent::ItemUpdated {
-            item: TurnItem { id: ItemId::new(format!("yours-{}", turn.id)), thread_id: self.thread.id.clone(), turn_id: turn.id.clone(), native_id: None, parent_id: None, ordinal: 0, status: ItemStatus::Completed, title: None, body: ItemBody::UserMessage { text: input.text.clone(), pieces: input.pieces.clone() } },
+            item: TurnItem {
+                id: ItemId::new(format!("yours-{}", turn.id)),
+                thread_id: self.thread.id.clone(),
+                turn_id: turn.id.clone(),
+                native_id: None,
+                parent_id: None,
+                ordinal: 0,
+                status: ItemStatus::Completed,
+                title: None,
+                body: ItemBody::UserMessage { text: input.text.clone(), pieces: input.pieces.clone() },
+            },
         });
         // "[tool]": it runs a tool first (what the tool gave, two lines).
         if input.text.contains("[tool]") {
             let output = vec![ContentBlock::Text { text: "tool line one\ntool line two".into() }];
             self.emit(AdapterEvent::ItemUpdated {
-                item: TurnItem { id: ItemId::new(format!("tool-{}", turn.id)), thread_id: self.thread.id.clone(), turn_id: turn.id.clone(), native_id: None, parent_id: None, ordinal: 0, status: ItemStatus::Completed, title: None, body: ItemBody::ToolCall { kind: harness_contracts::ToolKind::Execute, name: "Bash".into(), input: None, output, locations: Vec::new() } },
+                item: TurnItem {
+                    id: ItemId::new(format!("tool-{}", turn.id)),
+                    thread_id: self.thread.id.clone(),
+                    turn_id: turn.id.clone(),
+                    native_id: None,
+                    parent_id: None,
+                    ordinal: 0,
+                    status: ItemStatus::Completed,
+                    title: None,
+                    body: ItemBody::ToolCall {
+                        kind: harness_contracts::ToolKind::Execute,
+                        name: "Bash".into(),
+                        input: None,
+                        output,
+                        locations: Vec::new(),
+                    },
+                },
             });
         }
         // (What its links handed on, read with it.)
@@ -138,7 +173,16 @@ impl SessionRuntime for FakeSession {
         // "[renumber]": the session numbers its first turn anew, 9 (as one
         // does when a message is taken while a turn runs).
         if input.text.contains("[renumber]") {
-            self.emit(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn-1"), ordinal: 9, status: TurnStatus::Completed, failure: None, usage: None, thread_id: self.thread.id.clone() } });
+            self.emit(AdapterEvent::TurnUpdated {
+                turn: Turn {
+                    id: TurnId::new("turn-1"),
+                    ordinal: 9,
+                    status: TurnStatus::Completed,
+                    failure: None,
+                    usage: None,
+                    thread_id: self.thread.id.clone(),
+                },
+            });
         }
         Ok(turn.id)
     }
@@ -173,7 +217,8 @@ pub struct FakeAdapter;
 
 /// The tool servers each fake session was given, by thread: what an agent
 /// would connect to (its key included).
-static GIVEN: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<ThreadId, Vec<McpServer>>>> = std::sync::LazyLock::new(Default::default);
+static GIVEN: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<ThreadId, Vec<McpServer>>>> =
+    std::sync::LazyLock::new(Default::default);
 
 /// The tool servers a fake session was given.
 pub fn given_tools(thread: &ThreadId) -> Vec<McpServer> {
@@ -210,7 +255,14 @@ impl ProviderAdapter for FakeAdapter {
             mcp_servers: Vec::new(),
         };
         let (events, _) = broadcast::channel(64);
-        let session = FakeSession { thread: thread.clone(), events, log: Arc::default(), turns: Default::default(), asked: Mutex::default(), dead: watch::channel(false).0 };
+        let session = FakeSession {
+            thread: thread.clone(),
+            events,
+            log: Arc::default(),
+            turns: Default::default(),
+            asked: Mutex::default(),
+            dead: watch::channel(false).0,
+        };
         session.emit(AdapterEvent::ThreadUpdated { thread });
         session.emit(AdapterEvent::CatalogUpdated {
             update: CatalogUpdate {
@@ -267,7 +319,12 @@ pub struct FakeDriver;
 /// The harness the fake driver runs, as instance "fake".
 pub fn fake_harness() -> harness_contracts::HarnessEntry {
     harness_contracts::HarnessEntry {
-        profile: harness_contracts::HarnessProfile { instance: InstanceId::new(FAKE), driver: DriverKind::new(FAKE), display_name: "Fake".into(), settings: serde_json::Value::Null },
+        profile: harness_contracts::HarnessProfile {
+            instance: InstanceId::new(FAKE),
+            driver: DriverKind::new(FAKE),
+            display_name: "Fake".into(),
+            settings: serde_json::Value::Null,
+        },
         launch: harness_contracts::HarnessLaunch::Unavailable { reason: "fake".into(), fix: None },
         home: None,
         private: Vec::new(),
@@ -356,7 +413,9 @@ pub async fn spawn_app_with_hub(arch: Arc<ArchitectureService>, hub: Arc<EventHu
     registry.configure(registry.default_configs(&[fake_harness()])).await.unwrap();
     let sessions = Arc::new(SessionManager::new(registry.clone(), hub.clone()));
     let queue = meta_harness::server::queue_runner(&arch, arch_service::QueueConfig::defaults().unwrap(), &hub);
-    let db = Arc::new(nah_state::StateDb::open(&arch_service::state_dir(arch.root()).unwrap(), &arch_service::store_settings(arch.limits())).unwrap());
+    let db = Arc::new(
+        nah_state::StateDb::open(&arch_service::state_dir(arch.root()).unwrap(), &arch_service::store_settings(arch.limits())).unwrap(),
+    );
     let tool_servers = meta_harness::startup::tool_servers(&base_url, arch.root());
     let slots = meta_harness::startup::slots(&sessions, &registry, &hub, &db, &base_url, &tool_servers).unwrap();
     meta_harness::startup::reconcile_on_start(&db).unwrap();
@@ -372,9 +431,41 @@ pub async fn spawn_app_with_hub(arch: Arc<ArchitectureService>, hub: Arc<EventHu
     let terminals = Some(meta_harness::startup::terminals(&arch, &db, &hub, &things, terminal_settings.terminals).unwrap());
     let discussions = meta_harness::startup::discussions(&arch, &db, &hub, &things, &slots).unwrap();
     things.forget_unused();
-    let services = meta_harness::mcp::sets::Services { arch: arch.clone(), changes: changes.clone(), timeline: timeline.clone(), remote: remote.clone(), slots: slots.clone(), notify: notify.clone(), terminals: terminals.clone(), tags: tags.clone(), discussions: discussions.clone(), things: things.clone() };
+    let services = meta_harness::mcp::sets::Services {
+        arch: arch.clone(),
+        changes: changes.clone(),
+        timeline: timeline.clone(),
+        remote: remote.clone(),
+        slots: slots.clone(),
+        notify: notify.clone(),
+        terminals: terminals.clone(),
+        tags: tags.clone(),
+        discussions: discussions.clone(),
+        things: things.clone(),
+    };
     let mcp = McpServerState::new(Arc::new(McpService::new(services, access.clone())), meta_harness::startup::mcp_callers(&slots));
-    let state = AppState::new(meta_harness::modules::Parts { registry, sessions, slots, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, state: db, tool_servers, remote, access, notify, changes, timeline, terminals, tags, discussions, things }).unwrap();
+    let state = AppState::new(meta_harness::modules::Parts {
+        registry,
+        sessions,
+        slots,
+        hub,
+        mcp_state: mcp,
+        arch,
+        cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN),
+        queue,
+        state: db,
+        tool_servers,
+        remote,
+        access,
+        notify,
+        changes,
+        timeline,
+        terminals,
+        tags,
+        discussions,
+        things,
+    })
+    .unwrap();
     let app = create_router(&state.modules());
     let asked = state.server.shutdown.clone();
     tokio::spawn(async move { axum::serve(listener, app).with_graceful_shutdown(async move { asked.asked().await }).await.unwrap() });
@@ -420,7 +511,9 @@ pub async fn ticket(addr: SocketAddr) -> String {
 }
 
 /// The event socket, opened as the cockpit opens it (with a ticket).
-pub async fn events_socket(addr: SocketAddr) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+pub async fn events_socket(
+    addr: SocketAddr,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
     let ticket = ticket(addr).await;
     tokio_tungstenite::connect_async(format!("ws://{addr}/ws/events?ticket={ticket}")).await.unwrap().0
 }

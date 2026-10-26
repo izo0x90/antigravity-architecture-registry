@@ -97,7 +97,6 @@ impl CockpitApp {
             // The palette reads its own keys while open.
             InputMode::Palette => {}
 
-
             // The shell reads typed keys (search, hint labels, marks).
             InputMode::Capture { .. } => {
                 // Text as typed, its own erasing ('\u{8}'), then the send key
@@ -216,7 +215,9 @@ impl CockpitApp {
                     SeqMatch::None => {
                         // Any other key typed abandons a half-typed sequence (and its count).
                         if (!self.pending_keys.is_empty() || self.pending_count.is_some())
-                            && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Key { pressed: true, .. })))
+                            && ctx.input(|i| {
+                                i.events.iter().any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Key { pressed: true, .. }))
+                            })
                         {
                             self.pending_keys.clear();
                             self.pending_count = None;

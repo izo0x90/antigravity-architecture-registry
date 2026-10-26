@@ -13,8 +13,8 @@ use harness_core::{Delivery, Open, Origin, Sent, SlotSettings};
 use serde::{Deserialize, Serialize};
 
 use crate::cockpit::{Needs, can};
-use crate::server::ApiResult;
 use crate::modules::HarnessState;
+use crate::server::ApiResult;
 
 pub(crate) fn routes() -> Router<HarnessState> {
     Router::new()
@@ -60,7 +60,9 @@ struct Created {
 /// The user starts a sub-slot (the lead and the queue's workers aren't made here).
 async fn create(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Json(body): Json<NewSlot>) -> ApiResult<Json<Created>> {
     if body.role != "sub" {
-        return Err(harness_core::HarnessError::InvalidConfig { reason: format!("the cockpit starts sub-slots, not {:?}", body.role) }.into());
+        return Err(
+            harness_core::HarnessError::InvalidConfig { reason: format!("the cockpit starts sub-slots, not {:?}", body.role) }.into()
+        );
     }
     state.registry.get(&body.instance_id)?;
     let settings = SlotSettings { instance: Some(body.instance_id), policy: body.policy, model: body.model };
@@ -79,7 +81,12 @@ struct Harness {
     instance_id: InstanceId,
 }
 
-async fn harness(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(slot): Path<String>, Json(body): Json<Harness>) -> ApiResult<StatusCode> {
+async fn harness(
+    _: Needs<can::SessionsControl>,
+    State(state): State<HarnessState>,
+    Path(slot): Path<String>,
+    Json(body): Json<Harness>,
+) -> ApiResult<StatusCode> {
     state.registry.get(&body.instance_id)?;
     state.slots.set_harness(&SlotId::new(slot), body.instance_id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -95,7 +102,12 @@ struct Settings {
 }
 
 /// How the slot's next sessions run.
-async fn settings(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(slot): Path<String>, Json(body): Json<Settings>) -> ApiResult<StatusCode> {
+async fn settings(
+    _: Needs<can::SessionsControl>,
+    State(state): State<HarnessState>,
+    Path(slot): Path<String>,
+    Json(body): Json<Settings>,
+) -> ApiResult<StatusCode> {
     state.slots.set_settings(&SlotId::new(slot), body.policy, body.model).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -129,7 +141,12 @@ struct OpenedBody {
     delivered_reports: usize,
 }
 
-async fn open(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(slot): Path<String>, Json(body): Json<OpenBody>) -> ApiResult<Json<OpenedBody>> {
+async fn open(
+    _: Needs<can::SessionsControl>,
+    State(state): State<HarnessState>,
+    Path(slot): Path<String>,
+    Json(body): Json<OpenBody>,
+) -> ApiResult<Json<OpenedBody>> {
     let slot_id = SlotId::new(slot);
     if let Some(instance) = body.instance_id {
         state.registry.get(&instance)?;
@@ -139,15 +156,29 @@ async fn open(_: Needs<can::SessionsControl>, State(state): State<HarnessState>,
         state.slots.set_settings(&slot_id, policy, body.model).await?;
     }
     let open = match (body.session, body.resume) {
-        (Some(_), Some(_)) => return Err(harness_core::HarnessError::InvalidConfig { reason: "open one of the slot's sessions, or resume a saved one: not both".into() }.into()),
+        (Some(_), Some(_)) => {
+            return Err(harness_core::HarnessError::InvalidConfig {
+                reason: "open one of the slot's sessions, or resume a saved one: not both".into(),
+            }
+            .into());
+        }
         (Some(session), None) => Open::Again(session),
         (None, resume) => Open::New { resume },
     };
     let opened = state.slots.open_session(&slot_id, open).await?;
-    Ok(Json(OpenedBody { thread_id: opened.thread, session: opened.session, note: opened.note, delivered_reports: opened.delivered_reports }))
+    Ok(Json(OpenedBody {
+        thread_id: opened.thread,
+        session: opened.session,
+        note: opened.note,
+        delivered_reports: opened.delivered_reports,
+    }))
 }
 
-async fn close_session(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path((slot, session)): Path<(String, String)>) -> ApiResult<StatusCode> {
+async fn close_session(
+    _: Needs<can::SessionsControl>,
+    State(state): State<HarnessState>,
+    Path((slot, session)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
     state.slots.close_session(&SlotId::new(slot), &SessionKey::new(session)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -158,7 +189,12 @@ struct Switch {
     session: SessionKey,
 }
 
-async fn switch(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(slot): Path<String>, Json(body): Json<Switch>) -> ApiResult<StatusCode> {
+async fn switch(
+    _: Needs<can::SessionsControl>,
+    State(state): State<HarnessState>,
+    Path(slot): Path<String>,
+    Json(body): Json<Switch>,
+) -> ApiResult<StatusCode> {
     state.slots.switch(&SlotId::new(slot), &body.session).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -189,14 +225,23 @@ struct Checked {
 
 /// What a message's links come to before it's sent: the same expansion a
 /// send does (its links only: what they come to doesn't hang on the text).
-async fn check_links(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Json(message): Json<harness_contracts::Message>) -> Json<Checked> {
+async fn check_links(
+    _: Needs<can::SessionsControl>,
+    State(state): State<HarnessState>,
+    Json(message): Json<harness_contracts::Message>,
+) -> Json<Checked> {
     Json(Checked { notes: state.slots.expanded(message, None).await.notes })
 }
 
 /// The user's prompt to a slot: its current session is resumed (or a new
 /// one opened) first if it isn't running. What it links hands the agent
 /// what that is, as far as the slot may read it.
-async fn prompt(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(slot): Path<String>, Json(body): Json<Prompt>) -> ApiResult<Json<Prompted>> {
+async fn prompt(
+    _: Needs<can::SessionsControl>,
+    State(state): State<HarnessState>,
+    Path(slot): Path<String>,
+    Json(body): Json<Prompt>,
+) -> ApiResult<Json<Prompted>> {
     let delivery = if body.add_to_running { Delivery::AddToRunning } else { Delivery::Queue };
     let turn_id = match state.slots.send(&SlotId::new(slot), body.message, delivery, Origin::User, None).await? {
         Sent::Started { turn } | Sent::Replied { turn, .. } | Sent::StillWorking { turn } => turn,

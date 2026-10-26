@@ -64,7 +64,8 @@ impl Lines {
         };
         match took {
             Took::Relaid { by } => {
-                self.stand_in = std::mem::take(&mut self.back).into_iter().filter_map(|(n, row)| Some((n.checked_add_signed(by)?, row))).collect();
+                self.stand_in =
+                    std::mem::take(&mut self.back).into_iter().filter_map(|(n, row)| Some((n.checked_add_signed(by)?, row))).collect();
                 self.forget();
             }
             Took::Restarted => {
@@ -88,7 +89,8 @@ impl Lines {
         }
         // A finished one goes with its lines (as the server's do).
         self.commands.retain(|c| c.end.is_none_or(|end| end > update.oldest));
-        (self.size, self.cursor, self.oldest, self.alternate, self.shell) = (update.size, update.cursor, update.oldest, update.alternate, update.shell);
+        (self.size, self.cursor, self.oldest, self.alternate, self.shell) =
+            (update.size, update.cursor, update.oldest, update.alternate, update.shell);
         self.title.clone_from(&update.title);
         took
     }
@@ -209,13 +211,18 @@ impl Lines {
             // What's on the screen from where typing starts: nothing.
             let rest = self.get(c.input).map(|row| {
                 let mut at = 0u16;
-                row.iter().flat_map(|run| run.text.chars().map(move |ch| (ch, if run.wide { 2 } else { 1 }))).filter(|(_, w)| {
-                    let here = at;
-                    at += w;
-                    here >= c.input_col
-                }).map(|(ch, _)| ch).collect::<String>()
+                row.iter()
+                    .flat_map(|run| run.text.chars().map(move |ch| (ch, if run.wide { 2 } else { 1 })))
+                    .filter(|(_, w)| {
+                        let here = at;
+                        at += w;
+                        here >= c.input_col
+                    })
+                    .map(|(ch, _)| ch)
+                    .collect::<String>()
             });
-            rest.is_some_and(|r| r.trim().is_empty()) && (c.input + 1..self.end()).all(|l| self.text(l).is_some_and(|t| t.trim().is_empty()))
+            rest.is_some_and(|r| r.trim().is_empty())
+                && (c.input + 1..self.end()).all(|l| self.text(l).is_some_and(|t| t.trim().is_empty()))
         };
         self.commands.last().filter(|c| !self.alternate && c.output.is_none() && (c.input, c.input_col) == (line, col) && blank_after(c))
     }
@@ -252,7 +259,19 @@ mod tests {
 
     /// A 3-row screen of `lines` from line `top`, the scrollback from `oldest`.
     fn update(lines: [&str; 3], top: u64, oldest: u64) -> ScreenUpdate {
-        ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 3 }, full: false, rows: (0..3).map(|r| (r, row(lines[usize::from(r)]))).collect(), cursor: Cursor::default(), top, oldest, alternate: false, title: String::new(), shell: 7, commands: Vec::new() }
+        ScreenUpdate {
+            seq: 1,
+            size: TermSize { cols: 80, rows: 3 },
+            full: false,
+            rows: (0..3).map(|r| (r, row(lines[usize::from(r)]))).collect(),
+            cursor: Cursor::default(),
+            top,
+            oldest,
+            alternate: false,
+            title: String::new(),
+            shell: 7,
+            commands: Vec::new(),
+        }
     }
 
     #[test]
@@ -293,7 +312,17 @@ mod tests {
     #[test]
     fn commands_are_found_by_their_lines_and_go_with_them() {
         let mut lines = Lines::default();
-        let command = |id, prompt, end: Option<u64>| TerminalCommand { id, prompt, input: prompt, input_col: 2, output: Some(prompt + 1), end, text: format!("c{id}"), code: Some(0), ran_ms: Some(1) };
+        let command = |id, prompt, end: Option<u64>| TerminalCommand {
+            id,
+            prompt,
+            input: prompt,
+            input_col: 2,
+            output: Some(prompt + 1),
+            end,
+            text: format!("c{id}"),
+            code: Some(0),
+            ran_ms: Some(1),
+        };
         let mut first = update(["a", "b", "c"], 100, 0);
         first.commands = vec![command(1, 10, Some(14)), command(2, 14, Some(20)), command(3, 20, None)];
         // (Lines 10 on are here.)

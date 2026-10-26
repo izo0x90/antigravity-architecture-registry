@@ -12,7 +12,12 @@ fn no_frame_takes_longer_than_the_limit_while_panning_every_view_needs_chrome() 
         return eprintln!("skipped: NAH_FRAME_CHECK_URL (the cockpit's URL) isn't set");
     };
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/frame_check.py");
-    let out = match std::process::Command::new("uv").args(["run", "--with", "websockets", "python"]).arg(&script).args(["--url", &url]).output() {
+    let out = match std::process::Command::new("uv")
+        .args(["run", "--with", "websockets", "python"])
+        .arg(&script)
+        .args(["--url", &url])
+        .output()
+    {
         Ok(out) => out,
         Err(e) => return eprintln!("skipped: uv can't be run ({e})"),
     };

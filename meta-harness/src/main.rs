@@ -79,8 +79,14 @@ enum ServersCmd {
     List,
     /// Adds one: its name, where it is (http://host:port) and its secret
     /// (`meta-harness token` there).
-    Add { name: String, url: String, secret: String },
-    Remove { name: String },
+    Add {
+        name: String,
+        url: String,
+        secret: String,
+    },
+    Remove {
+        name: String,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -150,7 +156,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             ServersCmd::Add { name, url, secret } => {
-                let added_at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+                let added_at_ms =
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
                 db.add_server(&nah_state::ServerEntry { name: name.clone(), url: url.clone(), secret: secret.clone(), added_at_ms })?;
                 println!("Added {name}: home links to it from its next start.");
             }
@@ -188,9 +195,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let here = Arc::new(EventHub::default());
         let notify = nah_notify::NotifyHub::start(here.clone(), state.clone(), Arc::new(nah_notify::NoSessions), Vec::new())?;
         let stopping = meta_harness::modules::Shutdown::default();
-        let home = meta_harness::modules::HomeState { gate: gate.clone(), stopping: stopping.clone(), home: meta_harness::home::Home::start(state.clone(), here, notify, false)? };
+        let home = meta_harness::modules::HomeState {
+            gate: gate.clone(),
+            stopping: stopping.clone(),
+            home: meta_harness::home::Home::start(state.clone(), here, notify, false)?,
+        };
         let server = meta_harness::modules::ServerState { gate: gate.clone(), shutdown: stopping.clone() };
-        let page = meta_harness::modules::CockpitState { gate, stopping, state, remote: Arc::default(), packs_at: meta_harness::startup::repo_root()? };
+        let page = meta_harness::modules::CockpitState {
+            gate,
+            stopping,
+            state,
+            remote: Arc::default(),
+            packs_at: meta_harness::startup::repo_root()?,
+        };
         info!("No project here: the cockpit and home. Open it: {base_url}{cockpit_path}");
         meta_harness::startup::serve(listener, create_router(&[&server, &page, &home]), None, server.shutdown.clone()).await?;
         info!("Meta-harness stopped.");
@@ -218,18 +235,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     meta_harness::startup::chats(&slots, &hub, &things);
     meta_harness::startup::code_tags(&arch, &changes, &things);
     meta_harness::startup::plan_parts(&arch, &things);
-    let terminals = if serve.no_shells { None } else { Some(meta_harness::startup::terminals(&arch, &state, &hub, &things, terminal_settings.terminals)?) };
+    let terminals = if serve.no_shells {
+        None
+    } else {
+        Some(meta_harness::startup::terminals(&arch, &state, &hub, &things, terminal_settings.terminals)?)
+    };
     let discussions = meta_harness::startup::discussions(&arch, &state, &hub, &things, &slots)?;
     // Every kind of note and every owner here: what a crash left in the logs goes.
     things.forget_unused();
-    let services = meta_harness::mcp::sets::Services { arch: arch.clone(), changes: changes.clone(), timeline: timeline.clone(), remote: remote.clone(), slots: slots.clone(), notify: notify.clone(), terminals: terminals.clone(), tags: tags.clone(), discussions: discussions.clone(), things: things.clone() };
+    let services = meta_harness::mcp::sets::Services {
+        arch: arch.clone(),
+        changes: changes.clone(),
+        timeline: timeline.clone(),
+        remote: remote.clone(),
+        slots: slots.clone(),
+        notify: notify.clone(),
+        terminals: terminals.clone(),
+        tags: tags.clone(),
+        discussions: discussions.clone(),
+        things: things.clone(),
+    };
     let mcp_state = McpServerState::new(Arc::new(McpService::new(services, access.clone())), meta_harness::startup::mcp_callers(&slots));
 
     let queue = meta_harness::server::queue_runner(&arch, meta_harness::startup::queue_config(&arch)?, &hub);
     let cockpit_path = cockpit.launch_path();
     let streams = mcp_state.sessions.clone();
-    let app = AppState::new(Parts { registry: instances, sessions, slots, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, notify, changes, timeline, terminals, tags, discussions, things })?;
-    let parts: Vec<&dyn meta_harness::modules::Module> = app.modules().into_iter().filter(|m| !(serve.no_cockpit && m.is_cockpit())).collect();
+    let app = AppState::new(Parts {
+        registry: instances,
+        sessions,
+        slots,
+        hub,
+        mcp_state,
+        arch,
+        cockpit,
+        queue,
+        state,
+        tool_servers,
+        remote,
+        access,
+        notify,
+        changes,
+        timeline,
+        terminals,
+        tags,
+        discussions,
+        things,
+    })?;
+    let parts: Vec<&dyn meta_harness::modules::Module> =
+        app.modules().into_iter().filter(|m| !(serve.no_cockpit && m.is_cockpit())).collect();
     let router = create_router(&parts);
     info!("MCP endpoint: {base_url}/api/mcp/sse; events: ws://{bound}/ws/events");
     if !serve.no_cockpit {

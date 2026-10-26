@@ -45,7 +45,10 @@ impl Drafts {
 
     /// The response choosing `option`: with the answers when it accepts.
     pub fn response(&self, request: &RuntimeRequest, option: &str) -> RequestResponse {
-        let accepts = request.options.iter().any(|o| o.id == option && matches!(o.decision, ApprovalDecision::Accept | ApprovalDecision::AcceptForSession | ApprovalDecision::AcceptAlways));
+        let accepts = request.options.iter().any(|o| {
+            o.id == option
+                && matches!(o.decision, ApprovalDecision::Accept | ApprovalDecision::AcceptForSession | ApprovalDecision::AcceptAlways)
+        });
         RequestResponse { option_id: Some(option.to_owned()), answers: if accepts { self.answers(request) } else { BTreeMap::new() } }
     }
 
@@ -64,4 +67,3 @@ impl Drafts {
         self.drafts.get(request).and_then(|d| d.picks.get(question)).is_some_and(|p| p.iter().any(|v| v == value))
     }
 }
-

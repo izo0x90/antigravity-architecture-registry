@@ -106,7 +106,9 @@ impl MockSetup {
             }
             let mut said = serde_json::json!({});
             set(&mut said, &s.status, serde_json::json!("account"));
-            for (pointer, value) in [(&s.label, "Test account"), (&s.email, "me@example.com"), (&s.plan, "team"), (&s.organization, "Example")] {
+            for (pointer, value) in
+                [(&s.label, "Test account"), (&s.email, "me@example.com"), (&s.plan, "team"), (&s.organization, "Example")]
+            {
                 if let Some(pointer) = pointer {
                     set(&mut said, pointer, serde_json::json!(value));
                 }
@@ -118,7 +120,17 @@ impl MockSetup {
         } else {
             acp::AuthMethod::Agent(acp::AuthMethodAgent::new("login", "Log in"))
         }];
-        Self { modes, declares, queues: settings.queueing.is_some(), auth_methods, signed_in, load_session: false, sse: true, loopback_login: false, subagents: settings.subagents.clone() }
+        Self {
+            modes,
+            declares,
+            queues: settings.queueing.is_some(),
+            auth_methods,
+            signed_in,
+            load_session: false,
+            sse: true,
+            loopback_login: false,
+            subagents: settings.subagents.clone(),
+        }
     }
 }
 
@@ -183,7 +195,17 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 impl MockAgent {
     pub fn new(setup: MockSetup) -> Self {
-        Self { setup, seen: Arc::default(), hold: Arc::default(), in_flight: Arc::default(), running: Arc::default(), one_at_a_time: Arc::default(), said: Arc::default(), steered: Arc::default(), login_done: Arc::default() }
+        Self {
+            setup,
+            seen: Arc::default(),
+            hold: Arc::default(),
+            in_flight: Arc::default(),
+            running: Arc::default(),
+            one_at_a_time: Arc::default(),
+            said: Arc::default(),
+            steered: Arc::default(),
+            login_done: Arc::default(),
+        }
     }
 
     pub fn seen(&self) -> Seen {
@@ -209,7 +231,8 @@ impl MockAgent {
             .load_session(self.setup.load_session)
             .mcp_capabilities(acp::McpCapabilities::new().http(true).sse(self.setup.sse))
             .session_capabilities(acp::SessionCapabilities::new().list(acp::SessionListCapabilities::new()));
-        let base = acp::InitializeResponse::new(req.protocol_version).agent_capabilities(caps).auth_methods(self.setup.auth_methods.clone());
+        let base =
+            acp::InitializeResponse::new(req.protocol_version).agent_capabilities(caps).auth_methods(self.setup.auth_methods.clone());
         let mut json = serde_json::to_value(base).unwrap_or_default();
         merge(&mut json, &self.setup.declares);
         serde_json::from_value(json).expect("the mock's declarations make an initialize answer")
@@ -221,7 +244,12 @@ impl MockAgent {
     }
 
     async fn prompt(&self, cx: ConnectionTo<Client>, req: acp::PromptRequest) -> agent_client_protocol::Result<acp::PromptResponse> {
-        let text = req.prompt.iter().filter_map(|b| if let acp::ContentBlock::Text(t) = b { Some(t.text.clone()) } else { None }).collect::<Vec<_>>().join("");
+        let text = req
+            .prompt
+            .iter()
+            .filter_map(|b| if let acp::ContentBlock::Text(t) = b { Some(t.text.clone()) } else { None })
+            .collect::<Vec<_>>()
+            .join("");
         {
             let mut in_flight = lock(&self.in_flight);
             if *in_flight > 0 {
@@ -250,9 +278,18 @@ impl MockAgent {
             return sub_agent(cx, &self.setup.subagents);
         }
         if text.contains("[withdrawn]") {
-            notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new("edit-w", "Edit w.rs").kind(acp::ToolKind::Edit).status(acp::ToolCallStatus::Pending)))?;
+            notify(
+                cx,
+                acp::SessionUpdate::ToolCall(
+                    acp::ToolCall::new("edit-w", "Edit w.rs").kind(acp::ToolKind::Edit).status(acp::ToolCallStatus::Pending),
+                ),
+            )?;
             let options = vec![acp::PermissionOption::new("allow-once", "Allow", acp::PermissionOptionKind::AllowOnce)];
-            let asked = cx.send_request(acp::RequestPermissionRequest::new(SESSION, acp::ToolCallUpdate::new("edit-w", acp::ToolCallUpdateFields::new().title("Edit w.rs")), options));
+            let asked = cx.send_request(acp::RequestPermissionRequest::new(
+                SESSION,
+                acp::ToolCallUpdate::new("edit-w", acp::ToolCallUpdateFields::new().title("Edit w.rs")),
+                options,
+            ));
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             // (Dropped unanswered: withdrawn.)
             drop(asked);
@@ -263,9 +300,21 @@ impl MockAgent {
         // own answer.
         if text.contains("[two-asks]") {
             let ask = |id: &str, title: &str| {
-                notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new(id.to_owned(), title.to_owned()).kind(acp::ToolKind::Edit).status(acp::ToolCallStatus::Pending)))?;
-                let options = vec![acp::PermissionOption::new("allow-once", "Allow", acp::PermissionOptionKind::AllowOnce), acp::PermissionOption::new("reject", "Reject", acp::PermissionOptionKind::RejectOnce)];
-                Ok::<_, agent_client_protocol::Error>(cx.send_request(acp::RequestPermissionRequest::new(SESSION, acp::ToolCallUpdate::new(id.to_owned(), acp::ToolCallUpdateFields::new().title(title.to_owned())), options)))
+                notify(
+                    cx,
+                    acp::SessionUpdate::ToolCall(
+                        acp::ToolCall::new(id.to_owned(), title.to_owned()).kind(acp::ToolKind::Edit).status(acp::ToolCallStatus::Pending),
+                    ),
+                )?;
+                let options = vec![
+                    acp::PermissionOption::new("allow-once", "Allow", acp::PermissionOptionKind::AllowOnce),
+                    acp::PermissionOption::new("reject", "Reject", acp::PermissionOptionKind::RejectOnce),
+                ];
+                Ok::<_, agent_client_protocol::Error>(cx.send_request(acp::RequestPermissionRequest::new(
+                    SESSION,
+                    acp::ToolCallUpdate::new(id.to_owned(), acp::ToolCallUpdateFields::new().title(title.to_owned())),
+                    options,
+                )))
             };
             let (first, second) = (ask("edit-a", "Edit a.rs")?, ask("edit-b", "Edit b.rs")?);
             let (first, second) = futures::join!(first.block_task(), second.block_task());
@@ -278,13 +327,22 @@ impl MockAgent {
             return say(cx, &answers);
         }
         if text.contains("[permission]") {
-            notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new("edit-1", "Edit main.rs").kind(acp::ToolKind::Edit).status(acp::ToolCallStatus::Pending)))?;
+            notify(
+                cx,
+                acp::SessionUpdate::ToolCall(
+                    acp::ToolCall::new("edit-1", "Edit main.rs").kind(acp::ToolKind::Edit).status(acp::ToolCallStatus::Pending),
+                ),
+            )?;
             let options = vec![
                 acp::PermissionOption::new("allow-once", "Allow", acp::PermissionOptionKind::AllowOnce),
                 acp::PermissionOption::new("allow-always", "Always allow", acp::PermissionOptionKind::AllowAlways),
                 acp::PermissionOption::new("reject", "Reject", acp::PermissionOptionKind::RejectOnce),
             ];
-            let request = acp::RequestPermissionRequest::new(SESSION, acp::ToolCallUpdate::new("edit-1", acp::ToolCallUpdateFields::new().title("Edit main.rs")), options);
+            let request = acp::RequestPermissionRequest::new(
+                SESSION,
+                acp::ToolCallUpdate::new("edit-1", acp::ToolCallUpdateFields::new().title("Edit main.rs")),
+                options,
+            );
             let outcome = match cx.send_request(request).block_task().await?.outcome {
                 acp::RequestPermissionOutcome::Selected(s) => s.option_id.to_string(),
                 _ => "cancelled".into(),
@@ -296,12 +354,21 @@ impl MockAgent {
         // a made-up tool call, then a permission request whose options are
         // the answers, every one "allow once".
         if text.contains("[ask-by-permission]") {
-            notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new("interaction_1a2b3c4d", "Which store?").status(acp::ToolCallStatus::Pending)))?;
+            notify(
+                cx,
+                acp::SessionUpdate::ToolCall(
+                    acp::ToolCall::new("interaction_1a2b3c4d", "Which store?").status(acp::ToolCallStatus::Pending),
+                ),
+            )?;
             let options = vec![
                 acp::PermissionOption::new("1", "Redis", acp::PermissionOptionKind::AllowOnce),
                 acp::PermissionOption::new("2", "Postgres", acp::PermissionOptionKind::AllowOnce),
             ];
-            let request = acp::RequestPermissionRequest::new(SESSION, acp::ToolCallUpdate::new("interaction_1a2b3c4d", acp::ToolCallUpdateFields::new().title("Which store?")), options);
+            let request = acp::RequestPermissionRequest::new(
+                SESSION,
+                acp::ToolCallUpdate::new("interaction_1a2b3c4d", acp::ToolCallUpdateFields::new().title("Which store?")),
+                options,
+            );
             let outcome = match cx.send_request(request).block_task().await?.outcome {
                 acp::RequestPermissionOutcome::Selected(s) => s.option_id.to_string(),
                 _ => "cancelled".into(),
@@ -323,7 +390,8 @@ impl MockAgent {
             }))
             .expect("a form");
             let mode = acp::ElicitationFormMode::new(acp::ElicitationSessionScope::new(SESSION), schema);
-            let answer = cx.send_request(acp::CreateElicitationRequest::new(mode, "Please answer the following questions.")).block_task().await?;
+            let answer =
+                cx.send_request(acp::CreateElicitationRequest::new(mode, "Please answer the following questions.")).block_task().await?;
             let said = serde_json::to_string(&answer.action).unwrap_or_default();
             lock(&self.seen).answers = Some(answer);
             return say(cx, &format!("answers: {said}"));
@@ -402,40 +470,84 @@ pub const SUB_SESSION: &str = "s1-helper";
 /// it, its own session's settings, a message and a call of its, its end;
 /// or only by the call that starts it. Then the agent's own words.
 fn sub_agent(cx: &ConnectionTo<Client>, how: &crate::settings::SubagentSettings) -> agent_client_protocol::Result<()> {
-    let raw = |session: &str, update: serde_json::Value| cx.send_notification(UntypedMessage::new("session/update", serde_json::json!({ "sessionId": session, "update": update }))?);
+    let raw = |session: &str, update: serde_json::Value| {
+        cx.send_notification(UntypedMessage::new("session/update", serde_json::json!({ "sessionId": session, "update": update }))?)
+    };
     if how.declare {
-        raw(SESSION, serde_json::json!({ "sessionUpdate": "subagent_update", "sessionId": SUB_SESSION, "title": "Explorer", "description": "Explore the parser", "capabilities": { "cancel": {} }, "state": { "state": "running" } }))?;
-        raw(SESSION, serde_json::json!({ "sessionUpdate": "session_message", "senderSessionId": SESSION, "recipientSessionId": SUB_SESSION, "content": [{ "type": "text", "text": "Explore the parser" }] }))?;
+        raw(
+            SESSION,
+            serde_json::json!({ "sessionUpdate": "subagent_update", "sessionId": SUB_SESSION, "title": "Explorer", "description": "Explore the parser", "capabilities": { "cancel": {} }, "state": { "state": "running" } }),
+        )?;
+        raw(
+            SESSION,
+            serde_json::json!({ "sessionUpdate": "session_message", "senderSessionId": SESSION, "recipientSessionId": SUB_SESSION, "content": [{ "type": "text", "text": "Explore the parser" }] }),
+        )?;
         raw(SUB_SESSION, serde_json::json!({ "sessionUpdate": "current_mode_update", "currentModeId": "its-own" }))?;
-        raw(SUB_SESSION, serde_json::json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Reading the parser." } }))?;
-        raw(SUB_SESSION, serde_json::json!({ "sessionUpdate": "tool_call", "toolCallId": "read-1", "title": "Read parse.rs", "kind": "read", "status": "completed" }))?;
-        raw(SESSION, serde_json::json!({ "sessionUpdate": "subagent_update", "sessionId": SUB_SESSION, "state": { "state": "idle", "stopReason": "end_turn" } }))?;
+        raw(
+            SUB_SESSION,
+            serde_json::json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Reading the parser." } }),
+        )?;
+        raw(
+            SUB_SESSION,
+            serde_json::json!({ "sessionUpdate": "tool_call", "toolCallId": "read-1", "title": "Read parse.rs", "kind": "read", "status": "completed" }),
+        )?;
+        raw(
+            SESSION,
+            serde_json::json!({ "sessionUpdate": "subagent_update", "sessionId": SUB_SESSION, "state": { "state": "idle", "stopReason": "end_turn" } }),
+        )?;
     } else if let Some(by) = &how.started_by {
         let mut one = serde_json::json!({});
-        for (pointer, value) in [(Some(&by.title), "Explorer"), (by.prompt.as_ref(), "Explore the parser"), (by.kind.as_ref(), "research")] {
+        for (pointer, value) in [(Some(&by.title), "Explorer"), (by.prompt.as_ref(), "Explore the parser"), (by.kind.as_ref(), "research")]
+        {
             if let Some(pointer) = pointer {
                 set(&mut one, pointer, serde_json::json!(value));
             }
         }
         let mut input = serde_json::json!({});
         set(&mut input, &by.list, serde_json::json!([one]));
-        notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new("task-1", "Start a helper").raw_input(input).status(acp::ToolCallStatus::InProgress)))?;
-        notify(cx, acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new("task-1", acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed))))?;
+        notify(
+            cx,
+            acp::SessionUpdate::ToolCall(
+                acp::ToolCall::new("task-1", "Start a helper").raw_input(input).status(acp::ToolCallStatus::InProgress),
+            ),
+        )?;
+        notify(
+            cx,
+            acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+                "task-1",
+                acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed),
+            )),
+        )?;
     }
     say(cx, "The helper read it.")
 }
 
 /// One of every kind of update, with a permission request in the middle.
 async fn tour(cx: &ConnectionTo<Client>, seen: &Arc<Mutex<Seen>>) -> agent_client_protocol::Result<()> {
-    notify(cx, acp::SessionUpdate::AvailableCommandsUpdate(acp::AvailableCommandsUpdate::new(vec![acp::AvailableCommand::new("plan", "Plan before acting")])))?;
+    notify(
+        cx,
+        acp::SessionUpdate::AvailableCommandsUpdate(acp::AvailableCommandsUpdate::new(vec![acp::AvailableCommand::new(
+            "plan",
+            "Plan before acting",
+        )])),
+    )?;
     notify(cx, acp::SessionUpdate::AgentThoughtChunk(text("thinking…")))?;
-    notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new("tool-1", "Edit main.rs").kind(acp::ToolKind::Edit).status(acp::ToolCallStatus::Pending)))?;
+    notify(
+        cx,
+        acp::SessionUpdate::ToolCall(
+            acp::ToolCall::new("tool-1", "Edit main.rs").kind(acp::ToolKind::Edit).status(acp::ToolCallStatus::Pending),
+        ),
+    )?;
     let options = vec![
         acp::PermissionOption::new("allow", "Allow once", acp::PermissionOptionKind::AllowOnce),
         acp::PermissionOption::new("always", "Allow for session", acp::PermissionOptionKind::AllowAlways),
         acp::PermissionOption::new("deny", "Deny", acp::PermissionOptionKind::RejectOnce),
     ];
-    let request = acp::RequestPermissionRequest::new(SESSION, acp::ToolCallUpdate::new("tool-1", acp::ToolCallUpdateFields::new().title("Edit main.rs")), options);
+    let request = acp::RequestPermissionRequest::new(
+        SESSION,
+        acp::ToolCallUpdate::new("tool-1", acp::ToolCallUpdateFields::new().title("Edit main.rs")),
+        options,
+    );
     if let acp::RequestPermissionOutcome::Selected(s) = cx.send_request(request).block_task().await?.outcome {
         lock(seen).permission = Some(s.option_id.to_string());
     }
@@ -450,7 +562,14 @@ async fn tour(cx: &ConnectionTo<Client>, seen: &Arc<Mutex<Seen>>) -> agent_clien
     )?;
     say(cx, "Hello ")?;
     say(cx, "world")?;
-    notify(cx, acp::SessionUpdate::Plan(acp::Plan::new(vec![acp::PlanEntry::new("Write main", acp::PlanEntryPriority::High, acp::PlanEntryStatus::Completed)])))?;
+    notify(
+        cx,
+        acp::SessionUpdate::Plan(acp::Plan::new(vec![acp::PlanEntry::new(
+            "Write main",
+            acp::PlanEntryPriority::High,
+            acp::PlanEntryStatus::Completed,
+        )])),
+    )?;
     notify(cx, acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(1200, 200_000)))
 }
 
@@ -464,7 +583,8 @@ impl AcpLauncher for MockAgent {
         let (client_read, client_write) = tokio::io::split(client_side);
         let (agent_read, agent_write) = tokio::io::split(agent_side);
         let me = self.clone();
-        let (on_init, on_new, on_load, on_list, on_mode, on_prompt, on_steer) = (me.clone(), me.clone(), me.clone(), me.clone(), me.clone(), me.clone(), me.clone());
+        let (on_init, on_new, on_load, on_list, on_mode, on_prompt, on_steer) =
+            (me.clone(), me.clone(), me.clone(), me.clone(), me.clone(), me.clone(), me.clone());
         tokio::spawn(async move {
             let _ = agent_client_protocol::Agent
                 .builder()
@@ -500,7 +620,11 @@ impl AcpLauncher for MockAgent {
                             let n = stream.read(&mut asked).await.unwrap_or(0);
                             let request = String::from_utf8_lossy(&asked[..n]).into_owned();
                             let fine = request.starts_with("GET /?code=");
-                            let reply = if fine { "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok" } else { "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n" };
+                            let reply = if fine {
+                                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+                            } else {
+                                "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"
+                            };
                             let _ = stream.write_all(reply.as_bytes()).await;
                             if fine {
                                 agent.login_done.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -516,7 +640,8 @@ impl AcpLauncher for MockAgent {
                     async move |req: acp::NewSessionRequest, responder, _cx| {
                         // Signed out, as Antigravity: its login starts, and no answer.
                         if on_new.setup.loopback_login && !on_new.login_done.load(std::sync::atomic::Ordering::SeqCst) {
-                            let _ = on_new_says.send(format!("Open the following link to authenticate the ACP server: {}", loopback_link(1)));
+                            let _ =
+                                on_new_says.send(format!("Open the following link to authenticate the ACP server: {}", loopback_link(1)));
                             std::mem::forget(responder);
                             return Ok(());
                         }
@@ -526,13 +651,19 @@ impl AcpLauncher for MockAgent {
                             seen.cwd = Some(req.cwd.clone());
                             seen.mcp_servers = req.mcp_servers.clone();
                         }
-                        responder.respond(
-                            acp::NewSessionResponse::new(SESSION).modes(on_new.session_modes()).config_options(vec![
-                                acp::SessionConfigOption::select("model", "Model", "flash", vec![acp::SessionConfigSelectOption::new("flash", "Flash"), acp::SessionConfigSelectOption::new("pro", "Pro")])
-                                    .category(acp::SessionConfigOptionCategory::Model),
+                        responder.respond(acp::NewSessionResponse::new(SESSION).modes(on_new.session_modes()).config_options(vec![
+                                acp::SessionConfigOption::select(
+                                    "model",
+                                    "Model",
+                                    "flash",
+                                    vec![
+                                        acp::SessionConfigSelectOption::new("flash", "Flash"),
+                                        acp::SessionConfigSelectOption::new("pro", "Pro"),
+                                    ],
+                                )
+                                .category(acp::SessionConfigOptionCategory::Model),
                                 acp::SessionConfigOption::boolean("verbose", "Verbose", false),
-                            ]),
-                        )
+                            ]))
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -548,12 +679,16 @@ impl AcpLauncher for MockAgent {
                     async move |req: acp::ListSessionsRequest, responder, _cx| {
                         let cwd = req.cwd.unwrap_or_default();
                         lock(&on_list.seen).cwd = Some(cwd.clone());
-                        responder.respond(acp::ListSessionsResponse::new(vec![acp::SessionInfo::new("old-1", cwd).title("Earlier work".to_string())]))
+                        responder.respond(acp::ListSessionsResponse::new(vec![
+                            acp::SessionInfo::new("old-1", cwd).title("Earlier work".to_string()),
+                        ]))
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
                 .on_receive_request(
-                    async move |_req: acp::SetSessionConfigOptionRequest, responder, _cx| responder.respond(acp::SetSessionConfigOptionResponse::new(Vec::new())),
+                    async move |_req: acp::SetSessionConfigOptionRequest, responder, _cx| {
+                        responder.respond(acp::SetSessionConfigOptionResponse::new(Vec::new()))
+                    },
                     agent_client_protocol::on_receive_request!(),
                 )
                 .on_receive_request(
@@ -566,7 +701,8 @@ impl AcpLauncher for MockAgent {
                 .on_receive_request(
                     async move |req: acp::PromptRequest, responder, cx: ConnectionTo<Client>| {
                         if !on_prompt.setup.queues && *lock(&on_prompt.in_flight) > 0 {
-                            return responder.respond_with_error(agent_client_protocol::Error::invalid_request().data("a prompt is already running"));
+                            return responder
+                                .respond_with_error(agent_client_protocol::Error::invalid_request().data("a prompt is already running"));
                         }
                         let agent = on_prompt.clone();
                         cx.spawn({
@@ -586,6 +722,11 @@ impl AcpLauncher for MockAgent {
                 .connect_to(ByteStreams::new(agent_write.compat_write(), agent_read.compat()))
                 .await;
         });
-        Ok(AcpTransport { reader: Box::new(client_read.compat()), writer: Box::new(client_write.compat_write()), guard: Box::new(()), said })
+        Ok(AcpTransport {
+            reader: Box::new(client_read.compat()),
+            writer: Box::new(client_write.compat_write()),
+            guard: Box::new(()),
+            said,
+        })
     }
 }

@@ -112,7 +112,12 @@ impl Explore {
                 "Read the code into the architecture graph (incremental: only changed files are parsed). Run it after editing code, or with a path to refresh just that part.",
                 json!({ "type": "object", "properties": { "scope": { "type": "string", "description": "Repo-relative path; the whole repo when absent" } } }),
             ),
-            tool(Capability::ViewRead, "list_types", "The component types available (generic defaults and any specializations), with their rules.", json!({ "type": "object", "properties": {} })),
+            tool(
+                Capability::ViewRead,
+                "list_types",
+                "The component types available (generic defaults and any specializations), with their rules.",
+                json!({ "type": "object", "properties": {} }),
+            ),
             tool(
                 Capability::ViewRead,
                 "search",
@@ -134,7 +139,9 @@ impl Explore {
             tool(
                 Capability::ViewRead,
                 "view",
-                &format!("One of the three views as a text tree, the same one the user sees: each card with where it is, what it hides (+N more), what sits on its line, and lines back to cards shown elsewhere. With a plan: its own items first, marked NEW / CHANGED / DONE / DOESN'T MATCH. Give `expand` to get only what opening one card adds, or `context` to see what holds a card and what's beside it.\n{tree_help}"),
+                &format!(
+                    "One of the three views as a text tree, the same one the user sees: each card with where it is, what it hides (+N more), what sits on its line, and lines back to cards shown elsewhere. With a plan: its own items first, marked NEW / CHANGED / DONE / DOESN'T MATCH. Give `expand` to get only what opening one card adds, or `context` to see what holds a card and what's beside it.\n{tree_help}"
+                ),
                 json!({ "type": "object", "properties": {
                     "view": { "type": "string", "enum": ViewKind::ALL.iter().map(|v| v.name()).collect::<Vec<_>>() },
                     "root": card,
@@ -152,7 +159,9 @@ impl Explore {
             tool(
                 Capability::ViewDrive,
                 "navigate",
-                &format!("Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing. Leave out what should stay as the user has it. The user may have several graphs, one per panel: `panel` picks one (counted from 1 on the left; a panel that isn't a graph becomes one); without it, the graph they used last moves.\n{tree_help}"),
+                &format!(
+                    "Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing. Leave out what should stay as the user has it. The user may have several graphs, one per panel: `panel` picks one (counted from 1 on the left; a panel that isn't a graph becomes one); without it, the graph they used last moves.\n{tree_help}"
+                ),
                 json!({ "type": "object", "properties": {
                     "view": { "type": "string", "enum": ViewKind::ALL.iter().map(|v| v.name()).collect::<Vec<_>>() },
                     "source": source,
@@ -180,115 +189,159 @@ impl ToolSet for Explore {
 
     async fn call(&self, name: &str, args: Value, _caller: &crate::mcp::McpCaller) -> Result<String, ServiceError> {
         match name {
-        "ingest" => {
-            let a: ScopeArgs = parse(args)?;
-            let report = blocking(&self.arch, move |s| {
-                let path = match &a.scope {
-                    Some(p) => s.root().join(arch_graph::RepoPath::new(p).map_err(|e| ServiceError::InvalidOp(e.to_string()))?.as_str()),
-                    None => s.root().to_path_buf(),
-                };
-                s.ingest(&path)
-            })
-            .await?;
-            Ok(format!(
-                "Ingested {} files ({} parsed, {} cached, {} removed) in {} ms: {} components, {} relations; {} ambiguous calls, {} external calls.\n\nNext: search for the code your change touches, then view it (calls/structure) before planning.",
-                report.files, report.parsed, report.cached, report.removed, report.millis, report.components, report.relations, report.ambiguous, report.external
-            ))
-        }
-        "list_types" => Ok(format!(
-            "{}\n\nNext: use these type names in plan_edit add_component; a type's required_fields must be filled before the user can approve.",
-            pretty(self.arch.types())?
-        )),
-        "search" => {
-            let a: SearchArgs = parse(args)?;
-            let source = a.source.clone();
-            let within = match &a.changed {
-                Some(range) => Some(crate::routes::changes::changed_files(self.changes.clone(), range).await.map_err(|e| ServiceError::InvalidOp(e.to_string()))?),
-                None => None,
-            };
-            let (found, states) = blocking(&self.arch, move |s| {
-                let found = s.search(&a.query, a.kind, &source, a.limit, within.as_ref())?;
-                // Each card's status and stage, as the agent works by them.
-                let graph = s.graph(&source)?;
-                let states: Vec<String> = found
-                    .hits
-                    .iter()
-                    .map(|h| h.key.as_ref().and_then(|k| graph.component(&arch_graph::ComponentId::new(k.as_str()))).map(|c| format!(" {:?}/{:?}", c.status, c.stage)).unwrap_or_default())
-                    .collect();
-                Ok((found, states))
-            })
-            .await?;
-            let mut out = String::new();
-            for (h, state) in found.hits.iter().zip(&states) {
-                let card = h.key.as_deref().unwrap_or("(no card)");
-                let _ = match found.kind {
-                    arch_service::SearchKind::Symbols | arch_service::SearchKind::Files => writeln!(out, "{card} [{}{state}] {}", h.detail, h.label),
-                    arch_service::SearchKind::Text => writeln!(out, "{}: {}  (card {card}{state})", h.detail, h.label),
-                };
+            "ingest" => {
+                let a: ScopeArgs = parse(args)?;
+                let report = blocking(&self.arch, move |s| {
+                    let path = match &a.scope {
+                        Some(p) => {
+                            s.root().join(arch_graph::RepoPath::new(p).map_err(|e| ServiceError::InvalidOp(e.to_string()))?.as_str())
+                        }
+                        None => s.root().to_path_buf(),
+                    };
+                    s.ingest(&path)
+                })
+                .await?;
+                Ok(format!(
+                    "Ingested {} files ({} parsed, {} cached, {} removed) in {} ms: {} components, {} relations; {} ambiguous calls, {} external calls.\n\nNext: search for the code your change touches, then view it (calls/structure) before planning.",
+                    report.files,
+                    report.parsed,
+                    report.cached,
+                    report.removed,
+                    report.millis,
+                    report.components,
+                    report.relations,
+                    report.ambiguous,
+                    report.external
+                ))
             }
-            if found.hits.is_empty() {
-                out.push_str("No matches. Try fewer letters, another kind (symbols, files, text), or ingest first.\n");
-            } else if found.total > found.hits.len() || found.partial {
-                let _ = writeln!(out, "({} of {}{} shown; give a bigger limit or a narrower query.)", found.hits.len(), found.total, if found.partial { "+" } else { "" });
+            "list_types" => Ok(format!(
+                "{}\n\nNext: use these type names in plan_edit add_component; a type's required_fields must be filled before the user can approve.",
+                pretty(self.arch.types())?
+            )),
+            "search" => {
+                let a: SearchArgs = parse(args)?;
+                let source = a.source.clone();
+                let within = match &a.changed {
+                    Some(range) => Some(
+                        crate::routes::changes::changed_files(self.changes.clone(), range)
+                            .await
+                            .map_err(|e| ServiceError::InvalidOp(e.to_string()))?,
+                    ),
+                    None => None,
+                };
+                let (found, states) = blocking(&self.arch, move |s| {
+                    let found = s.search(&a.query, a.kind, &source, a.limit, within.as_ref())?;
+                    // Each card's status and stage, as the agent works by them.
+                    let graph = s.graph(&source)?;
+                    let states: Vec<String> = found
+                        .hits
+                        .iter()
+                        .map(|h| {
+                            h.key
+                                .as_ref()
+                                .and_then(|k| graph.component(&arch_graph::ComponentId::new(k.as_str())))
+                                .map(|c| format!(" {:?}/{:?}", c.status, c.stage))
+                                .unwrap_or_default()
+                        })
+                        .collect();
+                    Ok((found, states))
+                })
+                .await?;
+                let mut out = String::new();
+                for (h, state) in found.hits.iter().zip(&states) {
+                    let card = h.key.as_deref().unwrap_or("(no card)");
+                    let _ = match found.kind {
+                        arch_service::SearchKind::Symbols | arch_service::SearchKind::Files => {
+                            writeln!(out, "{card} [{}{state}] {}", h.detail, h.label)
+                        }
+                        arch_service::SearchKind::Text => writeln!(out, "{}: {}  (card {card}{state})", h.detail, h.label),
+                    };
+                }
+                if found.hits.is_empty() {
+                    out.push_str("No matches. Try fewer letters, another kind (symbols, files, text), or ingest first.\n");
+                } else if found.total > found.hits.len() || found.partial {
+                    let _ = writeln!(
+                        out,
+                        "({} of {}{} shown; give a bigger limit or a narrower query.)",
+                        found.hits.len(),
+                        found.total,
+                        if found.partial { "+" } else { "" }
+                    );
+                }
+                out.push_str("\nNext: inspect a card, or view it (e.g. view view=calls root=<card>) to see what it touches.");
+                Ok(out)
             }
-            out.push_str("\nNext: inspect a card, or view it (e.g. view view=calls root=<card>) to see what it touches.");
-            Ok(out)
-        }
-        "inspect" => {
-            let a: IdArgs = parse(args)?;
-            let (source, key) = (a.source.clone(), a.id);
-            let detail = blocking(&self.arch, move |s| s.card(&key, &source)).await?;
-            let plan = a.source.plan().cloned();
-            let cid = detail.component.id.clone();
-            let mut out = pretty(&marked(&detail)?)?;
-            match plan.filter(|_| detail.component.status != arch_graph::Status::Existing || detail.alignment != arch_graph::Alignment::Observed) {
+            "inspect" => {
+                let a: IdArgs = parse(args)?;
+                let (source, key) = (a.source.clone(), a.id);
+                let detail = blocking(&self.arch, move |s| s.card(&key, &source)).await?;
+                let plan = a.source.plan().cloned();
+                let cid = detail.component.id.clone();
+                let mut out = pretty(&marked(&detail)?)?;
+                match plan.filter(|_| detail.component.status != arch_graph::Status::Existing || detail.alignment != arch_graph::Alignment::Observed) {
                 Some(plan) => out.push_str(&self.steps(plan, Some(cid)).await?),
                 None => out.push_str("\n\nNext: view its neighborhood (view view=calls root=<id>), or reference it in a plan you're writing (plan_edit op=reference)."),
             }
-            Ok(out)
-        }
-        "view" => {
-            let a: ViewArgs = parse(args)?;
-            let plan = a.source.plan().cloned();
-            let view = arch_graph::tree::ViewKind::from_name(&a.view).ok_or_else(|| ServiceError::InvalidOp(format!("view '{}': use contains, calls or data_flow", a.view)))?;
-            let only = match &a.changed {
-                Some(range) => Some(crate::routes::changes::changed_components(self.arch.clone(), self.changes.clone(), range).await.map_err(|e| ServiceError::InvalidOp(e.to_string()))?),
-                None => None,
-            };
-            let request = arch_graph::tree::TreeRequest {
-                view,
-                source: a.source,
-                root: a.root,
-                way: a.way.unwrap_or_default(),
-                depth: a.depth,
-                opened: a.open.into_iter().map(|card| arch_graph::tree::Opened { card, levels: 1 }).collect(),
-                closed: Vec::new(),
-                full_code: a.full_code,
-                only,
-            };
-            let (expand, levels, context) = (a.expand, a.levels.unwrap_or(1), a.context);
-            let mut out = blocking(&self.arch, move |s| {
-                let tree = match (expand, context) {
-                    (Some(card), _) => s.expand(&request, &card, levels)?.added(),
-                    (None, Some(card)) => s.context(&request, &card)?,
-                    (None, None) => s.tree(&request)?,
-                };
-                Ok(arch_graph::tree::render(&tree, s.trees()))
-            })
-            .await?;
-            match plan {
-                Some(plan) => out.push_str(&self.steps(plan, None).await?),
-                None => out.push_str("\nNext: inspect a card, go into one (root=<key>), flip the way, or navigate to show the user the same view."),
+                Ok(out)
             }
-            Ok(out)
-        }
-        "navigate" => {
-            let a: NavigateArgs = parse(args)?;
-            let view = a.view.as_deref().map(|v| arch_graph::tree::ViewKind::from_name(v).ok_or_else(|| ServiceError::InvalidOp(format!("view '{v}': use contains, calls or data_flow")))).transpose()?;
-            let request = ViewRequest { view, source: a.source, root: a.root, way: a.way, depth: a.depth, select: a.select, panel: a.panel };
-            blocking(&self.arch, move |s| s.request_view(request, Requester::Agent)).await?;
-            Ok("The user's graph now shows it (they can go back).\n\nNext: explain what they're looking at, or continue with the plan.".into())
-        }
+            "view" => {
+                let a: ViewArgs = parse(args)?;
+                let plan = a.source.plan().cloned();
+                let view = arch_graph::tree::ViewKind::from_name(&a.view)
+                    .ok_or_else(|| ServiceError::InvalidOp(format!("view '{}': use contains, calls or data_flow", a.view)))?;
+                let only = match &a.changed {
+                    Some(range) => Some(
+                        crate::routes::changes::changed_components(self.arch.clone(), self.changes.clone(), range)
+                            .await
+                            .map_err(|e| ServiceError::InvalidOp(e.to_string()))?,
+                    ),
+                    None => None,
+                };
+                let request = arch_graph::tree::TreeRequest {
+                    view,
+                    source: a.source,
+                    root: a.root,
+                    way: a.way.unwrap_or_default(),
+                    depth: a.depth,
+                    opened: a.open.into_iter().map(|card| arch_graph::tree::Opened { card, levels: 1 }).collect(),
+                    closed: Vec::new(),
+                    full_code: a.full_code,
+                    only,
+                };
+                let (expand, levels, context) = (a.expand, a.levels.unwrap_or(1), a.context);
+                let mut out = blocking(&self.arch, move |s| {
+                    let tree = match (expand, context) {
+                        (Some(card), _) => s.expand(&request, &card, levels)?.added(),
+                        (None, Some(card)) => s.context(&request, &card)?,
+                        (None, None) => s.tree(&request)?,
+                    };
+                    Ok(arch_graph::tree::render(&tree, s.trees()))
+                })
+                .await?;
+                match plan {
+                    Some(plan) => out.push_str(&self.steps(plan, None).await?),
+                    None => out.push_str(
+                        "\nNext: inspect a card, go into one (root=<key>), flip the way, or navigate to show the user the same view.",
+                    ),
+                }
+                Ok(out)
+            }
+            "navigate" => {
+                let a: NavigateArgs = parse(args)?;
+                let view = a
+                    .view
+                    .as_deref()
+                    .map(|v| {
+                        arch_graph::tree::ViewKind::from_name(v)
+                            .ok_or_else(|| ServiceError::InvalidOp(format!("view '{v}': use contains, calls or data_flow")))
+                    })
+                    .transpose()?;
+                let request =
+                    ViewRequest { view, source: a.source, root: a.root, way: a.way, depth: a.depth, select: a.select, panel: a.panel };
+                blocking(&self.arch, move |s| s.request_view(request, Requester::Agent)).await?;
+                Ok("The user's graph now shows it (they can go back).\n\nNext: explain what they're looking at, or continue with the plan."
+                    .into())
+            }
             other => Err(ServiceError::NotFound(format!("tool '{other}'"))),
         }
     }

@@ -25,7 +25,11 @@ pub fn candidates(op: GoTo, detail: &ComponentDetail) -> Vec<Candidate> {
     // Every use of it: each opens the code of what it's in, at its line.
     if op == GoTo::Uses {
         // A use in a file changed since it was read: its component, not a line.
-        return detail.references.iter().filter_map(|r| r.within.clone().map(|id| Candidate { id, line: (!r.stale).then_some(r.line) })).collect();
+        return detail
+            .references
+            .iter()
+            .filter_map(|r| r.within.clone().map(|id| Candidate { id, line: (!r.stale).then_some(r.line) }))
+            .collect();
     }
     let Some((kind, outgoing)) = op.relation() else { return Vec::new() };
     let list = if outgoing { &detail.outgoing } else { &detail.incoming };
@@ -190,12 +194,23 @@ pub(crate) mod tests {
         };
         let d = detail(
             "rust:a::run",
-            vec![call("rust:a::run", "rust:a::save", 1, 5), call("rust:a::run", "rust:a::step", 0, 4), call("rust:a::run", "rust:a::step", 2, 6)],
-            vec![call("rust:a::main", "rust:a::run", 0, 12), Relation::new(RelationKind::Contains, ComponentId::new("rust:a"), ComponentId::new("rust:a::run"), Provenance::OBSERVED)],
+            vec![
+                call("rust:a::run", "rust:a::save", 1, 5),
+                call("rust:a::run", "rust:a::step", 0, 4),
+                call("rust:a::run", "rust:a::step", 2, 6),
+            ],
+            vec![
+                call("rust:a::main", "rust:a::run", 0, 12),
+                Relation::new(RelationKind::Contains, ComponentId::new("rust:a"), ComponentId::new("rust:a::run"), Provenance::OBSERVED),
+            ],
         );
         let ids = |op| candidates(op, &d).into_iter().map(|c| c.id.to_string()).collect::<Vec<_>>();
         assert_eq!(ids(GoTo::Callees), ["rust:a::step", "rust:a::save"], "call order, each once");
-        assert_eq!(candidates(GoTo::Callers, &d), vec![Candidate { id: ComponentId::new("rust:a::main"), line: Some(12) }], "a caller opens at the call");
+        assert_eq!(
+            candidates(GoTo::Callers, &d),
+            vec![Candidate { id: ComponentId::new("rust:a::main"), line: Some(12) }],
+            "a caller opens at the call"
+        );
         assert_eq!(ids(GoTo::Parent), ["rust:a"]);
         assert!(ids(GoTo::Implements).is_empty());
         assert!(candidates(GoTo::Code, &d).is_empty(), "not relational");
@@ -204,9 +219,26 @@ pub(crate) mod tests {
     #[test]
     fn uses_are_every_ref_to_it_across_files_each_at_its_line() {
         let mut d = detail("rust:a::Store", vec![], vec![]);
-        let at = |file: &str, line: u32, kind: &str, within: &str| arch_graph::code::Reference { file: file.into(), line, start: 0, end: 1, kind: kind.into(), within: Some(ComponentId::new(within)), evidence: "name".into(), stale: false };
-        d.references = vec![at("src/a.rs", 3, "import", "rust:a"), at("src/b.rs", 9, "type", "rust:b::keep"), at("src/b.rs", 12, "call", "rust:b::keep")];
+        let at = |file: &str, line: u32, kind: &str, within: &str| arch_graph::code::Reference {
+            file: file.into(),
+            line,
+            start: 0,
+            end: 1,
+            kind: kind.into(),
+            within: Some(ComponentId::new(within)),
+            evidence: "name".into(),
+            stale: false,
+        };
+        d.references = vec![
+            at("src/a.rs", 3, "import", "rust:a"),
+            at("src/b.rs", 9, "type", "rust:b::keep"),
+            at("src/b.rs", 12, "call", "rust:b::keep"),
+        ];
         let found: Vec<(String, Option<u32>)> = candidates(GoTo::Uses, &d).into_iter().map(|c| (c.id.to_string(), c.line)).collect();
-        assert_eq!(found, [("rust:a".to_owned(), Some(3)), ("rust:b::keep".to_owned(), Some(9)), ("rust:b::keep".to_owned(), Some(12))], "every use, each at its own line");
+        assert_eq!(
+            found,
+            [("rust:a".to_owned(), Some(3)), ("rust:b::keep".to_owned(), Some(9)), ("rust:b::keep".to_owned(), Some(12))],
+            "every use, each at its own line"
+        );
     }
 }

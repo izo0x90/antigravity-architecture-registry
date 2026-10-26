@@ -1,7 +1,7 @@
-use std::sync::{Arc, Mutex};
 use egui::{Color32, Frame, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::{Arc, Mutex};
 
 use crate::net::NetClient;
 use crate::theme::colors;
@@ -60,13 +60,7 @@ impl FeedbackCategory {
     }
 
     pub fn all() -> &'static [FeedbackCategory] {
-        &[
-            Self::UxFriction,
-            Self::Bug,
-            Self::MissingInfo,
-            Self::ModelReasoning,
-            Self::LayoutVisual,
-        ]
+        &[Self::UxFriction, Self::Bug, Self::MissingInfo, Self::ModelReasoning, Self::LayoutVisual]
     }
 
     pub fn color(&self) -> Color32 {
@@ -159,15 +153,16 @@ impl FeedbackInspectorState {
             return;
         }
         if let Some(hover_pos) = ui.input(|i| i.pointer.hover_pos())
-            && rect.contains(hover_pos) {
-                let should_replace = match &self.hovered_target {
-                    Some((_, existing_rect)) => rect.area() <= existing_rect.area(),
-                    None => true,
-                };
-                if should_replace {
-                    self.hovered_target = Some((id.to_string(), rect));
-                }
+            && rect.contains(hover_pos)
+        {
+            let should_replace = match &self.hovered_target {
+                Some((_, existing_rect)) => rect.area() <= existing_rect.area(),
+                None => true,
+            };
+            if should_replace {
+                self.hovered_target = Some((id.to_string(), rect));
             }
+        }
     }
 
     /// Targets an element, immediately turns off inspection mode, and opens the feedback modal.
@@ -226,7 +221,13 @@ impl FeedbackInspectorState {
 
     /// Renders the enlarged Feedback Modal when an element is targeted:
     /// where it was drawn, while it's open.
-    pub fn render_modal(&mut self, ctx: &egui::Context, net: &NetClient, active_layout: usize, active_slots: &[String]) -> Option<egui::Rect> {
+    pub fn render_modal(
+        &mut self,
+        ctx: &egui::Context,
+        net: &NetClient,
+        active_layout: usize,
+        active_slots: &[String],
+    ) -> Option<egui::Rect> {
         if !self.is_modal_open {
             return None;
         }
@@ -251,7 +252,9 @@ impl FeedbackInspectorState {
                             .corner_radius(crate::theme::look().radius_m)
                             .inner_margin(crate::theme::margin2(crate::theme::look().space_m, crate::theme::look().space_s))
                             .show(ui, |ui| {
-                                ui.label(RichText::new(&self.target_id).monospace().size(crate::theme::look().text_label).color(colors().info));
+                                ui.label(
+                                    RichText::new(&self.target_id).monospace().size(crate::theme::look().text_label).color(colors().info),
+                                );
                             });
                     });
                     ui.add_space(crate::theme::look().space_m);
@@ -274,7 +277,7 @@ impl FeedbackInspectorState {
                             .id(egui::Id::new("feedback_modal_comment_edit"))
                             .desired_rows(11)
                             .desired_width(ui.available_width())
-                            .hint_text("Explain what felt broken, unresponsive, misaligned, or unexpected...")
+                            .hint_text("Explain what felt broken, unresponsive, misaligned, or unexpected..."),
                     );
                     if self.should_focus_modal {
                         text_resp.request_focus();
@@ -284,28 +287,27 @@ impl FeedbackInspectorState {
 
                     ui.horizontal(|ui| {
                         if ui.button(RichText::new("🚀 Submit Feedback").strong().color(colors().ok)).clicked()
-                            && !self.comment.trim().is_empty() {
-                                let payload = json!({
-                                    "target": { "id": self.target_id },
-                                    "category": self.selected_category.as_str(),
-                                    "comment": self.comment.trim(),
-                                    "status": "open",
-                                    "context": {
-                                        "activeLayout": active_layout,
-                                        "activeSlots": active_slots
-                                    }
-                                });
+                            && !self.comment.trim().is_empty()
+                        {
+                            let payload = json!({
+                                "target": { "id": self.target_id },
+                                "category": self.selected_category.as_str(),
+                                "comment": self.comment.trim(),
+                                "status": "open",
+                                "context": {
+                                    "activeLayout": active_layout,
+                                    "activeSlots": active_slots
+                                }
+                            });
 
-                                let net_ctx = ctx.clone();
-                                net.submit_feedback(payload, net_ctx, |_| {});
+                            let net_ctx = ctx.clone();
+                            net.submit_feedback(payload, net_ctx, |_| {});
 
-                                self.toast_message = Some((
-                                    format!("Feedback recorded for target '{}'!", self.target_id),
-                                    ctx.input(|i| i.time),
-                                ));
-                                self.comment.clear();
-                                close_modal = true;
-                            }
+                            self.toast_message =
+                                Some((format!("Feedback recorded for target '{}'!", self.target_id), ctx.input(|i| i.time)));
+                            self.comment.clear();
+                            close_modal = true;
+                        }
 
                         if ui.button("Cancel").clicked() {
                             close_modal = true;
@@ -347,27 +349,29 @@ impl FeedbackInspectorState {
     pub fn render_issues_window(&mut self, ctx: &egui::Context, net: &NetClient) -> Option<egui::Rect> {
         // Drain pending loads
         if let Ok(mut lock) = self.pending_issues_load.lock()
-            && let Some(res) = lock.take() {
-                self.is_loading_issues = false;
-                if let Ok(issues) = res {
-                    self.issues = issues;
-                }
+            && let Some(res) = lock.take()
+        {
+            self.is_loading_issues = false;
+            if let Ok(issues) = res {
+                self.issues = issues;
             }
+        }
 
         // Drain pending updates
         let mut should_reload = false;
         if let Ok(mut lock) = self.pending_issue_update.lock()
-            && let Some(res) = lock.take() {
-                match res {
-                    Ok(msg) => {
-                        self.toast_message = Some((msg, ctx.input(|i| i.time)));
-                        should_reload = true;
-                    }
-                    Err(e) => {
-                        self.toast_message = Some((format!("Error updating: {}", e), ctx.input(|i| i.time)));
-                    }
+            && let Some(res) = lock.take()
+        {
+            match res {
+                Ok(msg) => {
+                    self.toast_message = Some((msg, ctx.input(|i| i.time)));
+                    should_reload = true;
+                }
+                Err(e) => {
+                    self.toast_message = Some((format!("Error updating: {}", e), ctx.input(|i| i.time)));
                 }
             }
+        }
         if should_reload {
             self.load_issues(net, ctx.clone());
         }
@@ -377,210 +381,229 @@ impl FeedbackInspectorState {
         }
 
         let mut is_open = self.is_issues_window_open;
-        let shown = egui::Window::new(RichText::new(format!("{} Issues & Feedback Explorer", egui_phosphor::regular::WARNING_CIRCLE)).strong().color(colors().accent))
-            .open(&mut is_open)
-            .collapsible(false)
-            .resizable(true)
-            .default_size(Vec2::new(820.0, 540.0))
-            .min_size(Vec2::new(600.0, 400.0))
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("Total: {} issues", self.issues.len())).strong().size(crate::theme::look().text_label));
-                    ui.separator();
+        let shown = egui::Window::new(
+            RichText::new(format!("{} Issues & Feedback Explorer", egui_phosphor::regular::WARNING_CIRCLE)).strong().color(colors().accent),
+        )
+        .open(&mut is_open)
+        .collapsible(false)
+        .resizable(true)
+        .default_size(Vec2::new(820.0, 540.0))
+        .min_size(Vec2::new(600.0, 400.0))
+        .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("Total: {} issues", self.issues.len())).strong().size(crate::theme::look().text_label));
+                ui.separator();
 
-                    ui.label("Filter:");
-                    let filters = [("All", "all"), ("Open", "open"), ("In Progress", "in_progress"), ("Resolved", "resolved")];
-                    for (lbl, val) in filters {
-                        let is_active = self.status_filter == val;
-                        if ui.selectable_label(is_active, lbl).clicked() {
-                            self.status_filter = val.to_string();
-                        }
+                ui.label("Filter:");
+                let filters = [("All", "all"), ("Open", "open"), ("In Progress", "in_progress"), ("Resolved", "resolved")];
+                for (lbl, val) in filters {
+                    let is_active = self.status_filter == val;
+                    if ui.selectable_label(is_active, lbl).clicked() {
+                        self.status_filter = val.to_string();
                     }
+                }
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(format!("{} Refresh", egui_phosphor::regular::ARROWS_CLOCKWISE)).clicked() {
-                            self.load_issues(net, ctx.clone());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(format!("{} Refresh", egui_phosphor::regular::ARROWS_CLOCKWISE)).clicked() {
+                        self.load_issues(net, ctx.clone());
+                    }
+                });
+            });
+            ui.separator();
+
+            // Master-detail split layout
+            let total_w = ui.available_width();
+            let list_w = (total_w * 0.42).clamp(260.0, 360.0);
+
+            ui.horizontal(|ui| {
+                // Left column: Scrollable list of issues
+                ui.allocate_ui_with_layout(Vec2::new(list_w, ui.available_height()), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    egui::ScrollArea::vertical().id_salt("issues_list_scroll").show(ui, |ui| {
+                        let filtered: Vec<&FeedbackIssue> = self
+                            .issues
+                            .iter()
+                            .filter(|i| if self.status_filter == "all" { true } else { i.status.eq_ignore_ascii_case(&self.status_filter) })
+                            .collect();
+
+                        if filtered.is_empty() {
+                            ui.add_space(crate::theme::look().space_xxl);
+                            ui.label(RichText::new("No issues match current filter.").italics().color(colors().muted));
+                        } else if self.selected_issue_id.is_none()
+                            && let Some(first) = filtered.first()
+                        {
+                            self.selected_issue_id = Some(first.id.clone());
+                            self.editing_status = first.status.clone();
+                            self.editing_category = FeedbackCategory::from_str_lossy(&first.category);
+                            self.editing_comment = first.comment.clone();
+                        }
+
+                        for issue in filtered {
+                            let is_selected = self.selected_issue_id.as_deref() == Some(&issue.id);
+                            let target_id_str = issue.target.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                            let cat = FeedbackCategory::from_str_lossy(&issue.category);
+
+                            let bg = if is_selected { colors().raised } else { colors().surface };
+
+                            let card_res = Frame::NONE
+                                .fill(bg)
+                                .stroke(Stroke::new(
+                                    crate::theme::look().line_thin,
+                                    if is_selected { colors().accent } else { colors().raised },
+                                ))
+                                .corner_radius(crate::theme::look().radius_m)
+                                .inner_margin(crate::theme::margin(crate::theme::look().space_m))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new(cat.as_str()).size(crate::theme::look().text_small).color(cat.color()).strong(),
+                                        );
+                                        ui.label(RichText::new(&issue.status).size(crate::theme::look().text_small).color(colors().text));
+                                    });
+                                    ui.label(
+                                        RichText::new(target_id_str)
+                                            .monospace()
+                                            .size(crate::theme::look().text_body)
+                                            .color(colors().text_strong),
+                                    );
+                                    let snippet = if issue.comment.len() > 45 {
+                                        format!("{}...", &issue.comment[..45])
+                                    } else {
+                                        issue.comment.clone()
+                                    };
+                                    ui.label(RichText::new(snippet).size(crate::theme::look().text_small).color(colors().muted));
+                                });
+
+                            let card_interact = ui.interact(card_res.response.rect, ui.id().with(&issue.id), egui::Sense::click());
+                            if card_interact.clicked() {
+                                self.selected_issue_id = Some(issue.id.clone());
+                                self.editing_status = issue.status.clone();
+                                self.editing_category = FeedbackCategory::from_str_lossy(&issue.category);
+                                self.editing_comment = issue.comment.clone();
+                            }
+                            if card_interact.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            ui.add_space(crate::theme::look().space_s);
                         }
                     });
                 });
+
                 ui.separator();
 
-                // Master-detail split layout
-                let total_w = ui.available_width();
-                let list_w = (total_w * 0.42).clamp(260.0, 360.0);
+                // Right column: Detailed View & Edit Panel
+                ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), ui.available_height()),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        if let Some(selected_id) = self.selected_issue_id.clone() {
+                            if let Some(issue) = self.issues.iter().find(|i| i.id == selected_id).cloned() {
+                                let target_id_str = issue.target.get("id").and_then(|v| v.as_str()).unwrap_or("general").to_string();
 
-                ui.horizontal(|ui| {
-                    // Left column: Scrollable list of issues
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(list_w, ui.available_height()),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            egui::ScrollArea::vertical().id_salt("issues_list_scroll").show(ui, |ui| {
-                                let filtered: Vec<&FeedbackIssue> = self.issues.iter().filter(|i| {
-                                    if self.status_filter == "all" {
-                                        true
-                                    } else {
-                                        i.status.eq_ignore_ascii_case(&self.status_filter)
-                                    }
-                                }).collect();
+                                ui.label(
+                                    RichText::new(format!("Issue: {}", issue.id))
+                                        .monospace()
+                                        .strong()
+                                        .size(crate::theme::look().text_title),
+                                );
+                                ui.add_space(crate::theme::look().space_s);
 
-                                if filtered.is_empty() {
-                                    ui.add_space(crate::theme::look().space_xxl);
-                                    ui.label(RichText::new("No issues match current filter.").italics().color(colors().muted));
-                                } else if self.selected_issue_id.is_none()
-                                    && let Some(first) = filtered.first() {
-                                        self.selected_issue_id = Some(first.id.clone());
-                                        self.editing_status = first.status.clone();
-                                        self.editing_category = FeedbackCategory::from_str_lossy(&first.category);
-                                        self.editing_comment = first.comment.clone();
-                                    }
-
-                                for issue in filtered {
-                                    let is_selected = self.selected_issue_id.as_deref() == Some(&issue.id);
-                                    let target_id_str = issue.target.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
-                                    let cat = FeedbackCategory::from_str_lossy(&issue.category);
-
-                                    let bg = if is_selected {
-                                        colors().raised
-                                    } else {
-                                        colors().surface
-                                    };
-
-                                    let card_res = Frame::NONE
-                                        .fill(bg)
-                                        .stroke(Stroke::new(crate::theme::look().line_thin, if is_selected { colors().accent } else { colors().raised }))
-                                        .corner_radius(crate::theme::look().radius_m)
-                                        .inner_margin(crate::theme::margin(crate::theme::look().space_m))
-                                        .show(ui, |ui| {
-                                            ui.horizontal(|ui| {
-                                                ui.label(RichText::new(cat.as_str()).size(crate::theme::look().text_small).color(cat.color()).strong());
-                                                ui.label(RichText::new(&issue.status).size(crate::theme::look().text_small).color(colors().text));
-                                            });
-                                            ui.label(RichText::new(target_id_str).monospace().size(crate::theme::look().text_body).color(colors().text_strong));
-                                            let snippet = if issue.comment.len() > 45 {
-                                                format!("{}...", &issue.comment[..45])
-                                            } else {
-                                                issue.comment.clone()
-                                            };
-                                            ui.label(RichText::new(snippet).size(crate::theme::look().text_small).color(colors().muted));
-                                        });
-
-                                    let card_interact = ui.interact(card_res.response.rect, ui.id().with(&issue.id), egui::Sense::click());
-                                    if card_interact.clicked() {
-                                        self.selected_issue_id = Some(issue.id.clone());
-                                        self.editing_status = issue.status.clone();
-                                        self.editing_category = FeedbackCategory::from_str_lossy(&issue.category);
-                                        self.editing_comment = issue.comment.clone();
-                                    }
-                                    if card_interact.hovered() {
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                    }
-                                    ui.add_space(crate::theme::look().space_s);
-                                }
-                            });
-                        },
-                    );
-
-                    ui.separator();
-
-                    // Right column: Detailed View & Edit Panel
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(ui.available_width(), ui.available_height()),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            if let Some(selected_id) = self.selected_issue_id.clone() {
-                                if let Some(issue) = self.issues.iter().find(|i| i.id == selected_id).cloned() {
-                                    let target_id_str = issue.target.get("id").and_then(|v| v.as_str()).unwrap_or("general").to_string();
-
-                                    ui.label(RichText::new(format!("Issue: {}", issue.id)).monospace().strong().size(crate::theme::look().text_title));
-                                    ui.add_space(crate::theme::look().space_s);
-
-                                    ui.horizontal(|ui| {
-                                        ui.label(RichText::new("Target:").strong().size(crate::theme::look().text_body));
-                                        ui.label(RichText::new(&target_id_str).monospace().size(crate::theme::look().text_body).color(colors().info));
-                                    });
-                                    ui.add_space(crate::theme::look().space_sm);
-
-                                    ui.horizontal(|ui| {
-                                        ui.label(RichText::new("Status:").strong().size(crate::theme::look().text_body));
-                                        let statuses = ["open", "in_progress", "resolved"];
-                                        for st in statuses {
-                                            let is_st = self.editing_status.eq_ignore_ascii_case(st);
-                                            let label = match st {
-                                                "open" => "Open",
-                                                "in_progress" => "In Progress",
-                                                "resolved" => "Resolved",
-                                                _ => st,
-                                            };
-                                            if ui.selectable_label(is_st, label).clicked() {
-                                                self.editing_status = st.to_string();
-                                            }
-                                        }
-                                    });
-                                    ui.add_space(crate::theme::look().space_sm);
-
-                                    ui.horizontal(|ui| {
-                                        ui.label(RichText::new("Category:").strong().size(crate::theme::look().text_body));
-                                        for cat in FeedbackCategory::all() {
-                                            let is_cat = &self.editing_category == cat;
-                                            if ui.selectable_label(is_cat, cat.as_str()).clicked() {
-                                                self.editing_category = cat.clone();
-                                            }
-                                        }
-                                    });
-                                    ui.add_space(crate::theme::look().space_m);
-
-                                    ui.label(RichText::new("Critique & Notes (Editable):").strong().size(crate::theme::look().text_body));
-                                    ui.add(
-                                        egui::TextEdit::multiline(&mut self.editing_comment)
-                                            .desired_rows(7)
-                                            .desired_width(ui.available_width())
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("Target:").strong().size(crate::theme::look().text_body));
+                                    ui.label(
+                                        RichText::new(&target_id_str).monospace().size(crate::theme::look().text_body).color(colors().info),
                                     );
-                                    ui.add_space(crate::theme::look().space_ml);
+                                });
+                                ui.add_space(crate::theme::look().space_sm);
 
-                                    if let Some(ctx_val) = &issue.context {
-                                        ui.collapsing("System Context Metadata", |ui| {
-                                            let pretty = serde_json::to_string_pretty(ctx_val).unwrap_or_default();
-                                            ui.label(RichText::new(pretty).monospace().size(crate::theme::look().text_small).color(colors().muted));
-                                        });
-                                        ui.add_space(crate::theme::look().space_ml);
-                                    }
-
-                                    ui.horizontal(|ui| {
-                                        if ui.button(RichText::new(format!("{} Save Changes", egui_phosphor::regular::FLOPPY_DISK)).strong().color(colors().ok)).clicked() {
-                                            let updated_item = FeedbackIssue {
-                                                id: issue.id.clone(),
-                                                timestamp: issue.timestamp.clone(),
-                                                target: issue.target.clone(),
-                                                category: self.editing_category.as_str().to_string(),
-                                                comment: self.editing_comment.clone(),
-                                                status: self.editing_status.clone(),
-                                                context: issue.context.clone(),
-                                            };
-
-                                            let json_val = serde_json::to_value(&updated_item).unwrap_or_default();
-                                            let mailbox = self.pending_issue_update.clone();
-                                            let net_ctx = ctx.clone();
-
-                                            net.update_feedback(json_val, net_ctx, move |result| {
-                                                if let Ok(mut lock) = mailbox.lock() {
-                                                    *lock = Some(result);
-                                                }
-                                            });
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("Status:").strong().size(crate::theme::look().text_body));
+                                    let statuses = ["open", "in_progress", "resolved"];
+                                    for st in statuses {
+                                        let is_st = self.editing_status.eq_ignore_ascii_case(st);
+                                        let label = match st {
+                                            "open" => "Open",
+                                            "in_progress" => "In Progress",
+                                            "resolved" => "Resolved",
+                                            _ => st,
+                                        };
+                                        if ui.selectable_label(is_st, label).clicked() {
+                                            self.editing_status = st.to_string();
                                         }
+                                    }
+                                });
+                                ui.add_space(crate::theme::look().space_sm);
+
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("Category:").strong().size(crate::theme::look().text_body));
+                                    for cat in FeedbackCategory::all() {
+                                        let is_cat = &self.editing_category == cat;
+                                        if ui.selectable_label(is_cat, cat.as_str()).clicked() {
+                                            self.editing_category = cat.clone();
+                                        }
+                                    }
+                                });
+                                ui.add_space(crate::theme::look().space_m);
+
+                                ui.label(RichText::new("Critique & Notes (Editable):").strong().size(crate::theme::look().text_body));
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut self.editing_comment)
+                                        .desired_rows(7)
+                                        .desired_width(ui.available_width()),
+                                );
+                                ui.add_space(crate::theme::look().space_ml);
+
+                                if let Some(ctx_val) = &issue.context {
+                                    ui.collapsing("System Context Metadata", |ui| {
+                                        let pretty = serde_json::to_string_pretty(ctx_val).unwrap_or_default();
+                                        ui.label(
+                                            RichText::new(pretty).monospace().size(crate::theme::look().text_small).color(colors().muted),
+                                        );
                                     });
+                                    ui.add_space(crate::theme::look().space_ml);
                                 }
-                            } else {
-                                ui.vertical_centered(|ui| {
-                                    ui.add_space(crate::theme::look().space_huge);
-                                    ui.label(RichText::new("Select an issue from the list to view or edit.").italics().color(colors().muted));
+
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .button(
+                                            RichText::new(format!("{} Save Changes", egui_phosphor::regular::FLOPPY_DISK))
+                                                .strong()
+                                                .color(colors().ok),
+                                        )
+                                        .clicked()
+                                    {
+                                        let updated_item = FeedbackIssue {
+                                            id: issue.id.clone(),
+                                            timestamp: issue.timestamp.clone(),
+                                            target: issue.target.clone(),
+                                            category: self.editing_category.as_str().to_string(),
+                                            comment: self.editing_comment.clone(),
+                                            status: self.editing_status.clone(),
+                                            context: issue.context.clone(),
+                                        };
+
+                                        let json_val = serde_json::to_value(&updated_item).unwrap_or_default();
+                                        let mailbox = self.pending_issue_update.clone();
+                                        let net_ctx = ctx.clone();
+
+                                        net.update_feedback(json_val, net_ctx, move |result| {
+                                            if let Ok(mut lock) = mailbox.lock() {
+                                                *lock = Some(result);
+                                            }
+                                        });
+                                    }
                                 });
                             }
-                        },
-                    );
-                });
+                        } else {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(crate::theme::look().space_huge);
+                                ui.label(RichText::new("Select an issue from the list to view or edit.").italics().color(colors().muted));
+                            });
+                        }
+                    },
+                );
             });
+        });
 
         self.is_issues_window_open = is_open;
         shown.map(|s| s.response.rect).filter(|_| self.is_issues_window_open)
@@ -590,18 +613,16 @@ impl FeedbackInspectorState {
         if let Some((msg, created_at)) = &self.toast_message {
             let now = ctx.input(|i| i.time);
             if now - *created_at < 3.5 {
-                egui::Area::new(egui::Id::new("toast_area"))
-                    .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-20.0, -20.0))
-                    .show(ctx, |ui| {
-                        Frame::NONE
-                            .fill(colors().ok_bg)
-                            .stroke(Stroke::new(crate::theme::look().line_thin, colors().ok))
-                            .corner_radius(crate::theme::look().radius_l)
-                            .inner_margin(crate::theme::margin(crate::theme::look().space_ml))
-                            .show(ui, |ui| {
-                                ui.label(RichText::new(msg).color(colors().text_strong).size(crate::theme::look().text_label));
-                            });
-                    });
+                egui::Area::new(egui::Id::new("toast_area")).anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-20.0, -20.0)).show(ctx, |ui| {
+                    Frame::NONE
+                        .fill(colors().ok_bg)
+                        .stroke(Stroke::new(crate::theme::look().line_thin, colors().ok))
+                        .corner_radius(crate::theme::look().radius_l)
+                        .inner_margin(crate::theme::margin(crate::theme::look().space_ml))
+                        .show(ui, |ui| {
+                            ui.label(RichText::new(msg).color(colors().text_strong).size(crate::theme::look().text_label));
+                        });
+                });
             } else {
                 self.toast_message = None;
             }

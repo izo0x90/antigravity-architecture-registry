@@ -11,8 +11,8 @@ use harness_contracts::{Notification, NotificationId, SlotId};
 use serde::{Deserialize, Serialize};
 
 use crate::cockpit::{Needs, can};
-use crate::server::ApiResult;
 use crate::modules::NotifyState;
+use crate::server::ApiResult;
 
 pub(crate) fn routes() -> Router<NotifyState> {
     Router::new()
@@ -41,7 +41,11 @@ struct ListQuery {
 
 /// The open ones in the order they're gone through, or the latest in any
 /// state, newest first.
-async fn list(_: Needs<can::SessionsControl>, State(state): State<NotifyState>, Query(query): Query<ListQuery>) -> ApiResult<Json<Vec<Notification>>> {
+async fn list(
+    _: Needs<can::SessionsControl>,
+    State(state): State<NotifyState>,
+    Query(query): Query<ListQuery>,
+) -> ApiResult<Json<Vec<Notification>>> {
     Ok(Json(match query.state {
         Which::Open => state.notify.open(),
         Which::Recent => blocking(move || state.notify.recent(RECENT)).await?,
@@ -71,7 +75,11 @@ async fn seen(_: Needs<can::SessionsControl>, State(state): State<NotifyState>, 
     Ok(Json(Dismissed { dismissed }))
 }
 
-async fn dismiss(_: Needs<can::SessionsControl>, State(state): State<NotifyState>, Path(id): Path<String>) -> ApiResult<Json<Notification>> {
+async fn dismiss(
+    _: Needs<can::SessionsControl>,
+    State(state): State<NotifyState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Notification>> {
     Ok(Json(blocking(move || state.notify.dismiss(&NotificationId::new(id))).await?))
 }
 

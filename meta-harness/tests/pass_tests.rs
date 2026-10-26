@@ -25,7 +25,8 @@ async fn echo() -> SocketAddr {
         .route(
             "/headers",
             get(|headers: axum::http::HeaderMap| async move {
-                let all: serde_json::Map<String, serde_json::Value> = headers.iter().map(|(k, v)| (k.to_string(), json!(v.to_str().unwrap_or("")))).collect();
+                let all: serde_json::Map<String, serde_json::Value> =
+                    headers.iter().map(|(k, v)| (k.to_string(), json!(v.to_str().unwrap_or("")))).collect();
                 axum::Json(all)
             }),
         )
@@ -40,7 +41,12 @@ async fn echo() -> SocketAddr {
                 n.to_string()
             }),
         )
-        .route("/big", get(|| async { Body::from_stream(futures::stream::iter((0..BIG / 65536).map(|_| Ok::<_, std::io::Error>(vec![b'x'; 65536])))) }))
+        .route(
+            "/big",
+            get(|| async {
+                Body::from_stream(futures::stream::iter((0..BIG / 65536).map(|_| Ok::<_, std::io::Error>(vec![b'x'; 65536]))))
+            }),
+        )
         .route(
             "/drop",
             get(|| async {
@@ -55,14 +61,23 @@ async fn echo() -> SocketAddr {
 }
 
 async fn add(home: SocketAddr, name: &str, at: SocketAddr) {
-    let (status, body) = http(home, "POST", "/api/home/servers", Some(&json!({ "name": name, "url": format!("http://{at}"), "secret": COCKPIT_TOKEN }).to_string())).await;
+    let (status, body) = http(
+        home,
+        "POST",
+        "/api/home/servers",
+        Some(&json!({ "name": name, "url": format!("http://{at}"), "secret": COCKPIT_TOKEN }).to_string()),
+    )
+    .await;
     assert_eq!(status, 201, "{body}");
 }
 
 /// A raw request through home, with the cockpit's cookie and more.
 async fn raw(home: SocketAddr, method: &str, path: &str, body: &[u8]) -> (u16, Vec<u8>, bool) {
     let mut stream = tokio::net::TcpStream::connect(home).await.unwrap();
-    let head = format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nCookie: nah_cockpit={COCKPIT_TOKEN}\r\nX-Kept: yes\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+    let head = format!(
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nCookie: nah_cockpit={COCKPIT_TOKEN}\r\nX-Kept: yes\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
     stream.write_all(head.as_bytes()).await.unwrap();
     stream.write_all(body).await.unwrap();
     let mut answer = Vec::new();

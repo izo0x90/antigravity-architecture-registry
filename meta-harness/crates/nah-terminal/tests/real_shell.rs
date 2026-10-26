@@ -22,7 +22,13 @@ fn open(shell: &str, cols: u16, rows: u16) -> Shell {
     unsafe { std::env::set_var("HOME", empty_home()) };
     let happened = Arc::new(Mutex::new(Vec::new()));
     let seen = happened.clone();
-    let options = Options { shell: shell.into(), folder: dir.path().into(), size: TermSize { cols, rows }, hooks: dir.path().join("hooks"), history: 1000 };
+    let options = Options {
+        shell: shell.into(),
+        folder: dir.path().into(),
+        size: TermSize { cols, rows },
+        hooks: dir.path().join("hooks"),
+        history: 1000,
+    };
     let terminal = Terminal::open(options, move |h| seen.lock().unwrap().push(h)).unwrap();
     Shell { terminal, happened, _dir: dir }
 }
@@ -108,7 +114,11 @@ fn a_reader_gets_only_the_rows_changed_since_it_last_looked() {
     sh.until("second", |t| shows(t, "second"));
     let update = sh.terminal.screen(Some(seen));
     assert!(!update.full && update.seq > seen);
-    assert!(!update.rows.is_empty() && update.rows.len() < 24, "only the rows that changed: {:?}", update.rows.iter().map(|r| r.0).collect::<Vec<_>>());
+    assert!(
+        !update.rows.is_empty() && update.rows.len() < 24,
+        "only the rows that changed: {:?}",
+        update.rows.iter().map(|r| r.0).collect::<Vec<_>>()
+    );
     assert!(sh.terminal.screen(Some(update.seq)).rows.is_empty(), "nothing new since");
 }
 
@@ -141,10 +151,18 @@ fn colours_come_as_the_program_asked_for_them() {
     let screen = sh.terminal.screen(None);
     // Its last four runs (a prompt is in front of it when the keys came before the prompt).
     let runs = screen.rows.iter().map(|(_, r)| r).find(|r| shows(&r.iter().map(|x| x.text.as_str()).collect::<String>(), "RITB")).unwrap();
-    let styles: Vec<_> = runs[runs.len().saturating_sub(4)..].iter().map(|r| (r.text.as_str(), r.style.fg, r.style.bg, r.style.has(harness_contracts::Style::BOLD))).collect();
+    let styles: Vec<_> = runs[runs.len().saturating_sub(4)..]
+        .iter()
+        .map(|r| (r.text.as_str(), r.style.fg, r.style.bg, r.style.has(harness_contracts::Style::BOLD)))
+        .collect();
     assert_eq!(
         styles,
-        [("R", Colour::Named(1), Colour::Default, false), ("I", Colour::Indexed(200), Colour::Default, false), ("T", Colour::Rgb(1, 2, 3), Colour::Default, false), ("B", Colour::Rgb(1, 2, 3), Colour::Named(4), true)]
+        [
+            ("R", Colour::Named(1), Colour::Default, false),
+            ("I", Colour::Indexed(200), Colour::Default, false),
+            ("T", Colour::Rgb(1, 2, 3), Colour::Default, false),
+            ("B", Colour::Rgb(1, 2, 3), Colour::Named(4), true)
+        ]
     );
 }
 
@@ -161,7 +179,11 @@ fn a_line_keeps_its_number_in_the_scrollback_past_whats_kept_and_through_a_clear
     assert!(number < screen.top && number >= screen.oldest, "it's in the scrollback: {number} of {}..{}", screen.oldest, screen.top);
     assert!(screen.top - screen.oldest >= 1000, "what's kept is kept");
     assert!(sh.terminal.scrollback(0, 1).0 == screen.oldest, "older than what's kept: from the oldest kept");
-    let line = |n: u64| Some(sh.terminal.scrollback(n, 1)).filter(|(from, _)| *from == n).and_then(|(_, rows)| rows.first().map(|r| r.iter().map(|run| run.text.as_str()).collect::<String>()));
+    let line = |n: u64| {
+        Some(sh.terminal.scrollback(n, 1))
+            .filter(|(from, _)| *from == n)
+            .and_then(|(_, rows)| rows.first().map(|r| r.iter().map(|run| run.text.as_str()).collect::<String>()))
+    };
     assert_eq!(line(number).as_deref(), Some("2950"));
     // More output: it keeps its number.
     sh.run("seq 1 100");
@@ -346,7 +368,11 @@ fn a_synchronized_update_never_ended_shows_and_its_answers_reach_the_program() {
     // Asks where the cursor is inside an update it never ends, and waits for the answer.
     sh.run(r"printf '\e[?2026h\e[6n'; read -rs -d R pos; echo; echo answered ${pos:2}");
     // "answered 24;1": the row and column it said.
-    let said = |l: &str| l.strip_prefix("answered ").and_then(|p| p.split_once(';')).is_some_and(|(r, c)| r.parse::<u16>().is_ok() && c.parse::<u16>().is_ok());
+    let said = |l: &str| {
+        l.strip_prefix("answered ")
+            .and_then(|p| p.split_once(';'))
+            .is_some_and(|(r, c)| r.parse::<u16>().is_ok() && c.parse::<u16>().is_ok())
+    };
     sh.until("the answer, once the update was let go", |t| t.lines().any(said));
     // A program that ends inside one: what it drew shows.
     sh.run(r"printf '\e[?2026hbye\x20inside'; exit");

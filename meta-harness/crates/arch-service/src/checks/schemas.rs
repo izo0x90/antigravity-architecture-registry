@@ -18,7 +18,11 @@ pub(super) fn fit(plan: &Plan, graph: &Graph, set: &SchemaSet, packs: &PackSet, 
         let Some(c) = graph.component(&planned.id) else { continue };
         // Every interface it implements (directly or through others) that
         // states a shape must be satisfied, not just the nearest.
-        let interfaces = graph.interface_chain(&c.id).into_iter().filter_map(|i| graph.component(&i)).filter(|i| i.schemas.inputs.is_some() || i.schemas.outputs.is_some());
+        let interfaces = graph
+            .interface_chain(&c.id)
+            .into_iter()
+            .filter_map(|i| graph.component(&i))
+            .filter(|i| i.schemas.inputs.is_some() || i.schemas.outputs.is_some());
         for interface in interfaces {
             let mut problems = Vec::new();
             if let (Some(promised), Some(accepted)) = (resolve(&interface.schemas.inputs), resolve(&c.schemas.inputs)) {
@@ -28,7 +32,11 @@ pub(super) fn fit(plan: &Plan, graph: &Graph, set: &SchemaSet, packs: &PackSet, 
                 problems.extend(compatibility(&given, &promised).into_iter().map(|p| format!("outputs: {p}")));
             }
             for p in problems {
-                report.push(Finding::error(FindingCode::SchemaMismatch, component(&c.id), format!("doesn't fit {} it implements: {p}", interface.id)));
+                report.push(Finding::error(
+                    FindingCode::SchemaMismatch,
+                    component(&c.id),
+                    format!("doesn't fit {} it implements: {p}", interface.id),
+                ));
             }
         }
     }
@@ -66,7 +74,8 @@ fn requires_inputs(schema: &Value) -> bool {
 fn call(r: &Relation, graph: &Graph, resolve: &dyn Fn(&Option<Value>) -> Option<Value>, packs: &PackSet, report: &mut Report) {
     let (Some(expects), Some(callee)) = (&r.expects, graph.component(&r.target)) else { return };
     let target = || Target::Relation { id: r.id() };
-    let mut mismatch = |code: FindingCode, msg: String| report.push(Finding::error(code, target(), format!("{} -> {}: {msg}", r.source, r.target)));
+    let mut mismatch =
+        |code: FindingCode, msg: String| report.push(Finding::error(code, target(), format!("{} -> {}: {msg}", r.source, r.target)));
     let (callee_inputs, callee_outputs) = effective(graph, callee);
     let callee_inputs = resolve(&callee_inputs);
     match (resolve(&expects.inputs), &callee_inputs) {
@@ -114,12 +123,14 @@ fn against_signature(callee: &Component, inputs: Option<&Value>, outputs: Option
     if let Some(inputs) = inputs {
         let empty = serde_json::Map::new();
         let props = inputs.get("properties").and_then(Value::as_object).unwrap_or(&empty);
-        let required: Vec<&str> = inputs.get("required").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+        let required: Vec<&str> =
+            inputs.get("required").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
         let needed = params.iter().filter(|p| !p.optional && !p.variadic).count();
         let variadic = params.iter().any(|p| p.variadic);
         if (!variadic && (props.len() > params.len() || required.len() > params.len())) || needed > props.len() {
             let optional = params.len() - needed;
-            let takes = if optional > 0 { format!("{needed} argument(s) (+{optional} optional)") } else { format!("{} argument(s)", params.len()) };
+            let takes =
+                if optional > 0 { format!("{needed} argument(s) (+{optional} optional)") } else { format!("{} argument(s)", params.len()) };
             out.push(format!("{} takes {takes}; the call passes {} ({} required)", callee.name, props.len(), required.len()));
         }
         for p in &params {
@@ -160,7 +171,9 @@ fn port(schema: Value, name: &str, whole_ok: bool) -> Result<Value, Vec<String>>
 }
 
 fn flow(r: &Relation, graph: &Graph, resolve: &dyn Fn(&Option<Value>) -> Option<Value>, report: &mut Report) {
-    let (Some((out_port, in_port)), Some(source), Some(target)) = (&r.ports, graph.component(&r.source), graph.component(&r.target)) else { return };
+    let (Some((out_port, in_port)), Some(source), Some(target)) = (&r.ports, graph.component(&r.source), graph.component(&r.target)) else {
+        return;
+    };
     let (Some(outputs), Some(inputs)) = (resolve(&effective(graph, source).1), resolve(&effective(graph, target).0)) else { return };
     let rel = || Target::Relation { id: r.id() };
     let mut missing = |side: &str, who: &arch_graph::ComponentId, name: &str, fields: Vec<String>| {
@@ -214,7 +227,11 @@ mod tests {
                 content_hash: "h".into(),
             }),
             proposed: None,
-            signature: Some(Signature { params: vec![param("&mut self", "", false), param("item", "&str", false), param("flush", "bool", true)], returns: None, qualifiers: vec![] }),
+            signature: Some(Signature {
+                params: vec![param("&mut self", "", false), param("item", "&str", false), param("flush", "bool", true)],
+                returns: None,
+                qualifiers: vec![],
+            }),
             schemas: Schemas::default(),
             spec: None,
             placeholders: vec![],
@@ -229,7 +246,10 @@ mod tests {
     fn receivers_aren_t_arguments_and_optional_parameters_may_be_left_out() {
         let packs = crate::shipped_packs();
         let callee = method();
-        assert!(against_signature(&callee, Some(&inputs(json!({"item": "str"}))), None, &packs).is_empty(), "&mut self is the receiver; flush is optional");
+        assert!(
+            against_signature(&callee, Some(&inputs(json!({"item": "str"}))), None, &packs).is_empty(),
+            "&mut self is the receiver; flush is optional"
+        );
         assert!(against_signature(&callee, Some(&inputs(json!({"item": "str", "flush": "bool"}))), None, &packs).is_empty());
         assert_eq!(
             against_signature(&callee, Some(&inputs(json!({"flush": "bool"}))), None, &packs),
@@ -237,7 +257,10 @@ mod tests {
         );
         assert_eq!(
             against_signature(&callee, Some(&inputs(json!({"item": "str", "flush": "bool", "extra": "int"}))), None, &packs),
-            vec!["save takes 1 argument(s) (+1 optional); the call passes 3 (3 required)", "planned input 'extra' isn't a parameter of save"]
+            vec![
+                "save takes 1 argument(s) (+1 optional); the call passes 3 (3 required)",
+                "planned input 'extra' isn't a parameter of save"
+            ]
         );
     }
 }

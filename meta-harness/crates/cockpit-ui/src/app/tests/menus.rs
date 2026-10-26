@@ -26,8 +26,14 @@ fn on_a_phone_the_groups_wrap_inside_the_panel_and_a_tap_opens_one() {
     rows.dedup();
     assert!(rows.len() > 1, "wrapped onto more than one row: {rows:?}");
     let session = *drawn_containing(&output, "Session  Space s").first().expect("the Session menu's button");
-    let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: session.center(), force: None };
-    let button = |pressed| egui::Event::PointerButton { pos: session.center(), button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    let touch =
+        |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: session.center(), force: None };
+    let button = |pressed| egui::Event::PointerButton {
+        pos: session.center(),
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
     at(&ctx, &mut app, vec![touch(egui::TouchPhase::Start), egui::Event::PointerMoved(session.center()), button(true)]);
     at(&ctx, &mut app, vec![touch(egui::TouchPhase::End), button(false), egui::Event::PointerGone]);
     at(&ctx, &mut app, vec![]);
@@ -44,18 +50,30 @@ fn on_a_phone_the_groups_wrap_inside_the_panel_and_a_tap_opens_one() {
 fn a_menus_path_in_the_top_bar_moves_nothing() {
     let (ctx, mut app) = full_app();
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1300.0, 1000.0));
-    let at = |ctx: &egui::Context, app: &mut CockpitApp, events: Vec<egui::Event>| run(ctx, app, egui::RawInput { events, screen_rect: Some(screen), ..Default::default() });
+    let at = |ctx: &egui::Context, app: &mut CockpitApp, events: Vec<egui::Event>| {
+        run(ctx, app, egui::RawInput { events, screen_rect: Some(screen), ..Default::default() })
+    };
     at(&ctx, &mut app, vec![]);
     let normal = at(&ctx, &mut app, vec![]);
-    let first = |output: &egui::FullOutput, words: &str| *drawn_containing(output, words).first().unwrap_or_else(|| panic!("{words:?} isn't drawn"));
+    let first = |output: &egui::FullOutput, words: &str| {
+        *drawn_containing(output, words).first().unwrap_or_else(|| panic!("{words:?} isn't drawn"))
+    };
     let (panels, group) = (first(&normal, "Panels: "), first(&normal, "Chat actions"));
     assert!(first(&normal, "NORMAL").max.x < panels.min.x, "the mode before the right side");
     app.open_menu(&[app.config.keymap.view_menu], &ctx);
     let menu = at(&ctx, &mut app, vec![]);
     assert_eq!(app.input_mode, InputMode::Leader);
-    let mode = drawn_containing(&menu, "Space").into_iter().filter(|r| r.max.y < group.min.y).min_by(|a, b| a.min.x.total_cmp(&b.min.x)).expect("the mode, on the top bar's row");
+    let mode = drawn_containing(&menu, "Space")
+        .into_iter()
+        .filter(|r| r.max.y < group.min.y)
+        .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .expect("the mode, on the top bar's row");
     assert!(mode.max.x < panels.min.x, "cut short before the right side: {mode:?}, {panels:?}");
-    assert_eq!((first(&menu, "Panels: "), first(&menu, "Chat actions")), (panels, group), "the right side and the panels stay where they were");
+    assert_eq!(
+        (first(&menu, "Panels: "), first(&menu, "Chat actions")),
+        (panels, group),
+        "the right side and the panels stay where they were"
+    );
 }
 
 /// A menu shows on a panel's top line only while something in it can be
@@ -82,7 +100,10 @@ fn a_which_key_entry_runs_when_tapped_and_escape_goes_back_one_level() {
     frame(&ctx, &mut app, vec![]);
     let output = frame(&ctx, &mut app, vec![]);
     let text = texts(&output);
-    assert!(text.lines().zip(text.lines().skip(1)).any(|(key, label)| key.chars().count() == 1 && label == "Show the legend"), "an entry says its next key alone: {text}");
+    assert!(
+        text.lines().zip(text.lines().skip(1)).any(|(key, label)| key.chars().count() == 1 && label == "Show the legend"),
+        "an entry says its next key alone: {text}"
+    );
     let was = app.desk.graph().legend_open;
     click_on(&ctx, &mut app, "Show the legend");
     frame(&ctx, &mut app, vec![]);
@@ -113,7 +134,15 @@ fn a_finger_held_on_a_menu_button_says_what_it_is_and_its_keys() {
         frame_at(ctx, app, events, t)
     };
     let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: button, force: None };
-    at(&ctx, &mut app, vec![touch(egui::TouchPhase::Start), egui::Event::PointerMoved(button), egui::Event::PointerButton { pos: button, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
+    at(
+        &ctx,
+        &mut app,
+        vec![
+            touch(egui::TouchPhase::Start),
+            egui::Event::PointerMoved(button),
+            egui::Event::PointerButton { pos: button, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
+        ],
+    );
     let mut said = String::new();
     for _ in 0..12 {
         said = texts(&at(&ctx, &mut app, vec![]));
@@ -165,7 +194,10 @@ fn a_menu_tapped_ends_what_had_the_keys_its_own_way() {
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     let before = app.desk.view(BufferKind::Code).cursor_key();
     search(&ctx, &mut app);
-    assert!(matches!(app.capture, Some(Capture::Search(_))) && app.desk.view(BufferKind::Code).cursor_key() != before, "searching: the cursor on what it found");
+    assert!(
+        matches!(app.capture, Some(Capture::Search(_))) && app.desk.view(BufferKind::Code).cursor_key() != before,
+        "searching: the cursor on what it found"
+    );
     app.open_menu(&[app.config.keymap.view_menu], &ctx);
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
@@ -203,7 +235,8 @@ fn two_panels_of_one_kind_are_judged_each_on_its_own() {
     app.desk.graph_mut().select(Some("rust:a::step".into()));
     frame(&ctx, &mut app, vec![]);
     let output = frame(&ctx, &mut app, vec![]);
-    let looks: Vec<egui::Rect> = drawn_rects(&output, "Quick look").into_iter().chain(drawn_containing(&output, "Quick look  Space q")).collect();
+    let looks: Vec<egui::Rect> =
+        drawn_rects(&output, "Quick look").into_iter().chain(drawn_containing(&output, "Quick look  Space q")).collect();
     let in_panel = |i: usize| looks.iter().any(|r| app.panel_rects[i].contains(r.center()));
     assert!(in_panel(0) && !in_panel(1), "only on the card's graph: {looks:?}");
 }
@@ -216,8 +249,14 @@ fn the_chats_banner_has_its_buttons_under_it() {
     app.desk.panels = panels_of(&[BufferKind::Chat], 0);
     frame(&ctx, &mut app, vec![]);
     let output = frame(&ctx, &mut app, vec![]);
-    let banner = *drawn_containing(&output, "No session yet").first().or(drawn_containing(&output, "Waiting for the server").first()).expect("a banner");
-    let under = drawn_containing(&output, "New session").into_iter().filter(|r| r.top() > banner.bottom()).min_by(|a, b| a.top().total_cmp(&b.top()));
+    let banner = *drawn_containing(&output, "No session yet")
+        .first()
+        .or(drawn_containing(&output, "Waiting for the server").first())
+        .expect("a banner");
+    let under = drawn_containing(&output, "New session")
+        .into_iter()
+        .filter(|r| r.top() > banner.bottom())
+        .min_by(|a, b| a.top().total_cmp(&b.top()));
     assert!(under.is_some_and(|r| r.top() - banner.bottom() < 60.0), "New session under {banner:?}: {under:?}: {}", texts(&output));
 }
 
@@ -233,7 +272,11 @@ fn a_finger_held_on_the_quick_looks_top_line_reaches_nothing_under_it() {
     peek_key(&ctx, &mut app, false, 1.05);
     let output = frame_at(&ctx, &mut app, vec![], 1.1);
     let look = ctx.memory(|m| m.area_rect(egui::Id::new("quick_look"))).expect("open");
-    let at = drawn_containing(&output, "Spec actions").into_iter().find(|r| look.contains(r.center())).expect("the look's own menu button").center();
+    let at = drawn_containing(&output, "Spec actions")
+        .into_iter()
+        .find(|r| look.contains(r.center()))
+        .expect("the look's own menu button")
+        .center();
     let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: at, force: None };
     let before = (app.desk.spec().cursor, app.desk.graph().selection.clone());
     frame_at(&ctx, &mut app, vec![touch(egui::TouchPhase::Start)], 1.2);

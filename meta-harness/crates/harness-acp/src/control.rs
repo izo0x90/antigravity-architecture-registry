@@ -147,9 +147,19 @@ fn auth_methods(init: &acp::InitializeResponse) -> (Vec<AuthMethod>, Vec<Command
     let (mut methods, mut logins) = (Vec::new(), Vec::new());
     for method in &init.auth_methods {
         match method {
-            acp::AuthMethod::Agent(a) => methods.push(AuthMethod { id: a.id.to_string(), name: a.name.clone(), description: a.description.clone(), kind: AuthMethodKind::Agent }),
+            acp::AuthMethod::Agent(a) => methods.push(AuthMethod {
+                id: a.id.to_string(),
+                name: a.name.clone(),
+                description: a.description.clone(),
+                kind: AuthMethodKind::Agent,
+            }),
             acp::AuthMethod::Terminal(t) => {
-                methods.push(AuthMethod { id: t.id.to_string(), name: t.name.clone(), description: t.description.clone(), kind: AuthMethodKind::Command });
+                methods.push(AuthMethod {
+                    id: t.id.to_string(),
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    kind: AuthMethodKind::Command,
+                });
                 let mut env: Vec<(String, String)> = t.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 env.sort();
                 logins.push(CommandLogin { method: t.id.to_string(), args: t.args.clone(), env });

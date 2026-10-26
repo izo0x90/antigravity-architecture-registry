@@ -55,7 +55,11 @@ impl CockpitApp {
     pub(super) fn agents_graph(&mut self, number: Option<u32>) {
         let Some(panel) = number.and_then(|c| (c as usize).checked_sub(1)) else { return };
         if panel >= self.desk.panels.len() {
-            self.note = Some(format!("The agent asked for panel {}; there are {}: it moved the graph used last.", panel + 1, self.desk.panels.len()));
+            self.note = Some(format!(
+                "The agent asked for panel {}; there are {}: it moved the graph used last.",
+                panel + 1,
+                self.desk.panels.len()
+            ));
             return;
         }
         let buffer = self.desk.panels.show(panel, BufferKind::Graph);
@@ -164,7 +168,11 @@ impl CockpitApp {
     /// The panel showing the view of `kind` in use (else the nearest of
     /// its kind, else the focused one).
     pub(super) fn panel_of(&self, kind: BufferKind) -> usize {
-        self.desk.panels.panel_of(self.desk.used_buffer(kind)).or_else(|| self.desk.panels.panel_of_kind(kind)).unwrap_or(self.desk.panels.focused())
+        self.desk
+            .panels
+            .panel_of(self.desk.used_buffer(kind))
+            .or_else(|| self.desk.panels.panel_of_kind(kind))
+            .unwrap_or(self.desk.panels.focused())
     }
 
     /// Shows a view of `kind` without moving focus, and uses it: in the

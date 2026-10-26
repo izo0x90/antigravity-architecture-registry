@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use arch_graph::{ComponentId, RelationKind, TypeSystem};
-use code_analyzer::{FileExtract, PackSet, Observed};
+use code_analyzer::{FileExtract, Observed, PackSet};
 use serde::Deserialize;
 
 mod common;
@@ -23,7 +23,6 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
-
 /// The shipped packs plus a project's own (`files`: path under the
 /// project's `.nah/packs`, text), loaded the way the server loads them.
 fn with_project_packs(files: &[(&str, String)]) -> Result<PackSet, code_analyzer::IndexError> {
@@ -35,7 +34,9 @@ fn with_project_packs(files: &[(&str, String)]) -> Result<PackSet, code_analyzer
         std::fs::write(file, text).unwrap();
     }
     let shipped = nah_packs::Distribution::from_dir(&common::shipped_packs_dir()).unwrap();
-    let packs = nah_packs::Catalog::load(&shipped, &places).map_err(|e| code_analyzer::IndexError::Pack(e.to_string())).and_then(|c| PackSet::from_catalog(&c));
+    let packs = nah_packs::Catalog::load(&shipped, &places)
+        .map_err(|e| code_analyzer::IndexError::Pack(e.to_string()))
+        .and_then(|c| PackSet::from_catalog(&c));
     std::fs::remove_dir_all(&dir).unwrap();
     packs
 }
@@ -64,7 +65,14 @@ fn read_all(root: &Path, packs: &PackSet, rules: &code_analyzer::CodeRules, type
     let read = extracts
         .iter()
         .map(|e| {
-            let file = code_analyzer::rows::FileRow { path: e.file.clone(), language: e.language.clone(), size: 0, modified: 0, content_hash: e.content_hash.clone(), read_version: String::new() };
+            let file = code_analyzer::rows::FileRow {
+                path: e.file.clone(),
+                language: e.language.clone(),
+                size: 0,
+                modified: 0,
+                content_hash: e.content_hash.clone(),
+                read_version: String::new(),
+            };
             (file, e.clone())
         })
         .collect();
@@ -119,7 +127,10 @@ fn rust_fixture_ingests_to_exactly_the_expected_graph() {
     assert_matches("rust", &resolved, &fixtures().join("rust/expected.toml"));
     let save = resolved.graph.component(&ComponentId::for_symbol("rust", "sample::store::Store::save")).unwrap();
     let sig = save.signature.as_ref().unwrap();
-    assert_eq!(sig.params.iter().map(|p| (p.name.as_str(), p.ty.as_deref())).collect::<Vec<_>>(), [("&self", None), ("item", Some("&str"))]);
+    assert_eq!(
+        sig.params.iter().map(|p| (p.name.as_str(), p.ty.as_deref())).collect::<Vec<_>>(),
+        [("&self", None), ("item", Some("&str"))]
+    );
     let shout = resolved.graph.component(&ComponentId::for_symbol("rust", "sample::util::shout")).unwrap();
     assert_eq!(shout.signature.as_ref().unwrap().returns.as_deref(), Some("String"));
     assert_eq!(shout.anchor.as_ref().unwrap().file.as_str(), "src/util.rs");
@@ -170,14 +181,21 @@ fn typescript_fixture_ingests_to_exactly_the_expected_graph() {
     assert_matches("typescript", &resolved, &fixtures().join("typescript/expected.toml"));
     let greet = resolved.graph.component(&ComponentId::for_symbol("typescript", "app.Greeter.greet")).unwrap();
     let sig = greet.signature.as_ref().unwrap();
-    assert_eq!(sig.params.iter().map(|p| (p.name.as_str(), p.ty.as_deref())).collect::<Vec<_>>(), [("name", Some("string"))], "annotations unwrap to the type");
+    assert_eq!(
+        sig.params.iter().map(|p| (p.name.as_str(), p.ty.as_deref())).collect::<Vec<_>>(),
+        [("name", Some("string"))],
+        "annotations unwrap to the type"
+    );
     assert_eq!(sig.returns.as_deref(), Some("string"));
     let external: BTreeSet<&str> = resolved.external.iter().map(|e| e.callee.as_str()).collect();
     assert!(external.contains("console.log") && external.contains("Error"), "{external:?}");
     let fetch = resolved.graph.component(&ComponentId::for_symbol("typescript", "app.fetch")).unwrap();
     let sig = fetch.signature.as_ref().unwrap();
     assert_eq!(sig.qualifiers, ["async"]);
-    assert_eq!(sig.params.iter().map(|p| (p.name.as_str(), p.optional)).collect::<Vec<_>>(), [("items", false), ("loud", true), ("times", true)]);
+    assert_eq!(
+        sig.params.iter().map(|p| (p.name.as_str(), p.optional)).collect::<Vec<_>>(),
+        [("items", false), ("loud", true), ("times", true)]
+    );
 }
 
 #[test]
@@ -201,7 +219,10 @@ fn typed_values_between_calls_become_data_flow_and_untyped_ones_are_reported() {
             .graph
             .relations()
             // Values passed into calls (not kept, returned or made: see the flow tests).
-            .filter(|r| r.kind == RelationKind::DataFlow && r.ports.as_ref().is_some_and(|(from, to)| from == "return" && to != "returns" && !to.starts_with("kept as ")))
+            .filter(|r| {
+                r.kind == RelationKind::DataFlow
+                    && r.ports.as_ref().is_some_and(|(from, to)| from == "return" && to != "returns" && !to.starts_with("kept as "))
+            })
             .map(|r| {
                 let (from, to) = r.ports.clone().unwrap();
                 assert!(r.provenance.observed && !r.provenance.planned && r.sites.len() == 1);
@@ -209,18 +230,32 @@ fn typed_values_between_calls_become_data_flow_and_untyped_ones_are_reported() {
             })
             .collect()
     };
-    let row = |lang: &str, a: &str, b: &str, to: &str| (ComponentId::for_symbol(lang, a).to_string(), ComponentId::for_symbol(lang, b).to_string(), "return".to_owned(), to.to_owned());
+    let row = |lang: &str, a: &str, b: &str, to: &str| {
+        (ComponentId::for_symbol(lang, a).to_string(), ComponentId::for_symbol(lang, b).to_string(), "return".to_owned(), to.to_owned())
+    };
     // Rust: through a local binding and a borrow, String into &str.
     let (_, rust) = run(&fixtures().join("rust/sample"), &common::shipped_packs());
-    assert_eq!(flows(&rust), BTreeSet::from([row("rust", "sample::Upper::apply", "sample::store::Store::save", "item"), row("rust", "sample::Upper::apply", "sample::log", "msg")]));
+    assert_eq!(
+        flows(&rust),
+        BTreeSet::from([
+            row("rust", "sample::Upper::apply", "sample::store::Store::save", "item"),
+            row("rust", "sample::Upper::apply", "sample::log", "msg")
+        ])
+    );
     assert!(rust.unverified_flows.is_empty(), "{:?}", rust.unverified_flows);
     // Python and TypeScript: a nested call is typed; load() has no return type.
-    for (lang, fixture, untyped_targets) in [("python", "python/app", vec!["app.Greeter.greet"]), ("typescript", "typescript/app", vec!["app.Greeter.greet", "app.show", "helpers.shout"])] {
+    for (lang, fixture, untyped_targets) in [
+        ("python", "python/app", vec!["app.Greeter.greet"]),
+        ("typescript", "typescript/app", vec!["app.Greeter.greet", "app.show", "helpers.shout"]),
+    ] {
         let (_, resolved) = run(&fixtures().join(fixture), &common::shipped_packs());
         assert_eq!(flows(&resolved), BTreeSet::from([row(lang, "helpers.clean", "app.Greeter.format", "text")]), "{lang}");
-        let reported: Vec<(String, String)> = resolved.unverified_flows.iter().map(|u| (u.source.to_string(), u.target.to_string())).collect();
-        let expected: Vec<(String, String)> =
-            untyped_targets.iter().map(|t| (ComponentId::for_symbol(lang, "helpers.load").to_string(), ComponentId::for_symbol(lang, t).to_string())).collect();
+        let reported: Vec<(String, String)> =
+            resolved.unverified_flows.iter().map(|u| (u.source.to_string(), u.target.to_string())).collect();
+        let expected: Vec<(String, String)> = untyped_targets
+            .iter()
+            .map(|t| (ComponentId::for_symbol(lang, "helpers.load").to_string(), ComponentId::for_symbol(lang, t).to_string()))
+            .collect();
         assert_eq!(reported, expected, "{lang}");
         assert!(resolved.unverified_flows.iter().all(|u| u.reason.contains("no return type") && u.position == 0 && u.span.start_line > 0));
     }
@@ -231,7 +266,11 @@ fn typed_values_between_calls_become_data_flow_and_untyped_ones_are_reported() {
     let dir = std::env::temp_dir().join(format!("nah-flow-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).unwrap();
-    std::fs::write(dir.join("src/app.ts"), "function make(): number { return 1; }\nfunction take(s: string): void {}\nfunction run(): void { take(make()); }\n").unwrap();
+    std::fs::write(
+        dir.join("src/app.ts"),
+        "function make(): number { return 1; }\nfunction take(s: string): void {}\nfunction run(): void { take(make()); }\n",
+    )
+    .unwrap();
     let (_, mismatch) = run(&dir, &common::shipped_packs());
     assert!(flows(&mismatch).is_empty());
     assert_eq!(mismatch.unverified_flows.len(), 1);
@@ -293,7 +332,10 @@ fn fetch(url: &str) -> String { url.to_owned() }
     assert!(!flows.iter().any(|f| f.1 == id("shop::Store::emit") && f.2 == "count"), "a method call isn't a field read");
     assert!(!flows.iter().any(|f| f.0 == id("shop::routes") && f.2 == "http"), "registering a route isn't a request");
     has("shop::asks_other", "shop::other", "http", "/api/other", "/api/other");
-    assert!(!flows.iter().any(|f| f.0 == id("shop::asks_other") && f.1 == id("shop::item")), "a request reaches only its own route's handler, however routes chain");
+    assert!(
+        !flows.iter().any(|f| f.0 == id("shop::asks_other") && f.1 == id("shop::item")),
+        "a request reaches only its own route's handler, however routes chain"
+    );
     std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
 }
 
@@ -326,7 +368,11 @@ fn a_files_reading_matches_its_golden_file() {
     // The pack fingerprint moves with every pack edit; everything else is fixed.
     let golden_extract: FileExtract = serde_json::from_str(&golden).unwrap();
     assert!(!golden_extract.pack_fingerprint.is_empty() && !util.pack_fingerprint.is_empty());
-    assert_eq!(FileExtract { pack_fingerprint: util.pack_fingerprint.clone(), ..golden_extract }, *util, "the util.rs extract matches the golden file");
+    assert_eq!(
+        FileExtract { pack_fingerprint: util.pack_fingerprint.clone(), ..golden_extract },
+        *util,
+        "the util.rs extract matches the golden file"
+    );
 }
 
 fn temp_repo(name: &str, files: &[(&str, &str)]) -> PathBuf {
@@ -351,7 +397,8 @@ fn calls_stay_within_their_language_and_unknown_receivers_are_never_guessed() {
         ],
     );
     let (_, resolved) = run(&dir, &common::shipped_packs());
-    let crossing: Vec<_> = resolved.graph.relations().filter(|r| r.source.as_str().split(':').next() != r.target.as_str().split(':').next()).collect();
+    let crossing: Vec<_> =
+        resolved.graph.relations().filter(|r| r.source.as_str().split(':').next() != r.target.as_str().split(':').next()).collect();
     assert!(crossing.is_empty(), "no relation crosses languages: {crossing:?}");
     let external: BTreeSet<&str> = resolved.external.iter().map(|e| e.callee.as_str()).collect();
     assert!(external.contains("helper") && external.contains("run"), "{external:?}");
@@ -371,9 +418,15 @@ fn observed_calls_carry_deferral_and_dead_code_is_not_observed() {
     assert!(later[0].deferred, "the call sits in a closure");
     let run_calls: Vec<_> = resolved.graph.outgoing(&id("sample::run"), Some(RelationKind::Calls)).collect();
     assert!(run_calls.iter().all(|r| !r.deferred));
-    for (lang, fixture, caller, callee) in [("python", "python/app", "app.fetch", "helpers.load"), ("typescript", "typescript/app", "app.fetch", "helpers.load")] {
+    for (lang, fixture, caller, callee) in
+        [("python", "python/app", "app.fetch", "helpers.load"), ("typescript", "typescript/app", "app.fetch", "helpers.load")]
+    {
         let (_, resolved) = run(&fixtures().join(fixture), &common::shipped_packs());
-        let call = resolved.graph.outgoing(&ComponentId::for_symbol(lang, caller), Some(RelationKind::Calls)).find(|r| r.target == ComponentId::for_symbol(lang, callee)).unwrap();
+        let call = resolved
+            .graph
+            .outgoing(&ComponentId::for_symbol(lang, caller), Some(RelationKind::Calls))
+            .find(|r| r.target == ComponentId::for_symbol(lang, callee))
+            .unwrap();
         assert!(call.deferred, "{lang}: inside a lambda/arrow");
         let external: BTreeSet<&str> = resolved.external.iter().map(|e| e.callee.as_str()).collect();
         assert!(!external.contains("tidy"), "{lang}: the dead branch's call isn't observed at all");
@@ -398,7 +451,10 @@ fn module_symbols_come_from_the_manifest_not_the_checkout_directory() {
     let packs = common::shipped_packs();
     let rust = packs.by_name("rust").unwrap();
     assert_eq!(code_analyzer::module_symbol(Path::new("."), &arch_graph::RepoPath::new("src/lib.rs").unwrap(), rust), "code_analyzer");
-    assert_eq!(code_analyzer::module_symbol(Path::new("."), &arch_graph::RepoPath::new("src/walk.rs").unwrap(), rust), "code_analyzer::walk");
+    assert_eq!(
+        code_analyzer::module_symbol(Path::new("."), &arch_graph::RepoPath::new("src/walk.rs").unwrap(), rust),
+        "code_analyzer::walk"
+    );
     // Go's line-based go.mod names the module through the pack's regex.
     let go = packs_with_test_data();
     let (extracts, _) = run(&fixtures().join("go/app"), &go);
@@ -421,7 +477,8 @@ fn imports_match_whole_module_paths_and_inherited_members_resolve() {
     );
     let (_, resolved) = run(&root, &packs);
     let py = |s: &str| ComponentId::for_symbol("python", s);
-    let calls = |from: &str| resolved.graph.outgoing(&py(from), Some(RelationKind::Calls)).map(|r| r.target.to_string()).collect::<Vec<_>>();
+    let calls =
+        |from: &str| resolved.graph.outgoing(&py(from), Some(RelationKind::Calls)).map(|r| r.target.to_string()).collect::<Vec<_>>();
     assert_eq!(calls("own_use.b"), vec![py("helpers.clean").to_string()]);
     assert!(calls("other_use.a").is_empty(), "another package's helpers");
     assert!(resolved.unproven.iter().any(|u| u.caller == py("other_use.a")), "recorded as unproven, never linked");
@@ -453,10 +510,17 @@ fn packs_are_strict_about_fields_and_the_types_they_map_onto() {
     let highlights = std::fs::read_to_string(common::shipped_packs_dir().join("language/rust/highlights.scm")).unwrap();
     // A project's own Rust pack replaces the shipped one, checked the same way.
     let typo = rust.replacen("separator = \"::\"", "seperator = \"::\"", 1);
-    let err = with_project_packs(&[("rust/pack.toml", manifest.clone()), ("rust/highlights.scm", highlights.clone()), ("rust/syntax.toml", typo)]).unwrap_err().to_string();
+    let err = with_project_packs(&[
+        ("rust/pack.toml", manifest.clone()),
+        ("rust/highlights.scm", highlights.clone()),
+        ("rust/syntax.toml", typo),
+    ])
+    .unwrap_err()
+    .to_string();
     assert!(err.contains("seperator"), "unknown fields are rejected: {err}");
     let widget = rust.replacen("type = \"interface\"", "type = \"widget\"", 1);
-    let packs = with_project_packs(&[("rust/pack.toml", manifest), ("rust/highlights.scm", highlights), ("rust/syntax.toml", widget)]).unwrap();
+    let packs =
+        with_project_packs(&[("rust/pack.toml", manifest), ("rust/highlights.scm", highlights), ("rust/syntax.toml", widget)]).unwrap();
     let err = packs.check_types(&TypeSystem::defaults().unwrap()).unwrap_err().to_string();
     assert!(err.contains("'widget'"), "{err}");
     assert!(common::shipped_packs().check_types(&TypeSystem::defaults().unwrap()).is_ok());
@@ -479,7 +543,8 @@ fn types_resolve_only_through_scope_and_imports() {
     );
     let (_, resolved) = run(&root, &packs);
     let py = |s: &str| ComponentId::for_symbol("python", s);
-    let calls = |from: &str| resolved.graph.outgoing(&py(from), Some(RelationKind::Calls)).map(|r| r.target.to_string()).collect::<Vec<_>>();
+    let calls =
+        |from: &str| resolved.graph.outgoing(&py(from), Some(RelationKind::Calls)).map(|r| r.target.to_string()).collect::<Vec<_>>();
     assert_eq!(calls("own_use.g"), vec![py("client.Session.get").to_string()], "imported: proven");
     assert!(calls("lib_use.f").is_empty(), "imported from elsewhere: not the repo's");
     assert!(resolved.external.iter().any(|e| e.caller == py("lib_use.f")), "a library call");
@@ -495,13 +560,17 @@ fn types_resolve_only_through_scope_and_imports() {
             ("Cargo.toml", "[package]\nname = \"app\"\n"),
             ("src/lib.rs", "pub mod store;\npub mod a;\npub mod b;\n"),
             ("src/store.rs", "pub struct Store;\n\nimpl Store {\n    pub fn new() -> Self {\n        Store\n    }\n}\n"),
-            ("src/a.rs", "use crate::store::Store;\n\npub fn with_import() {\n    Store::new();\n}\n\npub fn full_path() {\n    crate::store::Store::new();\n}\n"),
+            (
+                "src/a.rs",
+                "use crate::store::Store;\n\npub fn with_import() {\n    Store::new();\n}\n\npub fn full_path() {\n    crate::store::Store::new();\n}\n",
+            ),
             ("src/b.rs", "pub fn without() {\n    Store::new();\n}\n"),
         ],
     );
     let (_, resolved) = run(&root, &packs);
     let rs = |s: &str| ComponentId::for_symbol("rust", s);
-    let calls = |from: &str| resolved.graph.outgoing(&rs(from), Some(RelationKind::Calls)).map(|r| r.target.to_string()).collect::<Vec<_>>();
+    let calls =
+        |from: &str| resolved.graph.outgoing(&rs(from), Some(RelationKind::Calls)).map(|r| r.target.to_string()).collect::<Vec<_>>();
     assert_eq!(calls("app::a::with_import"), vec![rs("app::store::Store::new").to_string()]);
     assert_eq!(calls("app::a::full_path"), vec![rs("app::store::Store::new").to_string()]);
     assert!(calls("app::b::without").is_empty(), "not in scope: not linked");
@@ -522,14 +591,18 @@ fn scoped_walks_honor_ignores_from_the_root() {
             ("github/real.py", "def real():\n    pass\n"),
         ],
     );
-    let files = |scope: &str| code_analyzer::walk(&root, Path::new(scope), &packs).unwrap().into_iter().map(|f| f.path.to_string()).collect::<Vec<_>>();
+    let files = |scope: &str| {
+        code_analyzer::walk(&root, Path::new(scope), &packs).unwrap().into_iter().map(|f| f.path.to_string()).collect::<Vec<_>>()
+    };
     assert_eq!(files("."), vec!["github/real.py", "src/keep.py"]);
     assert!(files("gen").is_empty(), "a git-ignored scope yields nothing, as in a full walk");
     assert!(files(".github").is_empty(), "so does a hidden one");
     assert_eq!(files("github"), vec!["github/real.py"]);
     assert_eq!(files("src/keep.py"), vec!["src/keep.py"], "a single file");
     let ignores = code_analyzer::Ignores::new(&root);
-    for (path, ignored) in [("gen/out.py", true), ("gen/new.py", true), (".github/hook.py", true), ("src/keep.py", false), ("src/new.py", false)] {
+    for (path, ignored) in
+        [("gen/out.py", true), ("gen/new.py", true), (".github/hook.py", true), ("src/keep.py", false), ("src/new.py", false)]
+    {
         assert_eq!(ignores.is_ignored(&root.join(path)), ignored, "{path}");
     }
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
@@ -554,7 +627,12 @@ fn locals_named_like_functions_and_same_named_nested_functions_dont_mislink() {
     );
     let (_, resolved) = run(&dir, &common::shipped_packs());
     let id = |s: &str| ComponentId::for_symbol("rust", s);
-    let calls: BTreeSet<(String, String)> = resolved.graph.relations().filter(|r| r.kind == RelationKind::Calls).map(|r| (r.source.to_string(), r.target.to_string())).collect();
+    let calls: BTreeSet<(String, String)> = resolved
+        .graph
+        .relations()
+        .filter(|r| r.kind == RelationKind::Calls)
+        .map(|r| (r.source.to_string(), r.target.to_string()))
+        .collect();
     let call = |a: &str, b: &str| (id(a).to_string(), id(b).to_string());
     // A local closure and a parameter aren't the functions they're named like.
     assert!(!calls.contains(&call("m::run", "m::helper")) && !calls.contains(&call("m::run", "m::callback")), "{calls:?}");
@@ -573,14 +651,23 @@ fn call_targets_are_read_from_the_syntax_tree() {
     use code_analyzer::{CodeRules, Expr, extract_file};
     let packs = common::shipped_packs();
     let read = |lang: &str, file: &str, code: &str| -> Vec<Expr> {
-        extract_file(packs.by_name(lang).unwrap(), &CodeRules::default(), arch_graph::RepoPath::new(file).unwrap(), "m".into(), code).calls.into_iter().filter(|c| !c.reference).map(|c| c.callee).collect()
+        extract_file(packs.by_name(lang).unwrap(), &CodeRules::default(), arch_graph::RepoPath::new(file).unwrap(), "m".into(), code)
+            .calls
+            .into_iter()
+            .filter(|c| !c.reference)
+            .map(|c| c.callee)
+            .collect()
     };
     let name = |n: &str| Expr::Name(n.into());
     let member = |of: Expr, n: &str| Expr::Member(Box::new(of), n.into(), ".".into());
     let call = |e: Expr| Expr::Call(Box::new(e));
     let path = |parts: &[&str]| Expr::Path(parts.iter().map(|p| (*p).to_owned()).collect(), "::".into());
 
-    let rust = read("rust", "src/lib.rs", "fn f(&self) { self.store.get(x).save(); Vec::<u8>::new(); crate::a::run(); make()?.go(); helper::<T>(); }");
+    let rust = read(
+        "rust",
+        "src/lib.rs",
+        "fn f(&self) { self.store.get(x).save(); Vec::<u8>::new(); crate::a::run(); make()?.go(); helper::<T>(); }",
+    );
     assert_eq!(
         rust,
         [
@@ -606,12 +693,19 @@ fn call_targets_are_read_from_the_syntax_tree() {
 fn each_call_records_where_its_name_is_and_each_file_its_colours() {
     use code_analyzer::{CodeRules, extract_file};
     let packs = common::shipped_packs();
-    let read = |lang: &str, file: &str, code: &str| extract_file(packs.by_name(lang).unwrap(), &CodeRules::default(), arch_graph::RepoPath::new(file).unwrap(), "m".into(), code);
+    let read = |lang: &str, file: &str, code: &str| {
+        extract_file(packs.by_name(lang).unwrap(), &CodeRules::default(), arch_graph::RepoPath::new(file).unwrap(), "m".into(), code)
+    };
 
     let code = "fn run(&self) { self.store.save(); Store::new(); helper::<u8>(); make()(); }\n";
     let rust = read("rust", "src/lib.rs", code);
     let named = |text: &str| -> Option<String> {
-        rust.calls.iter().filter(|c| !c.reference).find(|c| c.callee.render() == text).and_then(|c| c.name_span).map(|s| code[s.start_byte as usize..s.end_byte as usize].to_owned())
+        rust.calls
+            .iter()
+            .filter(|c| !c.reference)
+            .find(|c| c.callee.render() == text)
+            .and_then(|c| c.name_span)
+            .map(|s| code[s.start_byte as usize..s.end_byte as usize].to_owned())
     };
     assert_eq!(named("self.store.save").as_deref(), Some("save"), "the member's name, not the whole call");
     assert_eq!(named("Store::new").as_deref(), Some("new"));

@@ -30,18 +30,23 @@ fn starter_of(word: &str) -> Result<Starter, StateError> {
 impl StateDb {
     fn load_slots(&self) -> Result<Vec<Slot>, StateError> {
         self.transaction(|tx| {
-            let mut stmt = tx.prepare("SELECT id, role, name, instance, policy_json, model_json, started_by FROM slots ORDER BY seq").map_err(failed)?;
+            let mut stmt = tx
+                .prepare("SELECT id, role, name, instance, policy_json, model_json, started_by FROM slots ORDER BY seq")
+                .map_err(failed)?;
             let rows: Vec<SlotRow> = stmt
                 .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))
                 .map_err(failed)?
                 .collect::<Result<_, _>>()
                 .map_err(failed)?;
-            let mut sessions_of = tx.prepare("SELECT key, native_id, title, current FROM slot_sessions WHERE slot = ?1 ORDER BY seq").map_err(failed)?;
+            let mut sessions_of =
+                tx.prepare("SELECT key, native_id, title, current FROM slot_sessions WHERE slot = ?1 ORDER BY seq").map_err(failed)?;
             let mut slots = Vec::new();
             for (id, role, name, instance, policy, model, started_by) in rows {
                 let mut current = None;
                 let sessions = sessions_of
-                    .query_map(params![id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, bool>(3)?)))
+                    .query_map(params![id], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, bool>(3)?))
+                    })
                     .map_err(failed)?
                     .map(|row| {
                         let (key, native_id, title, is_current) = row.map_err(failed)?;
@@ -120,7 +125,11 @@ impl SlotStore for StateDb {
     fn hold_report(&self, report: &HeldReport) -> Result<(), String> {
         self.transaction(|tx| {
             let links = serde_json::to_string(&report.message.links).map_err(failed)?;
-            tx.execute("INSERT INTO held_reports (to_slot, from_slot, text, links, at_ms) VALUES (?1, ?2, ?3, ?4, ?5)", params![report.to.as_str(), report.from, report.message.text, links, report.at_ms as i64]).map_err(failed)?;
+            tx.execute(
+                "INSERT INTO held_reports (to_slot, from_slot, text, links, at_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![report.to.as_str(), report.from, report.message.text, links, report.at_ms as i64],
+            )
+            .map_err(failed)?;
             Ok(())
         })
         .map_err(|e| e.to_string())
@@ -128,10 +137,21 @@ impl SlotStore for StateDb {
 
     fn take_reports(&self, to: &SlotId) -> Result<Vec<HeldReport>, String> {
         self.transaction(|tx| {
-            let mut stmt = tx.prepare("SELECT from_slot, text, links, at_ms FROM held_reports WHERE to_slot = ?1 ORDER BY seq").map_err(failed)?;
+            let mut stmt =
+                tx.prepare("SELECT from_slot, text, links, at_ms FROM held_reports WHERE to_slot = ?1 ORDER BY seq").map_err(failed)?;
             // (Links that don't read: the text alone.)
             let reports = stmt
-                .query_map(params![to.as_str()], |r| Ok(HeldReport { to: to.clone(), from: r.get(0)?, message: harness_contracts::Message { text: r.get(1)?, links: serde_json::from_str(&r.get::<_, String>(2)?).unwrap_or_default() }, at_ms: r.get::<_, i64>(3)? as u64 }))
+                .query_map(params![to.as_str()], |r| {
+                    Ok(HeldReport {
+                        to: to.clone(),
+                        from: r.get(0)?,
+                        message: harness_contracts::Message {
+                            text: r.get(1)?,
+                            links: serde_json::from_str(&r.get::<_, String>(2)?).unwrap_or_default(),
+                        },
+                        at_ms: r.get::<_, i64>(3)? as u64,
+                    })
+                })
                 .map_err(failed)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(failed)?;
@@ -143,7 +163,8 @@ impl SlotStore for StateDb {
 
     fn note(&self, actor: &str, action: &str, subject: &str, detail: Option<&str>) {
         let at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-        let entry = Activity { at_ms, actor: actor.into(), action: action.into(), subject: subject.into(), detail: detail.map(str::to_owned) };
+        let entry =
+            Activity { at_ms, actor: actor.into(), action: action.into(), subject: subject.into(), detail: detail.map(str::to_owned) };
         if let Err(e) = self.transaction(|tx| log_in(tx, &entry)) {
             eprintln!("activity not kept: {e}");
         }

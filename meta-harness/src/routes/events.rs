@@ -61,7 +61,10 @@ async fn stream_events(socket: WebSocket, hub: Arc<EventHub>) {
     }
 }
 
-async fn send_all(sink: &mut futures::stream::SplitSink<WebSocket, Message>, events: impl IntoIterator<Item = Stamped>) -> Result<(), axum::Error> {
+async fn send_all(
+    sink: &mut futures::stream::SplitSink<WebSocket, Message>,
+    events: impl IntoIterator<Item = Stamped>,
+) -> Result<(), axum::Error> {
     for event in events {
         let Ok(text) = serde_json::to_string(&event) else { continue };
         sink.send(Message::Text(text.into())).await?;

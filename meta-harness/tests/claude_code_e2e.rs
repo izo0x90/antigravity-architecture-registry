@@ -12,7 +12,9 @@ use harness_core::ProviderDriver;
 async fn signed_out_it_says_so_offers_its_logins_and_shows_a_sign_in_link_needs_the_pack() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let catalog = meta_harness::packs::catalog(root).unwrap();
-    let Some(mut entry) = meta_harness::packs::harness_launches(&catalog).into_iter().find(|e| e.profile.instance.as_str() == "claude-code") else {
+    let Some(mut entry) =
+        meta_harness::packs::harness_launches(&catalog).into_iter().find(|e| e.profile.instance.as_str() == "claude-code")
+    else {
         panic!("the claude-code pack ships");
     };
     let HarnessLaunch::Ready { launch } = &mut entry.launch else {
@@ -28,13 +30,21 @@ async fn signed_out_it_says_so_offers_its_logins_and_shows_a_sign_in_link_needs_
     println!("{:#?}", (&snapshot.status, &snapshot.auth, &snapshot.capabilities.turns, &snapshot.runtime_modes));
     assert_eq!(snapshot.status, ProviderStatus::Ready);
     assert_eq!(snapshot.auth.status, AuthStatus::SignedOut, "it says it's signed out");
-    assert!(snapshot.auth.methods.iter().any(|m| m.id == "claude-ai-login" && m.kind == AuthMethodKind::Command), "{:?}", snapshot.auth.methods);
+    assert!(
+        snapshot.auth.methods.iter().any(|m| m.id == "claude-ai-login" && m.kind == AuthMethodKind::Command),
+        "{:?}",
+        snapshot.auth.methods
+    );
     assert!(snapshot.capabilities.turns.active_steering, "it takes messages into the running turn");
     assert!(snapshot.supports_plan_mode && snapshot.runtime_modes.contains(&RuntimeMode::FullAccess));
 
     // Signing in starts its login command, which shows a link.
     let auth = harness_core::ProviderInstance::auth(instance.as_ref()).unwrap();
-    let challenge = tokio::time::timeout(Duration::from_secs(60), auth.begin("claude-ai-login")).await.expect("a link in time").unwrap().expect("not signed in at once");
+    let challenge = tokio::time::timeout(Duration::from_secs(60), auth.begin("claude-ai-login"))
+        .await
+        .expect("a link in time")
+        .unwrap()
+        .expect("not signed in at once");
     println!("{challenge:#?}");
     assert_eq!(instance.snapshot().borrow().auth.waiting.as_deref(), Some(&challenge), "every device sees it");
     let url = challenge.url.expect("a link to open");
@@ -42,7 +52,13 @@ async fn signed_out_it_says_so_offers_its_logins_and_shows_a_sign_in_link_needs_
     assert!(challenge.expects.is_some(), "it takes a code back");
 
     // Signed out, a session isn't opened: it says sign in.
-    let config = SessionConfig { thread_id: ThreadId::new("e2e"), policy: RuntimePolicy::default(), model: None, resume: None, mcp_servers: Vec::new() };
+    let config = SessionConfig {
+        thread_id: ThreadId::new("e2e"),
+        policy: RuntimePolicy::default(),
+        model: None,
+        resume: None,
+        mcp_servers: Vec::new(),
+    };
     match tokio::time::timeout(Duration::from_secs(120), instance.adapter().open_session(config)).await.expect("an answer in time") {
         Err(err) => println!("session refused: {err}"),
         Ok(session) => {

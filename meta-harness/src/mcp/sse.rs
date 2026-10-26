@@ -1,12 +1,12 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
-use axum::Json;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use futures::Stream;
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
@@ -45,11 +45,7 @@ impl SseSessionManager {
 
     pub async fn send_to(&self, session_id: &str, event: Event) -> bool {
         let guard = self.sessions.lock().await;
-        if let Some((tx, _)) = guard.get(session_id) {
-            tx.send(Ok(event)).await.is_ok()
-        } else {
-            false
-        }
+        if let Some((tx, _)) = guard.get(session_id) { tx.send(Ok(event)).await.is_ok() } else { false }
     }
 }
 
@@ -65,11 +61,7 @@ pub struct McpServerState {
 
 impl McpServerState {
     pub fn new(service: Arc<McpService>, callers: Callers) -> Self {
-        Self {
-            service,
-            sessions: Arc::new(SseSessionManager::new()),
-            callers,
-        }
+        Self { service, sessions: Arc::new(SseSessionManager::new()), callers }
     }
 
     /// The caller behind a key; no key, or one no session holds, is external.

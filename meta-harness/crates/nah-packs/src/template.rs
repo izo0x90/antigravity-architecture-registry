@@ -42,7 +42,8 @@ fn parse(text: &str) -> Result<Vec<Result<&str, &str>>, String> {
         let after = &rest[open + 1..];
         let close = after.find('}').ok_or_else(|| format!("a '{{' without '}}' in '{text}'"))?;
         let name = &after[..close];
-        let valid = name.chars().next().is_some_and(|c| c.is_ascii_lowercase() || c == '_') && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        let valid = name.chars().next().is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+            && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
         if !valid {
             return Err(format!("'{{{name}}}' isn't a placeholder in '{text}'"));
         }

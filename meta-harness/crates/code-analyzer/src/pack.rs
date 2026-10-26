@@ -12,7 +12,6 @@ use serde::Deserialize;
 
 use crate::IndexError;
 
-
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LanguageSpec {
@@ -802,7 +801,8 @@ impl Pack {
             }
         }
         if !(spec.language.path_separators.is_empty() && spec.language.member_separators.is_empty())
-            && let Some(sep) = spec.language.call_separators.iter().find(|s| !spec.language.is_path_separator(s) && !spec.language.is_member_separator(s))
+            && let Some(sep) =
+                spec.language.call_separators.iter().find(|s| !spec.language.is_path_separator(s) && !spec.language.is_member_separator(s))
         {
             return Err(IndexError::Pack(format!("pack '{name}': call separator '{sep}' is neither a path nor a member separator")));
         }
@@ -812,12 +812,16 @@ impl Pack {
         for (i, e) in spec.expressions.iter().enumerate() {
             let what = format!("pack '{name}' expressions[{i}]");
             let needs = match e.shape {
-                ExpressionShape::Path | ExpressionShape::Member => e.name.is_some() && e.separator.as_ref().is_some_and(|s| spec.language.call_separators.contains(s)),
+                ExpressionShape::Path | ExpressionShape::Member => {
+                    e.name.is_some() && e.separator.as_ref().is_some_and(|s| spec.language.call_separators.contains(s))
+                }
                 ExpressionShape::Call => e.of.is_some(),
                 ExpressionShape::Name | ExpressionShape::Unwrap => true,
             };
             if e.kinds.is_empty() || !needs {
-                return Err(IndexError::Pack(format!("{what}: a path or member needs a name field and one of call_separators; a call needs `of`")));
+                return Err(IndexError::Pack(format!(
+                    "{what}: a path or member needs a name field and one of call_separators; a call needs `of`"
+                )));
             }
         }
         for (i, alias) in spec.aliases.iter().enumerate() {
@@ -829,7 +833,12 @@ impl Pack {
             .language
             .package_name_regex
             .as_deref()
-            .map(|r| regex::RegexBuilder::new(r).multi_line(true).build().map_err(|e| IndexError::Pack(format!("pack '{name}' package_name_regex: {e}"))))
+            .map(|r| {
+                regex::RegexBuilder::new(r)
+                    .multi_line(true)
+                    .build()
+                    .map_err(|e| IndexError::Pack(format!("pack '{name}' package_name_regex: {e}")))
+            })
             .transpose()?;
         let rules = |items: Vec<&toml::Value>, what: &str| -> Result<Vec<RuleCore>, IndexError> {
             items.into_iter().enumerate().map(|(i, rule)| compile(lang, rule, &format!("pack '{name}' {what}[{i}]"))).collect()
@@ -840,7 +849,9 @@ impl Pack {
                 .definitions
                 .iter()
                 .enumerate()
-                .map(|(i, d)| d.bases_rule.as_ref().map(|r| compile(lang, r, &format!("pack '{name}' definitions[{i}].bases_rule"))).transpose())
+                .map(|(i, d)| {
+                    d.bases_rule.as_ref().map(|r| compile(lang, r, &format!("pack '{name}' definitions[{i}].bases_rule"))).transpose()
+                })
                 .collect::<Result<_, _>>()?,
             scopes: rules(spec.scopes.iter().map(|d| &d.rule).collect(), "scopes")?,
             bindings: rules(spec.bindings.iter().map(|d| &d.rule).collect(), "bindings")?,
@@ -868,7 +879,12 @@ impl Pack {
                 .enumerate()
                 .map(|(i, d)| {
                     let what = format!("pack '{name}' dead_code[{i}]");
-                    let preceding = d.condition.as_ref().and_then(|c| c.preceding.as_ref()).map(|r| compile(lang, r, &format!("{what}.condition.preceding"))).transpose()?;
+                    let preceding = d
+                        .condition
+                        .as_ref()
+                        .and_then(|c| c.preceding.as_ref())
+                        .map(|r| compile(lang, r, &format!("{what}.condition.preceding")))
+                        .transpose()?;
                     let capture = d
                         .condition
                         .as_ref()
@@ -879,7 +895,12 @@ impl Pack {
                 })
                 .collect::<Result<_, IndexError>>()?,
             references: rules(spec.references.iter().map(|d| &d.rule).collect(), "references")?,
-            items: spec.items.iter().enumerate().map(|(i, item)| Ok((compile(lang, &item.rule, &format!("items[{i}]"))?, item.name_field.clone()))).collect::<Result<_, IndexError>>()?,
+            items: spec
+                .items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| Ok((compile(lang, &item.rule, &format!("items[{i}]"))?, item.name_field.clone())))
+                .collect::<Result<_, IndexError>>()?,
             returns: rules(spec.returns.iter().map(|d| &d.rule).collect(), "returns")?,
             constructions: rules(spec.constructions.iter().map(|d| &d.rule).collect(), "constructions")?,
             state: spec
@@ -888,8 +909,17 @@ impl Pack {
                 .map(|st| {
                     Ok::<_, IndexError>(CompiledState {
                         access: compile(lang, &st.access, &format!("pack '{name}' state.access"))?,
-                        other_object: st.other_object.as_ref().map(|r| compile(lang, r, &format!("pack '{name}' state.other_object"))).transpose()?,
-                        assignments: st.assignments.iter().enumerate().map(|(i, a)| compile(lang, a, &format!("pack '{name}' state.assignments[{i}]"))).collect::<Result<_, _>>()?,
+                        other_object: st
+                            .other_object
+                            .as_ref()
+                            .map(|r| compile(lang, r, &format!("pack '{name}' state.other_object")))
+                            .transpose()?,
+                        assignments: st
+                            .assignments
+                            .iter()
+                            .enumerate()
+                            .map(|(i, a)| compile(lang, a, &format!("pack '{name}' state.assignments[{i}]")))
+                            .collect::<Result<_, _>>()?,
                     })
                 })
                 .transpose()?,
@@ -966,7 +996,8 @@ impl PackSet {
     pub fn from_catalog(catalog: &nah_packs::Catalog) -> Result<Self, IndexError> {
         let mut set = PackSet::default();
         for language in catalog.of_kind(nah_packs::Kind::Language) {
-            let files = language.manifest.language.as_ref().ok_or_else(|| IndexError::Pack(format!("{}: no [language]", language.name())))?;
+            let files =
+                language.manifest.language.as_ref().ok_or_else(|| IndexError::Pack(format!("{}: no [language]", language.name())))?;
             let text = |file: &str| language.text(file).map_err(|e| IndexError::Pack(e.to_string()));
             let syntax = text(&files.syntax)?;
             let highlights = files.highlights.as_deref().map(text).transpose()?;
@@ -974,7 +1005,8 @@ impl PackSet {
             if pack.name() != language.name() {
                 return Err(IndexError::Pack(format!("pack '{}' describes language '{}'", language.name(), pack.name())));
             }
-            let fingerprint = crate::content_hash(&format!("{}\n{syntax}\n{}", language.manifest.pack.version, highlights.unwrap_or_default()));
+            let fingerprint =
+                crate::content_hash(&format!("{}\n{syntax}\n{}", language.manifest.pack.version, highlights.unwrap_or_default()));
             let mut dialects = std::mem::take(&mut pack.dialects);
             for p in std::iter::once(&mut pack).chain(dialects.iter_mut()) {
                 p.fingerprint = fingerprint.clone();

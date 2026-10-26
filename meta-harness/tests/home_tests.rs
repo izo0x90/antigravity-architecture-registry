@@ -24,7 +24,9 @@ async fn until<T>(socket: &mut Socket, mut want: impl FnMut(HomeEvent) -> Option
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let mut seen = Vec::new();
     loop {
-        let Ok(message) = tokio::time::timeout_at(deadline, socket.next()).await else { panic!("home didn't say it in time; it said: {seen:#?}") };
+        let Ok(message) = tokio::time::timeout_at(deadline, socket.next()).await else {
+            panic!("home didn't say it in time; it said: {seen:#?}")
+        };
         if let Message::Text(text) = message.expect("open").unwrap() {
             let event: HomeEvent = serde_json::from_str(&text).unwrap();
             seen.push(text.chars().take(160).collect::<String>());
@@ -70,7 +72,17 @@ async fn home_follows_each_server_and_says_whose_events_are_whose() {
         (linked && state).then_some(())
     })
     .await;
-    let sub = worker_state.harness.slots.create("sub", Some("reviewer".into()), harness_core::SlotSettings { instance: Some(harness_contracts::InstanceId::new(common::FAKE)), ..Default::default() }, harness_contracts::Starter::User).await.unwrap();
+    let sub = worker_state
+        .harness
+        .slots
+        .create(
+            "sub",
+            Some("reviewer".into()),
+            harness_core::SlotSettings { instance: Some(harness_contracts::InstanceId::new(common::FAKE)), ..Default::default() },
+            harness_contracts::Starter::User,
+        )
+        .await
+        .unwrap();
     until(&mut socket, |e| matches!(&e, HomeEvent::Event { server, event } if server == "w1" && matches!(&event.event, ClientEvent::SlotUpdated { slot } if slot.id == sub)).then_some(())).await;
     // Its notifications come said as its.
     worker_state.notify.notify.message(Some(&sub), "from the worker").unwrap();
@@ -106,7 +118,10 @@ async fn a_server_that_doesnt_answer_is_said_lost_once_until_removed() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert_eq!(lost.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["lost:gone:1"], "said once while it keeps trying");
-    assert!(matches!(servers(home).await.iter().find(|s| s.name == "gone").map(|s| &s.link), Some(LinkState::Lost { .. } | LinkState::Connecting)));
+    assert!(matches!(
+        servers(home).await.iter().find(|s| s.name == "gone").map(|s| &s.link),
+        Some(LinkState::Lost { .. } | LinkState::Connecting)
+    ));
     let (status, body) = add(home, "gone", &format!("http://{gone}")).await;
     assert_eq!(status, 400, "{body}");
     assert_eq!(http(home, "DELETE", "/api/home/servers/gone", None).await.0, 204);
@@ -176,7 +191,9 @@ async fn a_servers_times_come_on_homes_clock() {
     // (Home's own marks of its stream are now: not the one it sent.)
     let ago = |at_ms: u64| harness_core::now_ms() as i64 - at_ms as i64;
     let ago = until(&mut socket, |e| match e {
-        HomeEvent::Event { server, event } if server == "late" && event.event == ClientEvent::Replayed && ago(event.at_ms) > 1_000 => Some(ago(event.at_ms)),
+        HomeEvent::Event { server, event } if server == "late" && event.event == ClientEvent::Replayed && ago(event.at_ms) > 1_000 => {
+            Some(ago(event.at_ms))
+        }
         _ => None,
     })
     .await;

@@ -61,7 +61,15 @@ impl Go {
             Motion::HalfUp => Self::HalfUp(count),
             Motion::First => Self::First,
             Motion::Last => Self::Last,
-            Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight | Motion::NextSibling | Motion::PrevSibling | Motion::Line(_) => return None,
+            Motion::Left
+            | Motion::Right
+            | Motion::HalfLeft
+            | Motion::HalfRight
+            | Motion::FewLeft
+            | Motion::FewRight
+            | Motion::NextSibling
+            | Motion::PrevSibling
+            | Motion::Line(_) => return None,
         })
     }
 }
@@ -121,7 +129,17 @@ pub struct Viewport {
 
 impl Default for Viewport {
     fn default() -> Self {
-        Self { offset: Vec2::ZERO, window: Vec2::ZERO, content: Vec2::ZERO, margin: 0.0, column: 0.0, by_hand: false, at: Vec2::ZERO, glide: None, asked: None }
+        Self {
+            offset: Vec2::ZERO,
+            window: Vec2::ZERO,
+            content: Vec2::ZERO,
+            margin: 0.0,
+            column: 0.0,
+            by_hand: false,
+            at: Vec2::ZERO,
+            glide: None,
+            asked: None,
+        }
     }
 }
 
@@ -183,10 +201,15 @@ impl Viewport {
         if self.by_hand && !self.shows_at(&stops[at], self.offset.y) {
             // The nearest that shows, with the room kept around the cursor.
             let room = self.margin.min(self.window.y / 2.0);
-            at = if stops[at].top < self.offset.y { Self::stop_at(stops, self.offset.y + room) } else { Self::stop_at(stops, self.offset.y + self.window.y - room - 0.01) };
+            at = if stops[at].top < self.offset.y {
+                Self::stop_at(stops, self.offset.y + room)
+            } else {
+                Self::stop_at(stops, self.offset.y + self.window.y - room - 0.01)
+            };
         }
         let offset = self.offset;
-        let to = |index: usize, show: Show| Moved { cursor: index, offset: Vec2::new(offset.x, self.showing(&stops[index], show, offset.y)) };
+        let to =
+            |index: usize, show: Show| Moved { cursor: index, offset: Vec2::new(offset.x, self.showing(&stops[index], show, offset.y)) };
         let moved = match go {
             Go::Down(n) => to((at + n).min(last), Show::InView),
             Go::Up(n) => to(at.saturating_sub(n), Show::InView),
@@ -436,9 +459,17 @@ mod tests {
     #[test]
     fn half_a_window_moves_the_view_and_the_cursor_together_and_stops_at_the_ends() {
         let (stops, mut view) = lines();
-        assert_eq!(y(view.go(&stops, Some(3), Go::HalfDown(1))), Some((8, 100.0)), "both move 100: the cursor stays where it was on the screen");
+        assert_eq!(
+            y(view.go(&stops, Some(3), Go::HalfDown(1))),
+            Some((8, 100.0)),
+            "both move 100: the cursor stays where it was on the screen"
+        );
         view.offset.y = 1750.0;
-        assert_eq!(y(view.go(&stops, Some(90), Go::HalfDown(1))), Some((95, 1800.0)), "only 50 more to scroll: the cursor still moves half a window");
+        assert_eq!(
+            y(view.go(&stops, Some(90), Go::HalfDown(1))),
+            Some((95, 1800.0)),
+            "only 50 more to scroll: the cursor still moves half a window"
+        );
         view.offset.y = 1800.0;
         assert_eq!(y(view.go(&stops, Some(95), Go::HalfDown(1))), Some((99, 1800.0)), "at the end: the cursor goes to the last");
         assert_eq!(y(view.go(&stops, Some(99), Go::HalfDown(1))), None, "and then nothing: no flicker past the end");
@@ -451,11 +482,13 @@ mod tests {
     fn half_a_window_of_uneven_items_moves_the_view_a_full_half_each_time() {
         // Messages 70 and 30 high in turn, in a window 200 high.
         let mut top = 0.0;
-        let stops: Vec<Stop> = (0..40).map(|i| {
-            let h = if i % 2 == 0 { 70.0 } else { 30.0 };
-            top += h;
-            Stop::new(top - h, h)
-        }).collect();
+        let stops: Vec<Stop> = (0..40)
+            .map(|i| {
+                let h = if i % 2 == 0 { 70.0 } else { 30.0 };
+                top += h;
+                Stop::new(top - h, h)
+            })
+            .collect();
         let mut view = Viewport { window: Vec2::new(300.0, 200.0), content: Vec2::new(300.0, 2000.0), ..Viewport::default() };
         let mut at = 0;
         let mut seen = Vec::new();
@@ -468,7 +501,12 @@ mod tests {
         assert_eq!((at, *seen.last().unwrap()), (39, 1800.0), "to the end");
         // An item a bit taller than half the window is no wall.
         let stops = vec![Stop::new(0.0, 150.0), Stop::new(150.0, 150.0), Stop::new(300.0, 150.0), Stop::new(450.0, 150.0)];
-        let view = Viewport { window: Vec2::new(300.0, 200.0), content: Vec2::new(300.0, 600.0), offset: Vec2::new(0.0, 150.0), ..Viewport::default() };
+        let view = Viewport {
+            window: Vec2::new(300.0, 200.0),
+            content: Vec2::new(300.0, 600.0),
+            offset: Vec2::new(0.0, 150.0),
+            ..Viewport::default()
+        };
         assert_eq!(y(view.go(&stops, Some(1), Go::HalfDown(1))), Some((2, 250.0)), "half a window, the next item whole");
     }
 
@@ -494,7 +532,11 @@ mod tests {
             seen.push((m.cursor, m.offset.y));
             (at, view.offset) = (m.cursor, m.offset);
         }
-        assert_eq!(seen, [(1, 100.0), (1, 200.0), (1, 300.0), (1, 400.0), (1, 500.0), (1, 600.0), (1, 700.0), (1, 800.0), (1, 840.0), (2, 840.0)], "half a window at a time inside it, then on");
+        assert_eq!(
+            seen,
+            [(1, 100.0), (1, 200.0), (1, 300.0), (1, 400.0), (1, 500.0), (1, 600.0), (1, 700.0), (1, 800.0), (1, 840.0), (2, 840.0)],
+            "half a window at a time inside it, then on"
+        );
         assert_eq!(y(view.go(&stops, Some(2), Go::Up(1))), Some((1, 840.0)), "its end shows: nothing scrolls");
         view.offset.y = 0.0;
         assert_eq!(y(view.go(&stops, Some(0), Go::To(2, Show::InView))), Some((2, 840.0)), "past it to the last");
@@ -505,7 +547,11 @@ mod tests {
         let (stops, mut view) = lines();
         view.drawn(Vec2::new(0.0, 1000.0), view.window, view.content);
         assert!(view.by_hand, "scrolled where nothing asked");
-        assert_eq!(y(view.go(&stops, Some(2), Go::Down(1))), Some((53, 1000.0)), "the cursor (above) comes to the top that shows (with room), then moves; the view stays");
+        assert_eq!(
+            y(view.go(&stops, Some(2), Go::Down(1))),
+            Some((53, 1000.0)),
+            "the cursor (above) comes to the top that shows (with room), then moves; the view stays"
+        );
         assert_eq!(y(view.go(&stops, Some(90), Go::Up(1))), Some((56, 1000.0)), "from below: the bottom that shows");
         let moved = view.go(&stops, Some(52), Go::Down(1)).unwrap();
         view.take(&moved, 0.0, true);
@@ -534,13 +580,19 @@ mod tests {
     /// offset it showed.
     fn draw_items(ctx: &egui::Context, list: &mut Measured, cursor: usize, now: f64) -> f32 {
         let mut shown = 0.0;
-        let input = egui::RawInput { time: Some(now), screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(400.0, 400.0))), ..Default::default() };
+        let input = egui::RawInput {
+            time: Some(now),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(400.0, 400.0))),
+            ..Default::default()
+        };
         let _ = ctx.run(input, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let area = list.area(egui::ScrollArea::vertical().max_height(200.0).auto_shrink([false, false]), now);
                 let output = area.show(ui, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::ZERO;
-                    (0..100).map(|i| ui.add_sized([300.0, 20.0], egui::Label::new(if i == cursor { "here" } else { "item" })).rect).collect::<Vec<_>>()
+                    (0..100)
+                        .map(|i| ui.add_sized([300.0, 20.0], egui::Label::new(if i == cursor { "here" } else { "item" })).rect)
+                        .collect::<Vec<_>>()
                 });
                 for rect in &output.inner {
                     list.item(*rect);
@@ -571,7 +623,11 @@ mod tests {
         }
         assert_eq!(offset, 120.0, "the view moved half a window with it");
         let at = list.go(100, Some(at), Go::Last).unwrap();
-        while { now += 0.02; draw_items(&ctx, &mut list, at, now); list.busy() } {}
+        while {
+            now += 0.02;
+            draw_items(&ctx, &mut list, at, now);
+            list.busy()
+        } {}
         assert_eq!(draw_items(&ctx, &mut list, at, now + 1.0), 1800.0, "the last shows, no further");
         assert_eq!(list.go(100, Some(99), Go::HalfDown(1)), None, "and half a page more does nothing");
     }

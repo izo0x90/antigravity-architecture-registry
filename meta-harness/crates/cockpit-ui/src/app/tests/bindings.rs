@@ -8,7 +8,14 @@ fn vim_sequences_and_leader_drive_the_graph_and_are_rebindable() {
     frame(&ctx, &mut app, vec![]);
     frame(&ctx, &mut app, key("l"));
     assert_eq!(selected(&app), "rust:a::run");
-    app.desk.details.insert(crate::goto::tests::detail("rust:a::run", vec![call("rust:a::run", "rust:a::step", 0, 2), call("rust:a::run", "rust:a::log", 1, 3)], vec![]), &Source::Code);
+    app.desk.details.insert(
+        crate::goto::tests::detail(
+            "rust:a::run",
+            vec![call("rust:a::run", "rust:a::step", 0, 2), call("rust:a::run", "rust:a::log", 1, 3)],
+            vec![],
+        ),
+        &Source::Code,
+    );
     frame(&ctx, &mut app, key("g"));
     assert_eq!(app.pending_keys.len(), 1, "waiting for the second key");
     frame(&ctx, &mut app, key("c"));
@@ -28,7 +35,9 @@ fn vim_sequences_and_leader_drive_the_graph_and_are_rebindable() {
     frame(&ctx, &mut app, key("l"));
     assert_eq!(selected(&app), "rust:a::step", "keys work while a button has focus");
     assert!(ctx.memory(|m| m.focused()).is_none(), "and the button gave the keyboard back");
-    app.desk.details.insert(crate::goto::tests::detail("rust:a::step", vec![call("rust:a::step", "rust:a::save", 0, 5)], vec![]), &Source::Code);
+    app.desk
+        .details
+        .insert(crate::goto::tests::detail("rust:a::step", vec![call("rust:a::step", "rust:a::save", 0, 5)], vec![]), &Source::Code);
     keys(&ctx, &mut app, "gc");
     assert_eq!(selected(&app), "rust:a::save", "single callee: straight there");
     ctrl(&ctx, &mut app, egui::Key::O);
@@ -56,16 +65,29 @@ fn a_panels_top_line_offers_its_groups_and_a_tap_opens_one() {
     frame(&ctx, &mut app, vec![]);
     let output = frame(&ctx, &mut app, vec![]);
     let text = texts(&output);
-    assert!(text.contains("Graph actions  Space ,") && text.contains("Buffer  Space b"), "the focused panel's groups, with the keys that open them: {text}");
+    assert!(
+        text.contains("Graph actions  Space ,") && text.contains("Buffer  Space b"),
+        "the focused panel's groups, with the keys that open them: {text}"
+    );
     // The other panel's: without keys (they don't run it until it's focused).
     let other = 1 - app.desk.panels.focused();
-    let buffer = drawn_rects(&output, "Buffer").into_iter().find(|r| app.panel_rects[other].contains(r.center())).expect("the other panel's Buffer");
-    let tap = |pressed| egui::Event::PointerButton { pos: buffer.center(), button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    let buffer =
+        drawn_rects(&output, "Buffer").into_iter().find(|r| app.panel_rects[other].contains(r.center())).expect("the other panel's Buffer");
+    let tap = |pressed| egui::Event::PointerButton {
+        pos: buffer.center(),
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
     frame(&ctx, &mut app, vec![egui::Event::PointerMoved(buffer.center())]);
     frame(&ctx, &mut app, vec![tap(true)]);
     frame(&ctx, &mut app, vec![tap(false)]);
     frame(&ctx, &mut app, vec![]);
-    assert_eq!((app.input_mode, app.leader_path.clone(), app.desk.panels.focused()), (InputMode::Leader, vec!['b'], other), "its panel focused, its menu open");
+    assert_eq!(
+        (app.input_mode, app.leader_path.clone(), app.desk.panels.focused()),
+        (InputMode::Leader, vec!['b'], other),
+        "its panel focused, its menu open"
+    );
     let top = format!("{} \u{203a}", app.config.keymap.leader.label());
     click_on(&ctx, &mut app, &top);
     assert_eq!((app.input_mode, app.leader_path.clone()), (InputMode::Leader, Vec::new()), "back to the top of the menu");
@@ -90,7 +112,11 @@ fn every_key_comes_from_config_and_no_two_actions_in_a_view_share_one() {
             assert!(!(a.len() == 1 && a.chars().all(|c| c.is_ascii_digit())), "{id_a}: digits are counts in every view");
             for (b, id_b) in &seqs[i + 1..] {
                 assert_ne!(a, b, "{id_a} and {id_b} share `{a}` in the {} view", view.name());
-                assert!(!b.starts_with(&format!("{a} ")) && !a.starts_with(&format!("{b} ")), "`{a}` ({id_a}) and `{b}` ({id_b}): the shorter can never run in the {} view", view.name());
+                assert!(
+                    !b.starts_with(&format!("{a} ")) && !a.starts_with(&format!("{b} ")),
+                    "`{a}` ({id_a}) and `{b}` ({id_b}): the shorter can never run in the {} view",
+                    view.name()
+                );
             }
         }
     }
@@ -140,7 +166,11 @@ fn actions_rank_by_importance_and_apply_to_the_target() {
     let ids: Vec<&str> = bar.iter().map(|b| b.action.id.as_str()).collect();
     assert!(ids.contains(&"nav.enter") && ids.contains(&"goto.code"), "{ids:?}");
     assert!(bar.windows(2).all(|w| w[0].action.importance <= w[1].action.importance), "most important first");
-    assert_eq!(bar.iter().find(|b| b.action.id == "nav.enter").unwrap().action.label, "To save", "says what it does to the target: to what step calls");
+    assert_eq!(
+        bar.iter().find(|b| b.action.id == "nav.enter").unwrap().action.label,
+        "To save",
+        "says what it does to the target: to what step calls"
+    );
     assert!(!ids.contains(&"nav.search_next"), "nothing searched yet");
     app.desk.searches.insert(BufferKind::Graph, "s".into());
     assert!(When::Searched.holds(&app.situation()));
@@ -156,7 +186,10 @@ fn actions_rank_by_importance_and_apply_to_the_target() {
     focus(&ctx, &mut app, BufferKind::Spec);
     let bound = app.bound_actions();
     let ids: Vec<String> = app.bar_keys(&bound).into_iter().map(|b| b.action.id.clone()).collect();
-    assert!(ids.contains(&"nav.enter".to_owned()) && !ids.iter().any(|id| id.starts_with("spec.comment") || id.starts_with("spec.request")), "starting a discussion is the shell's (C): {ids:?}");
+    assert!(
+        ids.contains(&"nav.enter".to_owned()) && !ids.iter().any(|id| id.starts_with("spec.comment") || id.starts_with("spec.request")),
+        "starting a discussion is the shell's (C): {ids:?}"
+    );
     assert!(!When::Named.holds(&app.situation()), "not a code line");
 }
 
@@ -167,7 +200,11 @@ fn a_frame_gathers_the_actions_once_and_again_only_after_one_runs() {
     let before = app.gathered.get();
     frame(&ctx, &mut app, vec![]);
     let panels = app.desk.panels.len();
-    assert_eq!(app.gathered.get() - before, panels, "once where you are (the key bar, the hints, the palette, the keys), and once for each other panel's top line");
+    assert_eq!(
+        app.gathered.get() - before,
+        panels,
+        "once where you are (the key bar, the hints, the palette, the keys), and once for each other panel's top line"
+    );
     // A key that runs an action: gathered for the key, then once more
     // for what it left.
     let before = app.gathered.get();
@@ -221,7 +258,11 @@ fn question_mark_lists_everything_under_where_it_acts() {
     let text = everything(&ctx, &mut app, "long press");
     assert!(text.contains("Pointer and touch") && text.contains("what it does and its keys"), "{text}");
     let (offered, _) = app.sheet_of(app.palette_actions());
-    let idle = offered.iter().find(|o| !o.applies && o.bound.action.when.needs().is_some()).map(|o| o.bound.action.label.clone()).expect("something that doesn't apply here");
+    let idle = offered
+        .iter()
+        .find(|o| !o.applies && o.bound.action.when.needs().is_some())
+        .map(|o| o.bound.action.label.clone())
+        .expect("something that doesn't apply here");
     let text = everything(&ctx, &mut app, &idle);
     assert!(text.contains(&idle) && text.contains("Needs "), "{idle}: {text}");
     frame(&ctx, &mut app, press(egui::Key::Tab, false));
@@ -246,7 +287,10 @@ fn a_pause_on_a_prefix_shows_what_can_follow() {
     assert!(!popup(&quick, "g"), "not before the pause");
     frame_at(&ctx, &mut app, vec![], 10.45);
     let text = texts(&frame_at(&ctx, &mut app, vec![], 10.5));
-    assert!(popup(&text, "g") && text.contains("Go to its code") && text.contains("Go to a caller") && text.contains("Go to what holds it"), "{text}");
+    assert!(
+        popup(&text, "g") && text.contains("Go to its code") && text.contains("Go to a caller") && text.contains("Go to what holds it"),
+        "{text}"
+    );
     frame_at(&ctx, &mut app, press(egui::Key::Escape, false), 10.6);
     assert!(app.pending_keys.is_empty());
     assert!(!popup(&texts(&frame_at(&ctx, &mut app, vec![], 11.5)), "g"), "Escape dismisses it");
@@ -282,7 +326,10 @@ fn the_palette_still_reaches_other_views_actions() {
     let was = app.desk.spec_mut().pinned;
     app.invoke(Invocation { action: pin.action.clone(), origin: pin.origin, value: None }, &ctx);
     assert_ne!(app.desk.spec().pinned, was, "it runs on its view");
-    assert!(!palette.iter().any(|b| b.action.label.starts_with("Spec · ") && b.action.id.starts_with("nav.")), "not its shared moves: they act where you are");
+    assert!(
+        !palette.iter().any(|b| b.action.label.starts_with("Spec · ") && b.action.id.starts_with("nav.")),
+        "not its shared moves: they act where you are"
+    );
     // `:` then a number goes to that line or row.
     assert!(palette.iter().any(|b| b.action.id == "nav.line"));
     focus(&ctx, &mut app, BufferKind::Code);
@@ -348,7 +395,11 @@ fn enter_and_backspace_are_only_offered_where_they_act() {
     let has = |app: &CockpitApp, id: &str| app.bound_actions().iter().any(|b| b.action.id == id && b.action.when.holds(&app.situation()));
     // Graph: Backspace only once gone in somewhere.
     focus(&ctx, &mut app, BufferKind::Graph);
-    *app.desk.graph_mut() = showing(crate::graph::tests::tree_of(&crate::graph::tests::sample_graph(), None, arch_graph::tree::TreeRequest { view: arch_graph::tree::ViewKind::Calls, ..Default::default() }));
+    *app.desk.graph_mut() = showing(crate::graph::tests::tree_of(
+        &crate::graph::tests::sample_graph(),
+        None,
+        arch_graph::tree::TreeRequest { view: arch_graph::tree::ViewKind::Calls, ..Default::default() },
+    ));
     app.desk.graph_mut().nav.source = Source::Plan(PlanId::new("p").unwrap());
     app.desk.graph_mut().select(Some("rust:a::run".into()));
     assert!(!has(&app, "nav.leave") && !offered(&app, "nav.leave"), "the starting points already");
@@ -369,8 +420,18 @@ fn enter_and_backspace_are_only_offered_where_they_act() {
     // Spec: on a discussion, opening it leads the bar.
     focus(&ctx, &mut app, BufferKind::Spec);
     let step = ComponentId::new("rust:a::step");
-    app.desk.spec_mut().discussions = vec![crate::review::tests::discussion(1, crate::review::tests::on(&step, Some("logic")), harness_contracts::DiscussionStatus::Open)];
-    app.desk.spec_mut().move_to(&crate::spec::Entry { section: crate::card::Section::Logic, item: crate::spec::SpecItem::Comment(harness_contracts::DiscussionId::new("d1")) }.key());
+    app.desk.spec_mut().discussions = vec![crate::review::tests::discussion(
+        1,
+        crate::review::tests::on(&step, Some("logic")),
+        harness_contracts::DiscussionStatus::Open,
+    )];
+    app.desk.spec_mut().move_to(
+        &crate::spec::Entry {
+            section: crate::card::Section::Logic,
+            item: crate::spec::SpecItem::Comment(harness_contracts::DiscussionId::new("d1")),
+        }
+        .key(),
+    );
     let bound = app.bound_actions();
     let bar: Vec<String> = app.bar_keys(&bound).into_iter().map(|b| b.action.id.clone()).collect();
     assert_eq!(bar.first().map(String::as_str), Some("nav.enter"), "{bar:?}");
@@ -416,7 +477,11 @@ fn a_swipe_runs_what_the_keymap_binds_to_it_in_the_view_it_started_on() {
     assert_eq!(app.desk.chat().ui.slot.as_str(), "sub-1", "left: the chat's next slot (its own binding before the shell's)");
     swipe(&ctx, &mut app, middle, 150.0, 2.0);
     assert_eq!(app.desk.chat().ui.slot.as_str(), harness_contracts::LEAD, "right: back");
-    assert!(UiConfig::with_overrides("[keymap.bind]\n\"chat.next_slot\" = { gestures = [\"wiggle\"] }\n").unwrap_err().contains("no gesture `wiggle`"));
+    assert!(
+        UiConfig::with_overrides("[keymap.bind]\n\"chat.next_slot\" = { gestures = [\"wiggle\"] }\n")
+            .unwrap_err()
+            .contains("no gesture `wiggle`")
+    );
 }
 
 /// What's shown is what runs: every key the key bar, the `?` sheet and the
@@ -450,7 +515,8 @@ fn every_key_shown_runs_the_action_it_shows() {
         for (id, keys) in shown {
             let (ctx, mut app) = setup();
             app.ran.borrow_mut().clear();
-            from_outside(&ctx, &mut app, &serde_json::json!({ "op": "keys", "keys": keys }).to_string()).unwrap_or_else(|e| panic!("{place}: {id}'s keys `{keys}`: {e}"));
+            from_outside(&ctx, &mut app, &serde_json::json!({ "op": "keys", "keys": keys }).to_string())
+                .unwrap_or_else(|e| panic!("{place}: {id}'s keys `{keys}`: {e}"));
             let ran = app.ran.borrow().clone();
             assert_eq!(ran.first(), Some(&id), "{place}: `{keys}` is shown for {id}; it ran {ran:?}");
         }

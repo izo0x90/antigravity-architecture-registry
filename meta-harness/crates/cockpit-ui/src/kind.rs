@@ -18,7 +18,20 @@ pub enum BufferKind {
 }
 
 impl BufferKind {
-    pub const ALL: [Self; 12] = [Self::Chat, Self::Code, Self::Graph, Self::Tree, Self::Spec, Self::Queue, Self::Inbox, Self::Changes, Self::Terminal, Self::Tags, Self::Plan, Self::Discussion];
+    pub const ALL: [Self; 12] = [
+        Self::Chat,
+        Self::Code,
+        Self::Graph,
+        Self::Tree,
+        Self::Spec,
+        Self::Queue,
+        Self::Inbox,
+        Self::Changes,
+        Self::Terminal,
+        Self::Tags,
+        Self::Plan,
+        Self::Discussion,
+    ];
 
     pub fn title(&self) -> &'static str {
         match self {
@@ -45,7 +58,18 @@ impl BufferKind {
     /// only this kind's buffers start new; the rest of the layout holds.
     pub fn saved_version(self) -> u32 {
         match self {
-            Self::Chat | Self::Code | Self::Graph | Self::Tree | Self::Spec | Self::Queue | Self::Inbox | Self::Changes | Self::Terminal | Self::Tags | Self::Plan | Self::Discussion => 1,
+            Self::Chat
+            | Self::Code
+            | Self::Graph
+            | Self::Tree
+            | Self::Spec
+            | Self::Queue
+            | Self::Inbox
+            | Self::Changes
+            | Self::Terminal
+            | Self::Tags
+            | Self::Plan
+            | Self::Discussion => 1,
         }
     }
 

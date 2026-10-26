@@ -56,7 +56,10 @@ pub enum Happening {
     Title(String),
     Bell,
     /// A command finished (as the shell marked it), and how long it ran.
-    CommandFinished { code: Option<i32>, ran: Duration },
+    CommandFinished {
+        code: Option<i32>,
+        ran: Duration,
+    },
     /// The shell ended, with its exit code when it had one.
     Ended(Option<i32>),
 }
@@ -177,7 +180,8 @@ impl Terminal {
         let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(pair.master.take_writer().map_err(io_error)?));
         let listener = Listener::default();
         let config = Config { scrolling_history: Feed::room(options.history), ..Config::default() };
-        let named = std::path::Path::new(&options.shell).file_name().map_or_else(|| options.shell.clone(), |n| n.to_string_lossy().into_owned());
+        let named =
+            std::path::Path::new(&options.shell).file_name().map_or_else(|| options.shell.clone(), |n| n.to_string_lossy().into_owned());
         let state = Arc::new(Mutex::new(State {
             term: Term::new(config, &Size(options.size), listener.clone()),
             feed: Feed::new(options.history, &mark),
@@ -211,7 +215,10 @@ impl Terminal {
     /// Types `input` (as the program expects it in its modes).
     pub fn input(&self, input: &TerminalInput) -> std::io::Result<()> {
         let mode = *lock(&self.state).term.mode();
-        let bytes = encode(input, Modes { app_cursor: mode.contains(TermMode::APP_CURSOR), bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE) });
+        let bytes = encode(
+            input,
+            Modes { app_cursor: mode.contains(TermMode::APP_CURSOR), bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE) },
+        );
         let mut writer = lock(&self.writer);
         writer.write_all(&bytes)?;
         writer.flush()
@@ -238,7 +245,9 @@ impl Terminal {
         if new_width {
             let layouts = before.filter(|_| readable(term)).map(|before| (before, screen::Layout::of(term, feed)));
             match &layouts {
-                Some((before, after)) => commands.moved(changes.bump(), |line, col| after.place(before, line, col), |line| after.after(before, line)),
+                Some((before, after)) => {
+                    commands.moved(changes.bump(), |line, col| after.place(before, line, col), |line| after.after(before, line))
+                }
                 None => commands.lost_places(feed.top(), changes.bump()),
             }
             relaid.push_back(Relaid { end, layouts });

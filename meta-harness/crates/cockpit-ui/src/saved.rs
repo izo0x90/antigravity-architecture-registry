@@ -20,9 +20,9 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::panels::{Panels, BufferId};
 use crate::nav::{Jump, JumpList, Place};
 use crate::net::{NetClient, NetResult};
+use crate::panels::{BufferId, Panels};
 
 /// Bumped when a change to this structure itself (not a buffer kind's part
 /// of it) can't read an older one: an older one is then left unread, and
@@ -122,10 +122,16 @@ impl Keeper {
                     let version = value.as_ref().and_then(|v| v.get("version")).and_then(serde_json::Value::as_u64);
                     match (value, version) {
                         (None, _) => out.push(Event::Fresh),
-                        (Some(_), Some(v)) if v != u64::from(VERSION) => out.extend([Event::Fresh, Event::Note("The saved layout is from an older version of the cockpit: starting with a new one.".into())]),
+                        (Some(_), Some(v)) if v != u64::from(VERSION) => out.extend([
+                            Event::Fresh,
+                            Event::Note("The saved layout is from an older version of the cockpit: starting with a new one.".into()),
+                        ]),
                         (Some(value), _) => match serde_json::from_value::<SavedUi>(value) {
                             Ok(saved) => out.push(Event::Restore(Box::new(saved))),
-                            Err(e) => out.extend([Event::Fresh, Event::Note(format!("The saved layout couldn't be read ({e}): starting with a new one."))]),
+                            Err(e) => out.extend([
+                                Event::Fresh,
+                                Event::Note(format!("The saved layout couldn't be read ({e}): starting with a new one.")),
+                            ]),
                         },
                     }
                 }
@@ -187,7 +193,20 @@ mod tests {
     use super::*;
 
     fn state(draft: &str) -> SavedUi {
-        SavedUi { version: VERSION, panels: Panels::default(), views: Vec::new(), kept: vec![(BufferId::new(crate::kind::BufferKind::Spec, 0), serde_json::Value::String(draft.into()))], used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), agents: false, comparison: Default::default(), item_buttons: None, at_work: None, versions: BTreeMap::new() }
+        SavedUi {
+            version: VERSION,
+            panels: Panels::default(),
+            views: Vec::new(),
+            kept: vec![(BufferId::new(crate::kind::BufferKind::Spec, 0), serde_json::Value::String(draft.into()))],
+            used: Vec::new(),
+            marks: BTreeMap::new(),
+            jumps: JumpList::default(),
+            agents: false,
+            comparison: Default::default(),
+            item_buttons: None,
+            at_work: None,
+            versions: BTreeMap::new(),
+        }
     }
 
     fn arrive(keeper: &Keeper, value: Option<serde_json::Value>) {
@@ -225,7 +244,10 @@ mod tests {
         let mut old = Keeper::default();
         arrive(&old, Some(serde_json::json!({ "version": VERSION + 1 })));
         let events = old.tick(&state(""), 0.0, 0.5, &net, &ctx);
-        assert!(matches!(events.as_slice(), [Event::Fresh, Event::Note(n)] if n.contains("another version") || n.contains("older version")), "one from another version isn't read");
+        assert!(
+            matches!(events.as_slice(), [Event::Fresh, Event::Note(n)] if n.contains("another version") || n.contains("older version")),
+            "one from another version isn't read"
+        );
         // Read: saving can start.
         old.tick(&state("x"), 1.0, 0.5, &net, &ctx);
         assert!(old.pending.is_some());

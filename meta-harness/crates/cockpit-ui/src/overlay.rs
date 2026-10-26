@@ -122,7 +122,8 @@ impl Overlays {
     }
 
     fn inside(&self, overlay: Overlay, at: Pos2) -> bool {
-        (overlay.rules().keys_on_the_bar && self.across_drawn.is_some_and(|r| r.contains(at))) || self.drawn.iter().any(|(o, r)| *o == overlay && r.contains(at))
+        (overlay.rules().keys_on_the_bar && self.across_drawn.is_some_and(|r| r.contains(at)))
+            || self.drawn.iter().any(|(o, r)| *o == overlay && r.contains(at))
     }
 
     /// A tap in `raw` outside `top` (the top one open): it, to close.
@@ -150,7 +151,8 @@ impl Overlays {
                 _ => None,
             });
             self.taking = Taking { button: true, touches: touches.collect() };
-            let press = raw.events.iter().skip(at).position(|e| matches!(e, egui::Event::PointerButton { pressed: true, .. })).map(|n| n + at);
+            let press =
+                raw.events.iter().skip(at).position(|e| matches!(e, egui::Event::PointerButton { pressed: true, .. })).map(|n| n + at);
             self.take_the_rest(raw, press.map_or(at, |p| p + 1));
             if let Some(p) = press {
                 raw.events.remove(p);
@@ -254,12 +256,23 @@ mod tests {
     #[test]
     fn a_fingers_tap_outside_is_taken_to_its_lift() {
         let mut o = drawn(&[(Overlay::Menu, LIST)]);
-        let touch = |id, phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos: Pos2::new(10.0, 10.0), force: None };
+        let touch = |id, phase| egui::Event::Touch {
+            device_id: egui::TouchDeviceId(1),
+            id: egui::TouchId(id),
+            phase,
+            pos: Pos2::new(10.0, 10.0),
+            force: None,
+        };
         // Two fingers down at once: both taken.
         let mut input = raw(vec![touch(7, egui::TouchPhase::Start), touch(8, egui::TouchPhase::Start), press(Pos2::new(10.0, 10.0), true)]);
         assert_eq!(o.outside_tap(&mut input, Some(Overlay::Menu)), Some(Overlay::Menu));
         assert!(input.events.is_empty(), "{:?}", input.events);
-        let mut lift = raw(vec![touch(7, egui::TouchPhase::Move), touch(8, egui::TouchPhase::End), touch(7, egui::TouchPhase::End), press(Pos2::new(10.0, 10.0), false)]);
+        let mut lift = raw(vec![
+            touch(7, egui::TouchPhase::Move),
+            touch(8, egui::TouchPhase::End),
+            touch(7, egui::TouchPhase::End),
+            press(Pos2::new(10.0, 10.0), false),
+        ]);
         o.outside_tap(&mut lift, None);
         assert!(lift.events.is_empty());
     }

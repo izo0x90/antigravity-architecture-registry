@@ -61,6 +61,12 @@ async fn the_cockpit_tools_reach_the_cockpit_only_while_it_lets_agents_drive() {
     assert_eq!(calls, [json!({ "op": "read" }), json!({ "op": "click", "text": "Nowhere" })]);
 
     let tools = mcp.rpc("tools/list", json!({})).await;
-    let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).filter(|n| n.starts_with("cockpit_")).collect();
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .filter(|n| n.starts_with("cockpit_"))
+        .collect();
     assert_eq!(names, ["cockpit_read", "cockpit_actions", "cockpit_run", "cockpit_click", "cockpit_type", "cockpit_keys"]);
 }

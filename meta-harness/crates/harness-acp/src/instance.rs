@@ -6,8 +6,7 @@ use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
 use harness_contracts::{
-    AuthState, AuthStatus, CatalogUpdate, HarnessProfile, InstanceId, Launch, ProviderSnapshot, ProviderStatus,
-    SignIn,
+    AuthState, AuthStatus, CatalogUpdate, HarnessProfile, InstanceId, Launch, ProviderSnapshot, ProviderStatus, SignIn,
 };
 use harness_core::skills::discover_skills;
 use harness_core::tool_config::list_tool_servers;
@@ -77,7 +76,8 @@ impl AcpInstance {
                     // one shown, or one that has ended, is passed over.
                     AuthEvent::Waiting(waiting) => {
                         instance.snapshot.send_if_modified(|s| {
-                            let older = s.auth.waiting.as_ref().is_some_and(|w| w.id > waiting.id) || s.auth.ended.as_ref().is_some_and(|e| e.id >= waiting.id);
+                            let older = s.auth.waiting.as_ref().is_some_and(|w| w.id > waiting.id)
+                                || s.auth.ended.as_ref().is_some_and(|e| e.id >= waiting.id);
                             if !older {
                                 s.auth.waiting = Some(Box::new(waiting));
                                 s.auth.ended = None;
@@ -88,7 +88,8 @@ impl AcpInstance {
                     }
                     AuthEvent::Ended(ended) => {
                         instance.snapshot.send_if_modified(|s| {
-                            let older = s.auth.waiting.as_ref().is_some_and(|w| w.id > ended.id) || s.auth.ended.as_ref().is_some_and(|e| e.id > ended.id);
+                            let older = s.auth.waiting.as_ref().is_some_and(|w| w.id > ended.id)
+                                || s.auth.ended.as_ref().is_some_and(|e| e.id > ended.id);
                             if !older {
                                 s.auth.waiting = None;
                                 s.auth.ended = Some(Box::new(ended));
@@ -180,7 +181,9 @@ impl ProviderInstance for AcpInstance {
                 // login is kept where it keeps it. What it does (a session
                 // refused, a sign-in) says more, and isn't overridden.
                 let kept = match (&info.sign_in, &self.profile.settings.login.kept) {
-                    (None, Some(kept)) if self.snapshot.borrow().auth.status == AuthStatus::Unknown => tokio::fs::try_exists(self.profile.places.path(kept)).await.unwrap_or(false),
+                    (None, Some(kept)) if self.snapshot.borrow().auth.status == AuthStatus::Unknown => {
+                        tokio::fs::try_exists(self.profile.places.path(kept)).await.unwrap_or(false)
+                    }
                     _ => false,
                 };
                 self.snapshot.send_modify(|s| {
@@ -223,7 +226,9 @@ impl ProviderInstance for AcpInstance {
                 Some(sign_in) => apply_sign_in(&mut s.auth, sign_in),
                 // A session that reports a catalog is signed in (when the
                 // agent doesn't say who as).
-                None if s.auth.status != AuthStatus::SignedIn && (update.commands.is_some() || update.models.is_some()) => s.auth.status = AuthStatus::SignedIn,
+                None if s.auth.status != AuthStatus::SignedIn && (update.commands.is_some() || update.models.is_some()) => {
+                    s.auth.status = AuthStatus::SignedIn
+                }
                 None => {}
             }
         });

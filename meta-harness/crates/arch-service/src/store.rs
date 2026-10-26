@@ -155,7 +155,8 @@ fn ensure_nah_gitignore(nah: &Path) -> Result<(), ServiceError> {
     let entries: Vec<String> = NAH_IGNORED.into_iter().map(|dir| format!("{dir}/")).collect();
     let last = text.lines().rev().filter(|l| !l.trim().is_empty()).take(entries.len()).collect::<Vec<_>>();
     let undone = reopens && !entries.iter().all(|e| last.contains(&e.as_str()));
-    let text: String = if undone { text.lines().filter(|l| !entries.iter().any(|e| l == e)).map(|l| format!("{l}\n")).collect() } else { text };
+    let text: String =
+        if undone { text.lines().filter(|l| !entries.iter().any(|e| l == e)).map(|l| format!("{l}\n")).collect() } else { text };
     let missing: Vec<String> = entries.into_iter().filter(|entry| !text.lines().any(|l| l == entry)).collect();
     // Git doesn't read one that's a link: a file of its own.
     let linked = std::fs::symlink_metadata(&ignore).is_ok_and(|m| m.file_type().is_symlink());
@@ -208,7 +209,10 @@ impl FsPlans {
         std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
         ensure_nah_gitignore(&nah)?;
         let plans = Self { dir, write: Mutex::new(()), held: Mutex::new(Held::default()), mover: std::sync::OnceLock::new() };
-        let files: Vec<PathBuf> = std::fs::read_dir(&plans.dir).map_err(|e| io(&plans.dir, e))?.map(|e| e.map(|e| e.path()).map_err(|e| io(&plans.dir, e))).collect::<Result<_, _>>()?;
+        let files: Vec<PathBuf> = std::fs::read_dir(&plans.dir)
+            .map_err(|e| io(&plans.dir, e))?
+            .map(|e| e.map(|e| e.path()).map_err(|e| io(&plans.dir, e)))
+            .collect::<Result<_, _>>()?;
         plans.changed(&files)?;
         Ok(plans)
     }
@@ -226,8 +230,14 @@ impl FsPlans {
             Err(e) => return Some((Err(io(path, e)), Vec::new())),
         };
         let corrupt = |e: &dyn std::fmt::Display| ServiceError::Corrupt(format!("{}: {e}", path.display()));
-        let comments = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|mut v| v.get_mut("comments").map(serde_json::Value::take)).and_then(|c| c.as_array().cloned()).unwrap_or_default();
-        let plan = Plan::from_json(&text).map_err(|e| corrupt(&e)).and_then(|plan| if &plan.id == id { Ok(plan) } else { Err(corrupt(&format!("holds plan '{}', not '{id}'", plan.id))) });
+        let comments = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|mut v| v.get_mut("comments").map(serde_json::Value::take))
+            .and_then(|c| c.as_array().cloned())
+            .unwrap_or_default();
+        let plan = Plan::from_json(&text)
+            .map_err(|e| corrupt(&e))
+            .and_then(|plan| if &plan.id == id { Ok(plan) } else { Err(corrupt(&format!("holds plan '{}', not '{id}'", plan.id))) });
         Some((plan, comments))
     }
 
@@ -236,21 +246,27 @@ impl FsPlans {
     /// it is: they wait in it). One that fails stays as it is.
     fn move_waiting(&self) -> Result<(), ServiceError> {
         let Some(mover) = self.mover.get() else { return Ok(()) };
-        let waiting: Vec<(PlanId, Vec<serde_json::Value>)> = self.held.lock().map_err(ServiceError::poisoned)?.waiting.iter().map(|(id, c)| (id.clone(), c.clone())).collect();
+        let waiting: Vec<(PlanId, Vec<serde_json::Value>)> =
+            self.held.lock().map_err(ServiceError::poisoned)?.waiting.iter().map(|(id, c)| (id.clone(), c.clone())).collect();
         for (id, comments) in waiting {
             if let Err(e) = mover(&id, &comments) {
-                tracing::warn!("Plan {id}'s comments couldn't be moved to discussions (they stay in its file, and hold its approvals): {e}");
+                tracing::warn!(
+                    "Plan {id}'s comments couldn't be moved to discussions (they stay in its file, and hold its approvals): {e}"
+                );
                 continue;
             }
             let _guard = self.write.lock().map_err(ServiceError::poisoned)?;
             let mut held = self.held.lock().map_err(ServiceError::poisoned)?;
             let Some(Ok(plan)) = held.plans.get(&id).cloned() else { continue };
-            let written = plan.to_json().map_err(|e| ServiceError::Corrupt(e.to_string())).and_then(|text| write_atomic(&self.path(&id), &text));
+            let written =
+                plan.to_json().map_err(|e| ServiceError::Corrupt(e.to_string())).and_then(|text| write_atomic(&self.path(&id), &text));
             match written {
                 Ok(()) => {
                     held.waiting.remove(&id);
                 }
-                Err(e) => tracing::warn!("Plan {id}'s file couldn't be written without its comments (they're discussions now; they're left out when it's read again): {e}"),
+                Err(e) => tracing::warn!(
+                    "Plan {id}'s file couldn't be written without its comments (they're discussions now; they're left out when it's read again): {e}"
+                ),
             }
         }
         Ok(())
@@ -397,7 +413,12 @@ pub fn temporary_facts(limits: &crate::Limits) -> Result<arch_store::SqliteStore
 /// SQLite settings from the limits (`[store]`): every NAH database uses them.
 pub fn store_settings(limits: &crate::Limits) -> arch_store::Settings {
     let store = &limits.store;
-    arch_store::Settings { synchronous: store.synchronous.clone(), cache_kib: store.cache_kib, busy_retry_us: store.busy_retry_us, busy_give_up_ms: store.busy_give_up_ms }
+    arch_store::Settings {
+        synchronous: store.synchronous.clone(),
+        cache_kib: store.cache_kib,
+        busy_retry_us: store.busy_retry_us,
+        busy_give_up_ms: store.busy_give_up_ms,
+    }
 }
 
 #[cfg(test)]
@@ -481,7 +502,11 @@ mod tests {
         }
         let got = repo.get(&PlanId::new("shared").unwrap()).unwrap().unwrap();
         assert!(got.title.starts_with("writer "), "one complete write wins");
-        let leftovers: Vec<_> = std::fs::read_dir(dir.path().join(".nah/plans")).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).collect();
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path().join(".nah/plans"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
         assert!(leftovers.is_empty());
         let file = |name: &str| dir.path().join(".nah/plans").join(name);
         std::fs::write(file("broken.json"), "{ not json").unwrap();
@@ -522,7 +547,11 @@ mod tests {
             h.join().unwrap();
         }
         assert!(repo.get(&PlanId::new("shared").unwrap()).unwrap().unwrap().title.starts_with("store "));
-        let leftovers = std::fs::read_dir(dir.path().join(".nah/plans")).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).count();
+        let leftovers = std::fs::read_dir(dir.path().join(".nah/plans"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
         assert_eq!(leftovers, 0);
         assert!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap().contains("cache/"));
     }
@@ -536,12 +565,23 @@ mod tests {
         assert_eq!(state_dir(dir.path()).unwrap(), dir.path().join(".nah/state"));
         assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\ncache/\nstate/\nharness/\n");
         state_dir(dir.path()).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\ncache/\nstate/\nharness/\n", "nothing added twice");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(),
+            "# mine\ncache/\nstate/\nharness/\n",
+            "nothing added twice"
+        );
         // A line letting things back in: the server's entries go after it.
         std::fs::write(dir.path().join(".nah/.gitignore"), "# mine\ncache/\nstate/\nharness/\n!**/harness/\n").unwrap();
         state_dir(dir.path()).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\n!**/harness/\ncache/\nstate/\nharness/\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(),
+            "# mine\n!**/harness/\ncache/\nstate/\nharness/\n"
+        );
         state_dir(dir.path()).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\n!**/harness/\ncache/\nstate/\nharness/\n", "settled");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(),
+            "# mine\n!**/harness/\ncache/\nstate/\nharness/\n",
+            "settled"
+        );
     }
 }

@@ -63,9 +63,16 @@ impl ChatStreamState {
         // on (its own, the run it's in); every one.
         let words = |f: &rows::Folding| f.words();
         let (toggle, open, close) = (here.toggles().map(|(f, open)| (words(f), !open)), here.opens().map(words), here.closes().map(words));
-        out.extend(crate::nav::fold_here(crate::nav::FoldsHere { toggle: toggle.as_ref().map(|(w, folded)| (w.as_str(), *folded)), open: open.as_deref(), close: close.as_deref() }));
+        out.extend(crate::nav::fold_here(crate::nav::FoldsHere {
+            toggle: toggle.as_ref().map(|(w, folded)| (w.as_str(), *folded)),
+            open: open.as_deref(),
+            close: close.as_deref(),
+        }));
         let shape = self.shape();
-        out.extend(crate::nav::fold_all((shape.any_folded, "Unfold every run of calls and output"), (shape.any_open, "Fold every run of calls and output")));
+        out.extend(crate::nav::fold_all(
+            (shape.any_folded, "Unfold every run of calls and output"),
+            (shape.any_open, "Fold every run of calls and output"),
+        ));
         out
     }
 }
@@ -78,7 +85,12 @@ impl ChatStreamState {
     fn messages_beside(&self, motion: Motion) -> Vec<usize> {
         let shape = self.shape();
         let Some(view) = self.thread() else { return Vec::new() };
-        let is_message = |row: &&rows::Row| !row.folded && view.in_stream(row.first).is_some_and(|i| matches!(i.body, ItemBody::UserMessage { .. } | ItemBody::AssistantMessage { .. }));
+        let is_message = |row: &&rows::Row| {
+            !row.folded
+                && view
+                    .in_stream(row.first)
+                    .is_some_and(|i| matches!(i.body, ItemBody::UserMessage { .. } | ItemBody::AssistantMessage { .. }))
+        };
         let from = self.ui.cursor.and_then(|c| shape.row_of(c));
         match (motion, from) {
             (Motion::NextSibling, Some(at)) => shape.rows.iter().skip(at + 1).filter(is_message).map(|r| r.first).collect(),
@@ -282,10 +294,19 @@ impl Navigable for ChatStreamState {
             let slot = self.slot_with(session).ok_or("No agent slot has that session open now (resume it to see it).")?;
             self.ui.slot = slot;
             let subject = match message {
-                Some(message) => harness_contracts::Subject::ChatMessage { session: session.clone(), turn: *turn, message: *message, turn_id: String::new() },
+                Some(message) => harness_contracts::Subject::ChatMessage {
+                    session: session.clone(),
+                    turn: *turn,
+                    message: *message,
+                    turn_id: String::new(),
+                },
                 None => harness_contracts::Subject::ChatTurn { session: session.clone(), turn: *turn, turn_id: String::new() },
             };
-            let at = self.tagged_indexes(&subject).first().copied().ok_or_else(|| format!("Turn {turn} isn't in the chat (its session holds it no more)."))?;
+            let at = self
+                .tagged_indexes(&subject)
+                .first()
+                .copied()
+                .ok_or_else(|| format!("Turn {turn} isn't in the chat (its session holds it no more)."))?;
             self.put_cursor(at, crate::viewport::Show::Middle, render::Reveal::Item);
             return Ok(());
         }
@@ -441,7 +462,9 @@ impl Navigable for ChatStreamState {
     }
 
     fn items(&self) -> Vec<Item> {
-        self.thread().map(|v| v.stream().enumerate().map(|(i, item)| Item::new(i.to_string(), "", item_text(item))).collect()).unwrap_or_default()
+        self.thread()
+            .map(|v| v.stream().enumerate().map(|(i, item)| Item::new(i.to_string(), "", item_text(item))).collect())
+            .unwrap_or_default()
     }
 
     fn spots(&self) -> Vec<Spot> {

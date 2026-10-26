@@ -9,8 +9,8 @@
 use std::rc::Rc;
 
 use arch_graph::code::Highlights;
-use egui::text::{LayoutJob, TextFormat};
 use egui::Color32;
+use egui::text::{LayoutJob, TextFormat};
 
 use crate::asked::{Asked, Bounds, Found};
 use crate::config::CodeUi;
@@ -103,7 +103,14 @@ impl Highlighter {
 /// `text[span]` as a layout, coloured by `highlights` (byte runs over the
 /// whole of `text`, each with a capture's name), `colour` giving each
 /// capture's colour and `base` the rest; `format` makes each part's look.
-pub fn coloured(text: &str, span: std::ops::Range<usize>, highlights: Option<&Highlights>, colour: impl Fn(&str) -> Option<Color32>, base: Color32, format: impl Fn(Color32) -> TextFormat) -> LayoutJob {
+pub fn coloured(
+    text: &str,
+    span: std::ops::Range<usize>,
+    highlights: Option<&Highlights>,
+    colour: impl Fn(&str) -> Option<Color32>,
+    base: Color32,
+    format: impl Fn(Color32) -> TextFormat,
+) -> LayoutJob {
     let mut job = LayoutJob::default();
     let Some(highlights) = highlights else {
         job.append(&text[span], 0.0, format(base));
@@ -143,7 +150,14 @@ mod tests {
         let text = "fn run() {}\nlet x = 1;";
         let highlights = Highlights { names: vec!["keyword".into()], runs: vec![[0, 2, 0], [12, 15, 0]] };
         let red = Color32::RED;
-        let job = coloured(text, 12..text.len(), Some(&highlights), |n| (n == "keyword").then_some(red), Color32::GRAY, |color| TextFormat { color, ..Default::default() });
+        let job = coloured(
+            text,
+            12..text.len(),
+            Some(&highlights),
+            |n| (n == "keyword").then_some(red),
+            Color32::GRAY,
+            |color| TextFormat { color, ..Default::default() },
+        );
         let parts: Vec<(&str, Color32)> = job.sections.iter().map(|s| (&job.text[s.byte_range.clone()], s.format.color)).collect();
         assert_eq!(parts, [("let", red), (" x = 1;", Color32::GRAY)]);
     }

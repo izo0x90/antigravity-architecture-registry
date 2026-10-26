@@ -71,7 +71,9 @@ async fn opening_a_session_on_an_unknown_instance_is_404() {
 async fn websocket_upgrade_and_replay() {
     let (addr, _) = app().await;
     let ticket = common::ticket(addr).await;
-    let ws_req = format!("GET /ws/events?ticket={ticket} HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n");
+    let ws_req = format!(
+        "GET /ws/events?ticket={ticket} HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    );
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
     stream.write_all(ws_req.as_bytes()).await.unwrap();
     let mut buf = vec![0u8; 8192];
@@ -106,7 +108,9 @@ async fn fs_read_endpoint_reads_only_inside_the_repository() {
     let root = state.project.arch.root();
     std::fs::create_dir_all(root.join(".nah/harness/antigravity/antigravity-acp")).unwrap();
     std::fs::write(root.join(".nah/harness/antigravity/antigravity-acp/acp_token.json"), "{\"refresh_token\":\"x\"}").unwrap();
-    for private in [".nah/harness/antigravity/antigravity-acp/acp_token.json", ".nah/harness/../harness/antigravity/antigravity-acp/acp_token.json"] {
+    for private in
+        [".nah/harness/antigravity/antigravity-acp/acp_token.json", ".nah/harness/../harness/antigravity/antigravity-acp/acp_token.json"]
+    {
         let (status, body) = http(addr, "GET", &format!("/api/fs/read?path={private}"), None).await;
         assert_eq!(status, 403, "{private}: {body}");
         assert!(!body.contains("refresh_token"));

@@ -159,12 +159,30 @@ impl Theme {
 
     /// A terminal's named colour `n` (0-15).
     pub fn term(&self, n: u8) -> Color32 {
-        [self.term_black, self.term_red, self.term_green, self.term_yellow, self.term_blue, self.term_magenta, self.term_cyan, self.term_white, self.term_bright_black, self.term_bright_red, self.term_bright_green, self.term_bright_yellow, self.term_bright_blue, self.term_bright_magenta, self.term_bright_cyan, self.term_bright_white][usize::from(n & 15)]
+        [
+            self.term_black,
+            self.term_red,
+            self.term_green,
+            self.term_yellow,
+            self.term_blue,
+            self.term_magenta,
+            self.term_cyan,
+            self.term_white,
+            self.term_bright_black,
+            self.term_bright_red,
+            self.term_bright_green,
+            self.term_bright_yellow,
+            self.term_bright_blue,
+            self.term_bright_magenta,
+            self.term_bright_cyan,
+            self.term_bright_white,
+        ][usize::from(n & 15)]
     }
 
     /// Tag colour `n` (one of `TAG_COLOURS`).
     pub fn tag(&self, n: u8) -> Color32 {
-        [self.tag_0, self.tag_1, self.tag_2, self.tag_3, self.tag_4, self.tag_5, self.tag_6, self.tag_7][usize::from(n % harness_contracts::TAG_COLOURS)]
+        [self.tag_0, self.tag_1, self.tag_2, self.tag_3, self.tag_4, self.tag_5, self.tag_6, self.tag_7]
+            [usize::from(n % harness_contracts::TAG_COLOURS)]
     }
 
     /// Tag colour `n` in a word, as this theme has it ("orange").
@@ -341,7 +359,11 @@ mod tests {
             let theme = crate::config::UiConfig::with_overrides(preset).unwrap().theme;
             let opaque = |c: Color32| Color32::from_rgb(c.r(), c.g(), c.b());
             // A highlighted key (a bright pill), a plain one, a label on the popup.
-            for (fg, bg, what) in [(theme.on_bright, theme.focus, "on_bright on focus"), (theme.key, opaque(theme.overlay_raised), "key on overlay_raised"), (theme.text_strong, opaque(theme.overlay), "text_strong on overlay")] {
+            for (fg, bg, what) in [
+                (theme.on_bright, theme.focus, "on_bright on focus"),
+                (theme.key, opaque(theme.overlay_raised), "key on overlay_raised"),
+                (theme.text_strong, opaque(theme.overlay), "text_strong on overlay"),
+            ] {
                 assert!(contrast(fg, bg) >= 4.5, "{preset}: {what} is {:.1}:1", contrast(fg, bg));
             }
         }
@@ -488,7 +510,8 @@ mod glyph_tests {
                     continue;
                 }
                 for c in line.chars().filter(|c| !c.is_ascii()) {
-                    let ok = ctx.fonts_mut(|f| f.has_glyph(&egui::FontId::proportional(12.0), c) && f.has_glyph(&egui::FontId::monospace(12.0), c));
+                    let ok = ctx
+                        .fonts_mut(|f| f.has_glyph(&egui::FontId::proportional(12.0), c) && f.has_glyph(&egui::FontId::monospace(12.0), c));
                     if !ok {
                         missing.push(format!("{file}:{} {c:?} (U+{:04X})", n + 1, c as u32));
                     }
@@ -503,10 +526,12 @@ mod glyph_tests {
         let ctx = egui::Context::default();
         ctx.set_fonts(super::font_definitions(&Default::default()));
         let _ = ctx.run(Default::default(), |_| {});
-        let texts = ["CockpitApp", "fn · 12 more", "iiii", "WWWW", "AVATAR Tokyo", "arch_graph::tree::lay_out", "café → naïve", "ok ✅ done", "+6"];
+        let texts =
+            ["CockpitApp", "fn · 12 more", "iiii", "WWWW", "AVATAR Tokyo", "arch_graph::tree::lay_out", "café → naïve", "ok ✅ done", "+6"];
         for size in [11.0, 14.0, 23.5] {
             for text in texts {
-                let drawn = ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), egui::FontId::proportional(size), egui::Color32::WHITE).size().x);
+                let drawn =
+                    ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), egui::FontId::proportional(size), egui::Color32::WHITE).size().x);
                 let measured = arch_graph::tree::measure::text_width(text, size);
                 // egui rounds the last glyph's place to a quarter pixel, puts
                 // the whole pixel in the galley and draws the quarters into
@@ -519,7 +544,17 @@ mod glyph_tests {
     #[test]
     fn no_view_writes_its_own_colours_or_sizes() {
         // Calls whose first argument must be a theme or look value, never a number.
-        let sized = [".size(", "FontId::proportional(", "FontId::monospace(", "add_space(", "Margin::same(", "Margin::symmetric(", "inner_margin(", "corner_radius(", "Stroke::new("];
+        let sized = [
+            ".size(",
+            "FontId::proportional(",
+            "FontId::monospace(",
+            "add_space(",
+            "Margin::same(",
+            "Margin::symmetric(",
+            "inner_margin(",
+            "corner_radius(",
+            "Stroke::new(",
+        ];
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut found = Vec::new();
         // Every file below src (the graph's own folder too).
@@ -551,7 +586,15 @@ mod glyph_tests {
                         }
                     }
                 }
-                if line.contains("Color32::from_") || (line.contains("Color32::") && !line.contains("Color32::TRANSPARENT") && line.contains("Color32::") && line.split("Color32::").skip(1).any(|rest| rest.starts_with(|c: char| c.is_ascii_uppercase()) && !rest.starts_with("TRANSPARENT"))) {
+                if line.contains("Color32::from_")
+                    || (line.contains("Color32::")
+                        && !line.contains("Color32::TRANSPARENT")
+                        && line.contains("Color32::")
+                        && line
+                            .split("Color32::")
+                            .skip(1)
+                            .any(|rest| rest.starts_with(|c: char| c.is_ascii_uppercase()) && !rest.starts_with("TRANSPARENT")))
+                {
                     found.push(format!("{name}:{} {}", n + 1, line.trim()));
                 }
             }
@@ -561,7 +604,10 @@ mod glyph_tests {
 
     #[test]
     fn presets_lay_their_sections_over_the_rest() {
-        let config = crate::config::UiConfig::with_overrides("preset = \"big\"\n[presets.big.look]\ntext_body = 15.0\n[presets.big.theme]\naccent = \"#ff00ff\"\n").unwrap();
+        let config = crate::config::UiConfig::with_overrides(
+            "preset = \"big\"\n[presets.big.look]\ntext_body = 15.0\n[presets.big.theme]\naccent = \"#ff00ff\"\n",
+        )
+        .unwrap();
         assert_eq!((config.look.text_body, config.theme.accent), (15.0, egui::Color32::from_rgb(255, 0, 255)));
         assert!(crate::config::UiConfig::with_overrides("preset = \"nope\"\n").unwrap_err().contains("no preset `nope`"));
     }
@@ -580,6 +626,16 @@ pub fn colour_name(colour: Color32) -> &'static str {
         _ => 4.0 + (r - g) / (max - min),
     };
     let hue = (sector * 60.0).rem_euclid(360.0);
-    let names = [(15.0, "red"), (42.0, "orange"), (70.0, "yellow"), (160.0, "green"), (195.0, "teal"), (250.0, "blue"), (290.0, "violet"), (340.0, "pink"), (360.0, "red")];
+    let names = [
+        (15.0, "red"),
+        (42.0, "orange"),
+        (70.0, "yellow"),
+        (160.0, "green"),
+        (195.0, "teal"),
+        (250.0, "blue"),
+        (290.0, "violet"),
+        (340.0, "pink"),
+        (360.0, "red"),
+    ];
     names.into_iter().find(|(below, _)| hue < *below).map_or("red", |(_, name)| name)
 }

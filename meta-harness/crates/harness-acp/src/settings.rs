@@ -364,10 +364,8 @@ impl Places {
             }
             std::env::var(name).ok().filter(|v| !v.is_empty())
         };
-        let mut values = BTreeMap::from([
-            ("home".to_owned(), env("HOME").unwrap_or_default()),
-            ("project".to_owned(), project.display().to_string()),
-        ]);
+        let mut values =
+            BTreeMap::from([("home".to_owned(), env("HOME").unwrap_or_default()), ("project".to_owned(), project.display().to_string())]);
         // A folder's default may name `{home}` and `{project}`, not other folders.
         let base = Self { values: values.clone() };
         for (name, dir) in &settings.dirs {
@@ -408,7 +406,12 @@ mod tests {
 
     #[test]
     fn modes_map_both_ways_and_the_most_permissive_wins_a_shared_one() {
-        let modes = Modes { approval_required: Some("default".into()), auto: Some("yolo".into()), full_access: Some("yolo".into()), ..Modes::default() };
+        let modes = Modes {
+            approval_required: Some("default".into()),
+            auto: Some("yolo".into()),
+            full_access: Some("yolo".into()),
+            ..Modes::default()
+        };
         assert_eq!(modes.native(RuntimeMode::Auto), Some("yolo"));
         assert_eq!(modes.native(RuntimeMode::AutoAcceptEdits), None);
         assert_eq!(modes.ours("yolo"), Some(RuntimeMode::FullAccess));

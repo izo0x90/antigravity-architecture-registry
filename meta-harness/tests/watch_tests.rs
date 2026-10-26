@@ -3,8 +3,8 @@
 //! says nothing, and Changed is sent only when the graph changed.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use arch_graph::{ArchEvent, TypeSystem};
@@ -28,7 +28,14 @@ fn copy_dir(from: &Path, to: &Path) {
 fn service(root: &Path) -> Arc<ArchitectureService> {
     let packs = common::shipped_packs();
     let limits = arch_service::Limits::defaults().unwrap();
-    let service = ArchitectureService::open(root, packs, TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), arch_service::open_facts(root, &limits).unwrap()).unwrap();
+    let service = ArchitectureService::open(
+        root,
+        packs,
+        TypeSystem::defaults().unwrap(),
+        Box::new(MemoryPlans::default()),
+        arch_service::open_facts(root, &limits).unwrap(),
+    )
+    .unwrap();
     service.ingest(root).unwrap();
     Arc::new(service)
 }
@@ -57,7 +64,17 @@ fn the_debounce_window_comes_from_limits_and_no_env_var() {
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/code-analyzer/tests/fixtures/rust/sample"), &root);
     let limits = arch_service::Limits::with_overrides("[limits.watch]\ndebounce_ms = 0\n").unwrap();
     let packs = common::shipped_packs();
-    let arch = Arc::new(ArchitectureService::open(&root, packs, TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), arch_service::temporary_facts(&arch_service::Limits::defaults().unwrap()).unwrap()).unwrap().with_limits(limits));
+    let arch = Arc::new(
+        ArchitectureService::open(
+            &root,
+            packs,
+            TypeSystem::defaults().unwrap(),
+            Box::new(MemoryPlans::default()),
+            arch_service::temporary_facts(&arch_service::Limits::defaults().unwrap()).unwrap(),
+        )
+        .unwrap()
+        .with_limits(limits),
+    );
     arch.ingest(&root).unwrap();
     let changed = changed_events(&arch);
     meta_harness::watch::watch(arch.clone()).unwrap();
@@ -85,7 +102,9 @@ fn a_burst_of_saves_is_one_batch_and_an_ignored_directory_says_nothing() {
     assert_eq!(changed.load(Ordering::SeqCst), 0, "an ignored directory changed nothing");
     assert!(arch.index_status().stale.is_empty(), "{:?}", arch.index_status().stale);
     // Three saves in a burst: one batch, one Changed.
-    for (file, text) in [("src/util.rs", "\npub fn one() {}\n"), ("src/store.rs", "\npub fn two() {}\n"), ("src/util.rs", "\npub fn three() {}\n")] {
+    for (file, text) in
+        [("src/util.rs", "\npub fn one() {}\n"), ("src/store.rs", "\npub fn two() {}\n"), ("src/util.rs", "\npub fn three() {}\n")]
+    {
         let path = root.join(file);
         let old = std::fs::read_to_string(&path).unwrap();
         std::fs::write(&path, format!("{old}{text}")).unwrap();

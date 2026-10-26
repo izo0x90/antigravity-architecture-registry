@@ -41,8 +41,14 @@ pub enum ItemBody {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pieces: Vec<crate::Piece>,
     },
-    AssistantMessage { content: Vec<ContentBlock>, streaming: bool },
-    Reasoning { text: String, streaming: bool },
+    AssistantMessage {
+        content: Vec<ContentBlock>,
+        streaming: bool,
+    },
+    Reasoning {
+        text: String,
+        streaming: bool,
+    },
     ToolCall {
         kind: ToolKind,
         name: String,
@@ -50,17 +56,42 @@ pub enum ItemBody {
         output: Vec<ContentBlock>,
         locations: Vec<FileLocation>,
     },
-    FileChange { path: String, diff: Option<Diff> },
-    CommandExecution { command: String, output: Option<String>, exit_code: Option<i32> },
-    ProposedPlan { plan_id: PlanId, markdown: String },
-    TodoList { plan_id: PlanId, steps: Vec<PlanStep> },
+    FileChange {
+        path: String,
+        diff: Option<Diff>,
+    },
+    CommandExecution {
+        command: String,
+        output: Option<String>,
+        exit_code: Option<i32>,
+    },
+    ProposedPlan {
+        plan_id: PlanId,
+        markdown: String,
+    },
+    TodoList {
+        plan_id: PlanId,
+        steps: Vec<PlanStep>,
+    },
     /// The item a request (approval/question) is shown in.
-    Request { request_id: RequestId },
-    Subagent { subagent_id: SubagentId },
-    Notice { level: NoticeLevel, text: String },
-    Error { message: String },
+    Request {
+        request_id: RequestId,
+    },
+    Subagent {
+        subagent_id: SubagentId,
+    },
+    Notice {
+        level: NoticeLevel,
+        text: String,
+    },
+    Error {
+        message: String,
+    },
     /// Native output the adapter could not classify, rendered as text.
-    Unknown { native_kind: String, display: String },
+    Unknown {
+        native_kind: String,
+        display: String,
+    },
     /// A body type newer than this client understands.
     #[serde(other)]
     Unsupported,
@@ -73,7 +104,13 @@ impl ItemBody {
     pub fn said(&self) -> Option<String> {
         match self {
             Self::UserMessage { text, .. } => Some(text.clone()),
-            Self::AssistantMessage { content, .. } => Some(content.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n")),
+            Self::AssistantMessage { content, .. } => Some(
+                content
+                    .iter()
+                    .filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
             _ => None,
         }
     }
@@ -118,10 +155,22 @@ pub struct Diff {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum ContentBlock {
-    Text { text: String },
-    Image { mime_type: String, data_base64: Option<String>, uri: Option<String> },
-    ResourceLink { uri: String, name: Option<String> },
-    Resource { uri: String, text: Option<String> },
+    Text {
+        text: String,
+    },
+    Image {
+        mime_type: String,
+        data_base64: Option<String>,
+        uri: Option<String>,
+    },
+    ResourceLink {
+        uri: String,
+        name: Option<String>,
+    },
+    Resource {
+        uri: String,
+        text: Option<String>,
+    },
     Diff(Diff),
     #[serde(other)]
     Unsupported,

@@ -43,7 +43,11 @@ impl Finding {
         let lines = self.search.rows_of().and_then(lines_of).and_then(|(path, first, last)| {
             let lines = Subject::CodeLines { path, first, last, snapshot: String::new() };
             let words = lines.name(&harness_contracts::Known::default());
-            Some(Choice::new(picked(lines, &words)?, words).detail(Some("lines of a file".into())).glyph(egui_phosphor::regular::LIST_NUMBERS, crate::theme::colors().accent))
+            Some(
+                Choice::new(picked(lines, &words)?, words)
+                    .detail(Some("lines of a file".into()))
+                    .glyph(egui_phosphor::regular::LIST_NUMBERS, crate::theme::colors().accent),
+            )
         });
         let subject = |kind: arch_search::SearchKind, hit: &arch_search::Hit| match kind {
             arch_search::SearchKind::Files => Some(Subject::CodeFile { path: hit.file.clone().unwrap_or_else(|| hit.label.clone()) }),
@@ -97,7 +101,15 @@ impl Checks {
     }
 
     /// What box `key`'s `message` comes to (none: nothing to say).
-    fn tend(&mut self, key: String, message: &harness_contracts::Message, now: f64, after: f64, net: &crate::net::NetClient, ctx: &egui::Context) -> Option<String> {
+    fn tend(
+        &mut self,
+        key: String,
+        message: &harness_contracts::Message,
+        now: f64,
+        after: f64,
+        net: &crate::net::NetClient,
+        ctx: &egui::Context,
+    ) -> Option<String> {
         let check = self.each.entry(key.clone()).or_default();
         check.seen = true;
         if check.links != message.links {
@@ -152,20 +164,34 @@ impl CockpitApp {
     /// key, or this on a phone).
     pub(super) fn link_actions(&self, here: Here) -> Vec<Action> {
         let picking = self.palette.picking() == Some(LINK_THING);
-        let (found, of) = if picking { (self.desk.finding.rows(), self.desk.finding.search.rows_of().map(str::to_owned)) } else { (Vec::new(), None) };
+        let (found, of) =
+            if picking { (self.desk.finding.rows(), self.desk.finding.search.rows_of().map(str::to_owned)) } else { (Vec::new(), None) };
         let key = crate::keymap::local().input.link.label();
         let available = |yes: bool| if yes { When::Always } else { When::Unavailable };
-        let at_link = self.palette.writing().map_or_else(|| self.desk.view(here.kind).typing().is_some_and(|b| b.link_at_caret()), |b| b.link_at_caret());
+        let at_link = self
+            .palette
+            .writing()
+            .map_or_else(|| self.desk.view(here.kind).typing().is_some_and(|b| b.link_at_caret()), |b| b.link_at_caret());
         vec![
-            Action::new(LINK_THING, "Link a file or a symbol", format!("Where you're writing: the agent is handed it (whole when small, else its start; {key} at the link changes that)"), ShellCommand::LinkThing)
-                .param(Param::Search { hint: "a file or a symbol (path:10-20: those lines)".into(), found, of })
-                .group(Group::Act)
-                .importance(crate::actions::MINOR)
-                .when(available(self.writing_here(here))),
-            Action::new("link.include", "The link here: whole, a pointer, or as it fits", "In turn: filled goes in whole, underlined goes as its start, plain as it fits", ShellCommand::LinkInclude)
-                .group(Group::Act)
-                .importance(crate::actions::MINOR)
-                .when(available(at_link)),
+            Action::new(
+                LINK_THING,
+                "Link a file or a symbol",
+                format!("Where you're writing: the agent is handed it (whole when small, else its start; {key} at the link changes that)"),
+                ShellCommand::LinkThing,
+            )
+            .param(Param::Search { hint: "a file or a symbol (path:10-20: those lines)".into(), found, of })
+            .group(Group::Act)
+            .importance(crate::actions::MINOR)
+            .when(available(self.writing_here(here))),
+            Action::new(
+                "link.include",
+                "The link here: whole, a pointer, or as it fits",
+                "In turn: filled goes in whole, underlined goes as its start, plain as it fits",
+                ShellCommand::LinkInclude,
+            )
+            .group(Group::Act)
+            .importance(crate::actions::MINOR)
+            .when(available(at_link)),
         ]
     }
 
@@ -187,7 +213,9 @@ impl CockpitApp {
         let query = self.desk.shell_searches.get(LINK_THING).map_or("", String::as_str);
         let net = &self.desk.net;
         // The code as it is (a plan's components aren't things yet).
-        let note = self.desk.finding.search.drive(query, ctx, |kind, query, reply| net.search(query, kind, &arch_graph::Source::Code, FOUND_EACH, None, ctx.clone(), reply));
+        let note = self.desk.finding.search.drive(query, ctx, |kind, query, reply| {
+            net.search(query, kind, &arch_graph::Source::Code, FOUND_EACH, None, ctx.clone(), reply)
+        });
         if note.is_some() {
             self.note = note;
         }
@@ -231,7 +259,10 @@ impl CockpitApp {
             writing.colour_links(&colour);
             written.push(("palette".into(), writing.message()));
         }
-        let warnings: std::collections::BTreeMap<String, Option<String>> = written.iter().map(|(key, message)| (key.clone(), self.desk.checks.tend(key.clone(), message, now, after, &self.desk.net, ctx))).collect();
+        let warnings: std::collections::BTreeMap<String, Option<String>> = written
+            .iter()
+            .map(|(key, message)| (key.clone(), self.desk.checks.tend(key.clone(), message, now, after, &self.desk.net, ctx)))
+            .collect();
         self.desk.checks.end();
         self.desk.each_buffer_by_id(|id, buffer| {
             if let Some(writing) = buffer.typing_box() {

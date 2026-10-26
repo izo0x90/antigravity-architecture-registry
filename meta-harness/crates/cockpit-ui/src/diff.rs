@@ -35,7 +35,14 @@ pub(crate) fn draw_line(ui: &mut egui::Ui, line: &DiffLine, numbers: Numbers) {
                 ui.label(RichText::new(format!("{} {}", n(line.old), n(line.new))).monospace().size(look.text_small).color(c.faint));
             }
             ui.label(RichText::new(mark).monospace().size(look.text_body).color(color));
-            ui.add(egui::Label::new(RichText::new(&line.text).monospace().size(look.text_body).color(if line.kind == LineKind::Context { c.text } else { color })).truncate());
+            ui.add(
+                egui::Label::new(RichText::new(&line.text).monospace().size(look.text_body).color(if line.kind == LineKind::Context {
+                    c.text
+                } else {
+                    color
+                }))
+                .truncate(),
+            );
         });
     });
 }
@@ -50,7 +57,12 @@ pub(crate) fn draw_gap(ui: &mut egui::Ui) {
 /// (each is one line high, cut short where it's too long).
 pub(crate) fn draw_hunk(ui: &mut egui::Ui, hunk: &Hunk, numbers: Numbers) {
     if numbers == Numbers::Shown {
-        ui.label(RichText::new(format!("@@ −{},{} +{},{} @@", hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines)).monospace().size(crate::theme::look().text_small).color(colors().faint));
+        ui.label(
+            RichText::new(format!("@@ −{},{} +{},{} @@", hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines))
+                .monospace()
+                .size(crate::theme::look().text_small)
+                .color(colors().faint),
+        );
     }
     let mut tall = None;
     for line in &hunk.lines {

@@ -51,8 +51,18 @@ impl JobRunner for FakeAgent {
         let calls_b = name == "a";
         match ticket.kind {
             JobKind::Design => {
-                let sig = Signature { params: vec![Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] };
-                let op = PlanOp::Modify { id: ticket.component.clone(), description: Some(format!("{name} checks the input.")), signature: Some(sig), schemas: None, spec: None };
+                let sig = Signature {
+                    params: vec![Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }],
+                    returns: Some("bool".into()),
+                    qualifiers: vec![],
+                };
+                let op = PlanOp::Modify {
+                    id: ticket.component.clone(),
+                    description: Some(format!("{name} checks the input.")),
+                    signature: Some(sig),
+                    schemas: None,
+                    spec: None,
+                };
                 self.arch.apply(&ticket.plan, op).map_err(|e| e.to_string())?;
             }
             JobKind::Plan => {}
@@ -89,9 +99,34 @@ async fn the_queue_runs_components_in_dependency_order_pauses_for_approvals_and_
     arch.apply(&plan, PlanOp::SetGreenfield { greenfield: true }).unwrap();
     // Added as bare names: the design jobs fill them in. a calls b.
     for name in ["a", "b"] {
-        arch.apply(&plan, PlanOp::AddComponent { name: name.into(), type_name: "function".into(), description: String::new(), parent: Some(id("sample")), file: None, signature: None, schemas: None, spec: None }).unwrap();
+        arch.apply(
+            &plan,
+            PlanOp::AddComponent {
+                name: name.into(),
+                type_name: "function".into(),
+                description: String::new(),
+                parent: Some(id("sample")),
+                file: None,
+                signature: None,
+                schemas: None,
+                spec: None,
+            },
+        )
+        .unwrap();
     }
-    arch.apply(&plan, PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::a"), target: id("sample::b"), order: None, ports: None, note: None, expects: None }).unwrap();
+    arch.apply(
+        &plan,
+        PlanOp::Relate {
+            kind: RelationKind::Calls,
+            source: id("sample::a"),
+            target: id("sample::b"),
+            order: None,
+            ports: None,
+            note: None,
+            expects: None,
+        },
+    )
+    .unwrap();
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let sink = events.clone();
@@ -109,7 +144,10 @@ async fn the_queue_runs_components_in_dependency_order_pauses_for_approvals_and_
     // Plans done, waiting again.
     for _ in 0..400 {
         let s = queue.snapshot(&plan).await.unwrap();
-        if s.status == QueueStatus::WaitingForUser && s.jobs.iter().filter(|j| j.state == JobState::AwaitingApproval).count() == 2 && s.jobs.iter().all(|j| j.kind == JobKind::Plan) {
+        if s.status == QueueStatus::WaitingForUser
+            && s.jobs.iter().filter(|j| j.state == JobState::AwaitingApproval).count() == 2
+            && s.jobs.iter().all(|j| j.kind == JobKind::Plan)
+        {
             break;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -125,11 +163,22 @@ async fn the_queue_runs_components_in_dependency_order_pauses_for_approvals_and_
 
     // One session per job, dependencies first, the failed attempt re-queued.
     let log = agent.log.lock().unwrap().clone();
-    let order: Vec<(String, &str)> = log.iter().map(|t| (t.component.as_str().rsplit("::").next().unwrap().to_owned(), t.kind.name())).collect();
-    let expected: Vec<(String, &str)> = [("b", "design"), ("a", "design"), ("b", "plan"), ("a", "plan"), ("b", "skeleton"), ("b", "implement"), ("b", "implement"), ("a", "skeleton"), ("a", "implement")]
-        .into_iter()
-        .map(|(n, k)| (n.to_owned(), k))
-        .collect();
+    let order: Vec<(String, &str)> =
+        log.iter().map(|t| (t.component.as_str().rsplit("::").next().unwrap().to_owned(), t.kind.name())).collect();
+    let expected: Vec<(String, &str)> = [
+        ("b", "design"),
+        ("a", "design"),
+        ("b", "plan"),
+        ("a", "plan"),
+        ("b", "skeleton"),
+        ("b", "implement"),
+        ("b", "implement"),
+        ("a", "skeleton"),
+        ("a", "implement"),
+    ]
+    .into_iter()
+    .map(|(n, k)| (n.to_owned(), k))
+    .collect();
     assert_eq!(order, expected);
 
     // Briefs come from the config templates, per job kind, with what failed last time.
@@ -139,7 +188,11 @@ async fn the_queue_runs_components_in_dependency_order_pauses_for_approvals_and_
     assert!(brief(2).starts_with("The user approved the architecture of rust:sample::b"), "{}", brief(2));
     assert!(brief(4).starts_with("Lay the skeleton of rust:sample::b"), "{}", brief(4));
     assert!(brief(5).contains("Attempt 1 of 3") && !brief(5).contains("didn't pass"));
-    assert!(brief(6).contains("Attempt 2 of 3") && brief(6).contains("The last attempt didn't pass") && brief(6).contains("SignatureMismatch"), "{}", brief(6));
+    assert!(
+        brief(6).contains("Attempt 2 of 3") && brief(6).contains("The last attempt didn't pass") && brief(6).contains("SignatureMismatch"),
+        "{}",
+        brief(6)
+    );
     assert!(brief(8).contains("## Signature\n`(input: &str) -> bool`"), "the brief carries the contract: {}", brief(8));
     // Progress was announced, including the session each job ran in.
     let announced = events.lock().unwrap();
@@ -171,7 +224,10 @@ fn briefs_are_config_templates_checked_for_known_placeholders() {
         placeholders: vec![],
     };
     plan.components.push(c.clone());
-    let text = arch_service::render_brief(&config, &arch_service::BriefContext { plan: &plan, component: &c, kind: JobKind::Implement, attempt: 2, contract: "", findings: &[] });
+    let text = arch_service::render_brief(
+        &config,
+        &arch_service::BriefContext { plan: &plan, component: &c, kind: JobKind::Implement, attempt: 2, contract: "", findings: &[] },
+    );
     assert_eq!(text, "Build rust:x::f (function), try 2.");
 }
 
@@ -201,9 +257,34 @@ async fn ingest_plan_validate_skeleton_implement_verify_break_and_detect_on_a_fi
     arch.create_plan("e2e", "End to end", "", arch_graph::PlanKind::Change).unwrap();
     arch.apply(&plan, PlanOp::SetGreenfield { greenfield: true }).unwrap();
     for name in ["a", "b"] {
-        arch.apply(&plan, PlanOp::AddComponent { name: name.into(), type_name: "function".into(), description: String::new(), parent: Some(id("sample")), file: None, signature: None, schemas: None, spec: None }).unwrap();
+        arch.apply(
+            &plan,
+            PlanOp::AddComponent {
+                name: name.into(),
+                type_name: "function".into(),
+                description: String::new(),
+                parent: Some(id("sample")),
+                file: None,
+                signature: None,
+                schemas: None,
+                spec: None,
+            },
+        )
+        .unwrap();
     }
-    arch.apply(&plan, PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::a"), target: id("sample::b"), order: None, ports: None, note: None, expects: None }).unwrap();
+    arch.apply(
+        &plan,
+        PlanOp::Relate {
+            kind: RelationKind::Calls,
+            source: id("sample::a"),
+            target: id("sample::b"),
+            order: None,
+            ports: None,
+            note: None,
+            expects: None,
+        },
+    )
+    .unwrap();
     // Validate: the bare components aren't ready for approval yet.
     let report = arch.validate(&plan).unwrap();
     assert!(report.findings.iter().any(|f| f.code == arch_graph::FindingCode::SpecIncomplete), "{report:?}");
@@ -247,13 +328,17 @@ async fn a_session_past_its_time_is_stopped_before_the_job_is_retried() {
         sessions: state.harness.sessions.clone(),
         settings: harness_core::SlotSettings { instance: Some(harness_contracts::InstanceId::new("fake")), ..Default::default() },
     };
-    let ticket = Ticket { plan: PlanId::new("p").unwrap(), component: id("x::f"), kind: JobKind::Implement, brief: "[hang] take forever".into() };
+    let ticket =
+        Ticket { plan: PlanId::new("p").unwrap(), component: id("x::f"), kind: JobKind::Implement, brief: "[hang] take forever".into() };
     let thread = Arc::new(Mutex::new(None));
     let seen = thread.clone();
     let result = runner.run(&ticket, Duration::from_millis(200), &move |t| *seen.lock().unwrap() = Some(t)).await;
     assert!(result.unwrap_err().contains("didn't finish"), "times out");
     let thread = thread.lock().unwrap().clone().expect("a session was opened");
-    assert!(state.harness.sessions.get(&harness_contracts::ThreadId::new(thread)).is_err(), "and its session is closed, so a retry can't race it");
+    assert!(
+        state.harness.sessions.get(&harness_contracts::ThreadId::new(thread)).is_err(),
+        "and its session is closed, so a retry can't race it"
+    );
     assert!(state.harness.slots.list().iter().all(|s| s.role != "worker"), "and its worker slot is gone");
     // A turn that completes is fine.
     let ok = Ticket { brief: "do it".into(), ..ticket.clone() };
@@ -290,7 +375,20 @@ async fn a_failed_session_is_reported_as_such() {
     let plan = PlanId::new("broken").unwrap();
     arch.create_plan("broken", "Broken", "", arch_graph::PlanKind::Change).unwrap();
     arch.apply(&plan, PlanOp::SetGreenfield { greenfield: true }).unwrap();
-    arch.apply(&plan, PlanOp::AddComponent { name: "a".into(), type_name: "function".into(), description: String::new(), parent: Some(id("sample")), file: None, signature: None, schemas: None, spec: None }).unwrap();
+    arch.apply(
+        &plan,
+        PlanOp::AddComponent {
+            name: "a".into(),
+            type_name: "function".into(),
+            description: String::new(),
+            parent: Some(id("sample")),
+            file: None,
+            signature: None,
+            schemas: None,
+            spec: None,
+        },
+    )
+    .unwrap();
     let queue = QueueRunner::new(arch.clone(), QueueConfig::defaults().unwrap(), |_| {});
     queue.start(plan.clone(), Arc::new(BrokenAgent)).await.unwrap();
     let snapshot = wait_for(&queue, &plan, QueueStatus::WaitingForUser).await;

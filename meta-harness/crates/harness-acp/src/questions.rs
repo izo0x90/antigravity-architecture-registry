@@ -67,7 +67,8 @@ impl Form {
         for (field, question) in self.fields.iter().zip(&self.questions) {
             let Some(given) = answers.get(&field.key).filter(|a| !a.is_empty()) else { continue };
             let is_choice = |a: &String| question.options.iter().any(|o| o.value.as_ref().unwrap_or(&o.label) == a);
-            let (picked, typed): (Vec<String>, Vec<String>) = given.iter().cloned().partition(|a| question.options.is_empty() || is_choice(a));
+            let (picked, typed): (Vec<String>, Vec<String>) =
+                given.iter().cloned().partition(|a| question.options.is_empty() || is_choice(a));
             let value = match field.kind {
                 Kind::Many if !picked.is_empty() => Some(acp::ElicitationContentValue::StringArray(picked)),
                 Kind::One | Kind::Text => picked.into_iter().next().map(acp::ElicitationContentValue::String),
@@ -127,7 +128,9 @@ fn describe(property: &acp::ElicitationPropertySchema) -> (Kind, Option<String>,
             };
             (Kind::Many, a.title.clone(), a.description.clone(), options)
         }
-        P::Boolean(b) => (Kind::Yes, b.title.clone(), b.description.clone(), vec![option("true", "Yes", None), option("false", "No", None)]),
+        P::Boolean(b) => {
+            (Kind::Yes, b.title.clone(), b.description.clone(), vec![option("true", "Yes", None), option("false", "No", None)])
+        }
         P::Integer(i) => (Kind::Integer, i.title.clone(), i.description.clone(), Vec::new()),
         P::Number(n) => (Kind::Number, n.title.clone(), n.description.clone(), Vec::new()),
         _ => (Kind::Text, None, None, Vec::new()),
@@ -158,7 +161,11 @@ mod tests {
     #[test]
     fn fields_become_questions_and_answer_boxes_fold_into_theirs() {
         let form = Form::new(&claude_form(), "Please answer the following questions.", Some("_custom"));
-        let shape: Vec<_> = form.questions.iter().map(|q| (q.id.as_str(), q.header.as_str(), q.question.as_str(), q.multi_select, q.allow_custom_answer, q.options.len())).collect();
+        let shape: Vec<_> = form
+            .questions
+            .iter()
+            .map(|q| (q.id.as_str(), q.header.as_str(), q.question.as_str(), q.multi_select, q.allow_custom_answer, q.options.len()))
+            .collect();
         assert_eq!(shape, [("question_0", "Store", "Which store?", false, true, 2), ("question_1", "Checks", "Run which?", true, true, 2)]);
         assert_eq!(form.questions[0].options[0].description.as_deref(), Some("In memory"));
     }
@@ -185,8 +192,14 @@ mod tests {
         }))
         .unwrap();
         let form = Form::new(&schema, "Details", None);
-        assert!(form.questions.iter().find(|q| q.id == "name").is_some_and(|q| q.required && q.allow_custom_answer && q.options.is_empty()));
-        let answers = BTreeMap::from([("name".to_owned(), vec!["x".to_owned()]), ("ok".to_owned(), vec!["true".to_owned()]), ("n".to_owned(), vec!["4".to_owned()])]);
+        assert!(
+            form.questions.iter().find(|q| q.id == "name").is_some_and(|q| q.required && q.allow_custom_answer && q.options.is_empty())
+        );
+        let answers = BTreeMap::from([
+            ("name".to_owned(), vec!["x".to_owned()]),
+            ("ok".to_owned(), vec!["true".to_owned()]),
+            ("n".to_owned(), vec!["4".to_owned()]),
+        ]);
         let content = form.content(&answers);
         assert_eq!(content.get("name"), Some(&acp::ElicitationContentValue::String("x".into())));
         assert_eq!(content.get("ok"), Some(&acp::ElicitationContentValue::Boolean(true)));

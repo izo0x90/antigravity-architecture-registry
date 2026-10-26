@@ -138,7 +138,12 @@ fn the_old_mcp_surface_is_gone_from_code_docs_and_agent_files() {
     let found = hits(&scanned, &old_tools, &["/api/registry/architecture", "ARCHITECTURE_REGISTRY_PATH"]);
     assert!(found.is_empty(), "the old MCP surface is still referenced:\n{}", found.join("\n"));
     // The agent files point at the current tools and leave approval to the user.
-    for agent in ["agents/ComponentPlanner.md", "agents/ComponentImplementer.md", "plugin/agents/ComponentPlanner.md", "plugin/agents/ComponentImplementer.md"] {
+    for agent in [
+        "agents/ComponentPlanner.md",
+        "agents/ComponentImplementer.md",
+        "plugin/agents/ComponentPlanner.md",
+        "plugin/agents/ComponentImplementer.md",
+    ] {
         let text = std::fs::read_to_string(repo.join(agent)).unwrap();
         assert!(text.contains("`contract`") && text.contains("cockpit"), "{agent} uses the NAH tools and leaves approval to the user");
     }
@@ -153,7 +158,17 @@ fn the_old_mcp_surface_is_gone_from_code_docs_and_agent_files() {
 #[test]
 fn one_pipeline_and_scip_is_gone() {
     // SCIP and the second orchestration.
-    let old = ["IndexedFile", "IndexedSymbol", "from_shipped_dir", "scip", "protobuf", "Combined", "CombinedRows", "combine_key", "COMBINE_VERSION"];
+    let old = [
+        "IndexedFile",
+        "IndexedSymbol",
+        "from_shipped_dir",
+        "scip",
+        "protobuf",
+        "Combined",
+        "CombinedRows",
+        "combine_key",
+        "COMBINE_VERSION",
+    ];
     let found = hits(&rust_sources(), &old, &["code_analyzer::analyze(", "ROLE_"]);
     assert!(found.is_empty(), "SCIP and the second pipeline are still referenced:\n{}", found.join("\n"));
     for gone in ["crates/code-analyzer/src/index.rs", "crates/code-analyzer/src/resolve.rs", "packs/indexer"] {
@@ -172,7 +187,27 @@ fn the_installer_knows_kinds_of_steps_not_tools() {
     // the pack commands: those are in pack and config files.
     let mut scanned = files(&meta_harness().join("crates/nah-packs/src"), &[".rs"]);
     scanned.push(meta_harness().join("src/packs.rs"));
-    let found: Vec<String> = hits(&scanned, &[], &["antigravity", "Antigravity", "qemu", "QEMU", "debian.org", "ubuntu.com", "http://", "https://", "/opt/", "/etc/", "agy_acp", "localharness", "rust-analyzer", "groupadd", "ca-certificates"]);
+    let found: Vec<String> = hits(
+        &scanned,
+        &[],
+        &[
+            "antigravity",
+            "Antigravity",
+            "qemu",
+            "QEMU",
+            "debian.org",
+            "ubuntu.com",
+            "http://",
+            "https://",
+            "/opt/",
+            "/etc/",
+            "agy_acp",
+            "localharness",
+            "rust-analyzer",
+            "groupadd",
+            "ca-certificates",
+        ],
+    );
     assert!(found.is_empty(), "tool names, URLs or paths in code:\n{}", found.join("\n"));
 }
 
@@ -181,15 +216,41 @@ fn dead_code_and_leftovers_are_gone_and_test_only_code_is_built_only_for_tests()
     let root = meta_harness();
     // Deleted: dead, or a port nothing used.
     let sources = rust_sources();
-    let deleted = ["fn unregister", "fn is_user", "fn resolve_antigravity_user_home", "fn flow_indexes_built", "fn settled_cursor", "fn settings(&self) -> &QueueSettings", "fn dsl(&self)", "fn config(&self) -> &QueueConfig", "fn from_plan("];
+    let deleted = [
+        "fn unregister",
+        "fn is_user",
+        "fn resolve_antigravity_user_home",
+        "fn flow_indexes_built",
+        "fn settled_cursor",
+        "fn settings(&self) -> &QueueSettings",
+        "fn dsl(&self)",
+        "fn config(&self) -> &QueueConfig",
+        "fn from_plan(",
+    ];
     assert_eq!(hits(&sources, &[], &deleted), Vec::<String>::new());
     // What only tests use is built only for them.
-    let gated = ["pub fn inserts()", "pub fn problems(", "pub fn from_dir(", "pub fn isolated(", "pub fn symbol_lists_built(", "pub fn wait_ready(", "pub fn restarts(", "pub fn pid(", "pub fn overlaps(", "pub fn observed<", "pub use observed::observed;"];
+    let gated = [
+        "pub fn inserts()",
+        "pub fn problems(",
+        "pub fn from_dir(",
+        "pub fn isolated(",
+        "pub fn symbol_lists_built(",
+        "pub fn wait_ready(",
+        "pub fn restarts(",
+        "pub fn pid(",
+        "pub fn overlaps(",
+        "pub fn observed<",
+        "pub use observed::observed;",
+    ];
     for file in &sources {
         let text = std::fs::read_to_string(file).unwrap();
         let lines: Vec<&str> = text.lines().collect();
         for (n, line) in lines.iter().enumerate().filter(|(_, l)| gated.iter().any(|g| l.contains(g))) {
-            let above = lines[..n].iter().rev().take_while(|l| l.trim_start().starts_with("///") || l.trim_start().starts_with("#[")).any(|l| l.contains("cfg(test)") || l.contains("cfg(any(test, feature = \"testing\"))"));
+            let above = lines[..n]
+                .iter()
+                .rev()
+                .take_while(|l| l.trim_start().starts_with("///") || l.trim_start().starts_with("#["))
+                .any(|l| l.contains("cfg(test)") || l.contains("cfg(any(test, feature = \"testing\"))"));
             assert!(above, "{}:{}: {line} is built outside the tests", file.display(), n + 1);
         }
     }
@@ -202,7 +263,8 @@ fn dead_code_and_leftovers_are_gone_and_test_only_code_is_built_only_for_tests()
 fn the_cockpit_lays_out_nothing_itself() {
     // Laying out runs on the server, with its time limit; the cockpit takes
     // the places it's given (its own tests stand in for the server).
-    let cockpit: Vec<PathBuf> = files(&meta_harness().join("crates/cockpit-ui/src"), &[".rs"]).into_iter().filter(|f| !f.ends_with("graph/tests.rs")).collect();
+    let cockpit: Vec<PathBuf> =
+        files(&meta_harness().join("crates/cockpit-ui/src"), &[".rs"]).into_iter().filter(|f| !f.ends_with("graph/tests.rs")).collect();
     let found = hits(&cockpit, &[], &["lay_out(", "tree::build(", "tree::expand("]);
     assert!(found.is_empty(), "{found:#?}");
 }
@@ -212,12 +274,15 @@ fn the_cockpits_texts_name_no_keys() {
     // Keys come from the bindings (they can be changed); a text that names
     // one goes stale when they are.
     let keys = ["(SPC ", "(Enter)", "(Esc)", "(Tab)"];
-    let cockpit: Vec<PathBuf> = files(&meta_harness().join("crates/cockpit-ui/src"), &[".rs"]).into_iter().filter(|f| !f.ends_with("tests.rs")).collect();
+    let cockpit: Vec<PathBuf> =
+        files(&meta_harness().join("crates/cockpit-ui/src"), &[".rs"]).into_iter().filter(|f| !f.ends_with("tests.rs")).collect();
     let mut found = Vec::new();
     for file in &cockpit {
         for (i, line) in std::fs::read_to_string(file).unwrap().lines().enumerate() {
             // A hint like "(g d)" or "(z o)": one letter, a space, one key.
-            let short = line.as_bytes().windows(5).any(|w| w[0] == b'(' && w[1].is_ascii_lowercase() && w[2] == b' ' && w[3].is_ascii_graphic() && w[3] != b')' && w[4] == b')');
+            let short = line.as_bytes().windows(5).any(|w| {
+                w[0] == b'(' && w[1].is_ascii_lowercase() && w[2] == b' ' && w[3].is_ascii_graphic() && w[3] != b')' && w[4] == b')'
+            });
             if line.contains('"') && !line.trim_start().starts_with("//") && (short || keys.iter().any(|k| line.contains(k))) {
                 found.push(format!("{}:{}: {}", file.display(), i + 1, line.trim()));
             }
@@ -230,7 +295,11 @@ fn the_cockpits_texts_name_no_keys() {
 /// discussions, no plan its own (the plan's rules 1 and 3).
 #[test]
 fn discussions_have_one_engine_and_notes_one_kind_of_anchor() {
-    let found = hits(&rust_sources(), &["CommentAnchor", "CommentStatus", "CommentKind", "CommentId", "NewComment", "approval_blocker"], &["plan.comments", "pub comments:"]);
+    let found = hits(
+        &rust_sources(),
+        &["CommentAnchor", "CommentStatus", "CommentKind", "CommentId", "NewComment", "approval_blocker"],
+        &["plan.comments", "pub comments:"],
+    );
     assert!(found.is_empty(), "the plans' own comments are still in the code:\n{}", found.join("\n"));
     let keepers: Vec<String> = rust_sources()
         .into_iter()

@@ -12,15 +12,20 @@ impl CockpitApp {
         let panel_id = format!("panel_{}", panel + 1);
         self.feedback.register_inspectable(ui, &panel_id, ui.available_rect_before_wrap());
 
-        Frame::NONE.fill(colors().bg).stroke(Stroke::new(crate::theme::look().line_thin, border_color)).corner_radius(crate::theme::look().radius_m).inner_margin(crate::theme::margin(crate::theme::look().space_m)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.set_height(ui.available_height());
+        Frame::NONE
+            .fill(colors().bg)
+            .stroke(Stroke::new(crate::theme::look().line_thin, border_color))
+            .corner_radius(crate::theme::look().radius_m)
+            .inner_margin(crate::theme::margin(crate::theme::look().space_m))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.set_height(ui.available_height());
 
-            ui.vertical(|ui| {
-                let active_kind = self.desk.panels.kind(panel);
-                self.render_view(Here { at: Host::Panel(panel), kind: active_kind }, ui, is_focused);
+                ui.vertical(|ui| {
+                    let active_kind = self.desk.panels.kind(panel);
+                    self.render_view(Here { at: Host::Panel(panel), kind: active_kind }, ui, is_focused);
+                });
             });
-        });
 
         if let Some(rect) = self.panel_rects.get_mut(panel) {
             *rect = ui.min_rect();
@@ -45,7 +50,8 @@ impl CockpitApp {
         // (Closed by something else this frame: a menu opened over it.)
         self.tell_searches_left();
         // A view asked for an action's picker (e.g. Resume once sessions loaded).
-        let requests: Vec<String> = BufferKind::ALL.into_iter().filter_map(|kind| self.desk.view_mut(kind).take_palette_request()).collect();
+        let requests: Vec<String> =
+            BufferKind::ALL.into_iter().filter_map(|kind| self.desk.view_mut(kind).take_palette_request()).collect();
         // Closed and not asked for: nothing to list (what it lists isn't
         // gathered, or judged).
         if !self.palette.is_open() && requests.is_empty() && self.input_mode != InputMode::Palette {
@@ -129,7 +135,9 @@ impl CockpitApp {
     /// drawn, before and after).
     fn tell_searches_left(&mut self) {
         let opening = self.palette.opening();
-        if self.searched.as_ref().map(|(origin, id, at)| (*origin, id.as_str(), *at)) != self.palette.searching().map(|(origin, id)| (origin, id, opening)) {
+        if self.searched.as_ref().map(|(origin, id, at)| (*origin, id.as_str(), *at))
+            != self.palette.searching().map(|(origin, id)| (origin, id, opening))
+        {
             let now = self.palette.searching().map(|(origin, id)| (origin, id.to_owned(), opening));
             if let Some((origin, id, _)) = std::mem::replace(&mut self.searched, now) {
                 self.search_done(origin, &id);

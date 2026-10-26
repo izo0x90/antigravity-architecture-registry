@@ -85,8 +85,17 @@ fn a_files_changes_have_their_lines_on_each_side_and_context_around() {
     let changes = Changes::open(dir.path()).unwrap();
     let file = changes.file(&Comparison::default(), "a.txt", Group::Unstaged, 1).unwrap();
     assert_eq!(file.hunks.len(), 1);
-    let lines: Vec<(LineKind, Option<u32>, Option<u32>, &str)> = file.hunks[0].lines.iter().map(|l| (l.kind, l.old, l.new, l.text.as_str())).collect();
-    assert_eq!(lines, [(LineKind::Context, Some(2), Some(2), "two"), (LineKind::Removed, Some(3), None, "three"), (LineKind::Added, None, Some(3), "THREE"), (LineKind::Context, Some(4), Some(4), "four")]);
+    let lines: Vec<(LineKind, Option<u32>, Option<u32>, &str)> =
+        file.hunks[0].lines.iter().map(|l| (l.kind, l.old, l.new, l.text.as_str())).collect();
+    assert_eq!(
+        lines,
+        [
+            (LineKind::Context, Some(2), Some(2), "two"),
+            (LineKind::Removed, Some(3), None, "three"),
+            (LineKind::Added, None, Some(3), "THREE"),
+            (LineKind::Context, Some(4), Some(4), "four")
+        ]
+    );
     assert!(changes.file(&Comparison::default(), "a.txt", Group::Staged, 1).unwrap().hunks.is_empty(), "nothing of it is staged");
     // Kept, until the file changes.
     write(dir.path(), "a.txt", "one\ntwo\nthree\nFOUR!\nfive\n");
@@ -104,16 +113,32 @@ fn any_two_points_compare_either_way() {
     commit(&repo, "second");
     let changes = Changes::open(dir.path()).unwrap();
     let forward = Comparison { from: Point::Rev(first.clone()), to: Point::Head };
-    assert_eq!(listed(&changes, &forward), [(Group::Changes, "a.txt".into(), FileStatus::Modified, 0, 4), (Group::Changes, "d.txt".into(), FileStatus::Added, 1, 0)]);
+    assert_eq!(
+        listed(&changes, &forward),
+        [(Group::Changes, "a.txt".into(), FileStatus::Modified, 0, 4), (Group::Changes, "d.txt".into(), FileStatus::Added, 1, 0)]
+    );
     let back = Comparison { from: Point::Head, to: Point::Rev(first) };
-    assert_eq!(listed(&changes, &back), [(Group::Changes, "a.txt".into(), FileStatus::Modified, 4, 0), (Group::Changes, "d.txt".into(), FileStatus::Deleted, 0, 1)], "the other way: what was added is removed");
+    assert_eq!(
+        listed(&changes, &back),
+        [(Group::Changes, "a.txt".into(), FileStatus::Modified, 4, 0), (Group::Changes, "d.txt".into(), FileStatus::Deleted, 0, 1)],
+        "the other way: what was added is removed"
+    );
     // The staged files against the last commit, and the files against what's staged.
     write(dir.path(), "e.txt", "e\n");
     stage(&repo, &["e.txt"]);
     write(dir.path(), "e.txt", "e\nmore\n");
-    assert_eq!(listed(&changes, &Comparison { from: Point::Head, to: Point::Index }), [(Group::Changes, "e.txt".into(), FileStatus::Added, 1, 0)]);
-    assert_eq!(listed(&changes, &Comparison { from: Point::Index, to: Point::Files }), [(Group::Changes, "e.txt".into(), FileStatus::Modified, 1, 0)]);
-    assert!(matches!(changes.list(&Comparison { from: Point::Rev("nope".into()), to: Point::Head }, 0, PAGE), Err(ChangesError::BadPoint(_))));
+    assert_eq!(
+        listed(&changes, &Comparison { from: Point::Head, to: Point::Index }),
+        [(Group::Changes, "e.txt".into(), FileStatus::Added, 1, 0)]
+    );
+    assert_eq!(
+        listed(&changes, &Comparison { from: Point::Index, to: Point::Files }),
+        [(Group::Changes, "e.txt".into(), FileStatus::Modified, 1, 0)]
+    );
+    assert!(matches!(
+        changes.list(&Comparison { from: Point::Rev("nope".into()), to: Point::Head }, 0, PAGE),
+        Err(ChangesError::BadPoint(_))
+    ));
 }
 
 #[test]
@@ -123,7 +148,10 @@ fn a_staged_rename_says_where_it_came_from() {
     stage(&repo, &["a.txt", "renamed.txt"]);
     let changes = Changes::open(dir.path()).unwrap();
     let files = changes.list(&Comparison::default(), 0, PAGE).unwrap().files;
-    assert_eq!((files[0].status, files[0].path.as_str(), files[0].old_path.as_deref()), (FileStatus::Renamed, "renamed.txt", Some("a.txt")));
+    assert_eq!(
+        (files[0].status, files[0].path.as_str(), files[0].old_path.as_deref()),
+        (FileStatus::Renamed, "renamed.txt", Some("a.txt"))
+    );
 }
 
 #[test]
@@ -136,7 +164,11 @@ fn a_snapshot_keeps_the_files_as_they_are_and_leaves_the_repository_as_it_was() 
     let before = (repo.head().unwrap().target(), listed(&changes, &Comparison::default()));
     let (start, new) = changes.snapshot("turn started", None).unwrap();
     assert!(new);
-    assert_eq!((repo.head().unwrap().target(), listed(&changes, &Comparison::default())), before, "the user's index, branch and files are untouched");
+    assert_eq!(
+        (repo.head().unwrap().target(), listed(&changes, &Comparison::default())),
+        before,
+        "the user's index, branch and files are untouched"
+    );
     // What changed since: only what happened after it.
     write(dir.path(), "c.txt", "untracked\nedited after\n");
     let since = Comparison { from: Point::Snapshot(start.id.clone()), to: Point::Files };
@@ -167,7 +199,11 @@ fn a_project_in_a_folder_of_the_repository_sees_its_own_files_by_its_own_paths()
     write(dir.path(), "project/src/lib.rs", "pub fn a() {}\npub fn b() {}\n");
     write(dir.path(), "a.txt", "outside the project\n");
     let changes = Changes::open(&dir.path().join("project")).unwrap();
-    assert_eq!(listed(&changes, &Comparison::default()), [(Group::Unstaged, "src/lib.rs".into(), FileStatus::Modified, 1, 0)], "only its folder, by its paths");
+    assert_eq!(
+        listed(&changes, &Comparison::default()),
+        [(Group::Unstaged, "src/lib.rs".into(), FileStatus::Modified, 1, 0)],
+        "only its folder, by its paths"
+    );
     let file = changes.file(&Comparison::default(), "src/lib.rs", Group::Unstaged, 0).unwrap();
     assert_eq!(file.hunks[0].lines[0].text, "pub fn b() {}");
 }
@@ -196,7 +232,6 @@ fn runs_are_where_the_files_now_changed_and_files_changed_since_the_newer_side_a
     assert_eq!((staged.files.len(), staged.moved), (0, vec!["a.txt".to_owned()]));
 }
 
-
 #[test]
 fn the_user_stages_and_unstages_a_file_or_one_change_in_it() {
     let (dir, _repo) = repo();
@@ -211,7 +246,11 @@ fn the_user_stages_and_unstages_a_file_or_one_change_in_it() {
     let first = HunkAt { old_start: unstaged.hunks[0].old_start, new_start: unstaged.hunks[0].new_start, context: 0 };
     changes.stage("a.txt", Some(first)).unwrap();
     let staged = changes.file(&Comparison::default(), "a.txt", Group::Staged, 0).unwrap();
-    assert_eq!(staged.hunks.iter().flat_map(|h| &h.lines).filter(|l| l.kind == LineKind::Added).map(|l| l.text.as_str()).collect::<Vec<_>>(), ["ONE"], "only that change");
+    assert_eq!(
+        staged.hunks.iter().flat_map(|h| &h.lines).filter(|l| l.kind == LineKind::Added).map(|l| l.text.as_str()).collect::<Vec<_>>(),
+        ["ONE"],
+        "only that change"
+    );
     assert_eq!(changes.file(&Comparison::default(), "a.txt", Group::Unstaged, 0).unwrap().hunks.len(), 1, "the other still unstaged");
     assert!(changes.stage("a.txt", Some(first)).is_err(), "not there any more: says so");
     // And back.
@@ -226,7 +265,10 @@ fn the_user_stages_and_unstages_a_file_or_one_change_in_it() {
     for path in ["a.txt", "c.txt", "b.txt"] {
         changes.unstage(path, None).unwrap();
     }
-    assert_eq!(groups(&changes), [(Group::Unstaged, "a.txt".into()), (Group::Unstaged, "b.txt".into()), (Group::Untracked, "c.txt".into())]);
+    assert_eq!(
+        groups(&changes),
+        [(Group::Unstaged, "a.txt".into()), (Group::Unstaged, "b.txt".into()), (Group::Untracked, "c.txt".into())]
+    );
     assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), "ONE\ntwo\nthree\nfour\nFIVE\n", "the files as they were");
 }
 
@@ -260,7 +302,10 @@ fn a_big_repository_and_a_30000_line_file_stay_fast() {
     let started = std::time::Instant::now();
     changes.file(&Comparison::default(), "big.txt", Group::Unstaged, CONTEXT).unwrap();
     let kept_in = started.elapsed();
-    assert!(listed_in.as_millis() < 1500 && read_in.as_millis() < 1000 && kept_in < read_in, "list {listed_in:?}, the big file {read_in:?}, again {kept_in:?}");
+    assert!(
+        listed_in.as_millis() < 1500 && read_in.as_millis() < 1000 && kept_in < read_in,
+        "list {listed_in:?}, the big file {read_in:?}, again {kept_in:?}"
+    );
 }
 
 #[test]
@@ -303,8 +348,16 @@ fn two_texts_compare_as_a_files_sides_do() {
     let hunks = texts("a\nb\nc\nd\ne\nf\ng\n", "a\nB\nc\nd\ne\nf\ng\nh\n", 1).unwrap();
     type Said<'a> = (LineKind, Option<u32>, Option<u32>, &'a str);
     let said: Vec<Vec<Said>> = hunks.iter().map(|h| h.lines.iter().map(|l| (l.kind, l.old, l.new, l.text.as_str())).collect()).collect();
-    assert_eq!(said, [
-        vec![(LineKind::Context, Some(1), Some(1), "a"), (LineKind::Removed, Some(2), None, "b"), (LineKind::Added, None, Some(2), "B"), (LineKind::Context, Some(3), Some(3), "c")],
-        vec![(LineKind::Context, Some(7), Some(7), "g"), (LineKind::Added, None, Some(8), "h")],
-    ]);
+    assert_eq!(
+        said,
+        [
+            vec![
+                (LineKind::Context, Some(1), Some(1), "a"),
+                (LineKind::Removed, Some(2), None, "b"),
+                (LineKind::Added, None, Some(2), "B"),
+                (LineKind::Context, Some(3), Some(3), "c")
+            ],
+            vec![(LineKind::Context, Some(7), Some(7), "g"), (LineKind::Added, None, Some(8), "h")],
+        ]
+    );
 }

@@ -74,7 +74,10 @@ impl Cockpit {
                 Some(note) => format!("Ran it. The cockpit says: {note}"),
                 None => "Ran it. cockpit_read shows what changed.".into(),
             },
-            "click" => format!("Clicked {}. cockpit_read shows what changed.", answer["clicked"].as_str().map_or_else(|| format!("at {}, {}", answer["x"], answer["y"]), |t| format!("{t:?}"))),
+            "click" => format!(
+                "Clicked {}. cockpit_read shows what changed.",
+                answer["clicked"].as_str().map_or_else(|| format!("at {}, {}", answer["x"], answer["y"]), |t| format!("{t:?}"))
+            ),
             _ => "Done. cockpit_read shows what changed.".into(),
         })
     }

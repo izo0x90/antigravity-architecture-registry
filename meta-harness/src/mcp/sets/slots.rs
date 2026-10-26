@@ -71,7 +71,12 @@ impl Slots {
     pub(crate) fn schemas(_trees: &TreeConfig) -> Vec<ToolDef> {
         let slot = json!({ "type": "string", "description": "A sub-slot: its id or its name (slot_list shows both)" });
         vec![
-            tool(Capability::SlotsObserve, "slot_list", "Your sub-slots: each one's name and id, harness, model, what it's doing (running, idle, waiting on the user, failed, not running) and its sessions.", json!({ "type": "object", "properties": {} })),
+            tool(
+                Capability::SlotsObserve,
+                "slot_list",
+                "Your sub-slots: each one's name and id, harness, model, what it's doing (running, idle, waiting on the user, failed, not running) and its sessions.",
+                json!({ "type": "object", "properties": {} }),
+            ),
             tool(
                 Capability::SlotsObserve,
                 "slot_read",
@@ -89,7 +94,12 @@ impl Slots {
                     "mode": { "type": "string", "enum": ["approval-required", "auto-accept-edits", "auto", "full-access"], "description": "How much it may do without asking (default: approval-required)" }
                 }, "required": ["harness"] }),
             ),
-            tool(Capability::SlotsManage, "slot_close", "Close a sub-slot and its sessions.", json!({ "type": "object", "properties": { "slot": slot }, "required": ["slot"] })),
+            tool(
+                Capability::SlotsManage,
+                "slot_close",
+                "Close a sub-slot and its sessions.",
+                json!({ "type": "object", "properties": { "slot": slot }, "required": ["slot"] }),
+            ),
             tool(
                 Capability::SlotsMessage,
                 "slot_send",
@@ -118,7 +128,9 @@ impl Slots {
 
     /// A sub-slot by id or name.
     fn find(&self, which: &str) -> Result<Slot, ServiceError> {
-        self.slots.named(which).ok_or_else(|| ServiceError::NotFound(format!("slot {which:?}, or several named so: name it by its id (slot_list shows them)")))
+        self.slots
+            .named(which)
+            .ok_or_else(|| ServiceError::NotFound(format!("slot {which:?}, or several named so: name it by its id (slot_list shows them)")))
     }
 
     /// A sub-slot the lead may act on: not itself, not a queue worker.
@@ -140,7 +152,8 @@ impl Slots {
 }
 
 fn mode(name: &str) -> Result<RuntimeMode, ServiceError> {
-    serde_json::from_value(Value::String(name.into())).map_err(|_| ServiceError::InvalidOp(format!("mode {name:?}: use approval-required, auto-accept-edits, auto or full-access")))
+    serde_json::from_value(Value::String(name.into()))
+        .map_err(|_| ServiceError::InvalidOp(format!("mode {name:?}: use approval-required, auto-accept-edits, auto or full-access")))
 }
 
 #[async_trait::async_trait]
@@ -152,7 +165,8 @@ impl ToolSet for Slots {
     async fn call(&self, name: &str, args: Value, caller: &McpCaller) -> Result<String, ServiceError> {
         match name {
             "slot_list" => {
-                let subs: Vec<String> = self.slots.list().iter().filter(|s| s.role == "sub").map(|s| format!("- {}", self.describe(s))).collect();
+                let subs: Vec<String> =
+                    self.slots.list().iter().filter(|s| s.role == "sub").map(|s| format!("- {}", self.describe(s))).collect();
                 Ok(if subs.is_empty() {
                     "No sub-slots.\n\nNext: slot_start one on a harness to give it work.".into()
                 } else {
@@ -176,14 +190,28 @@ impl ToolSet for Slots {
             "slot_start" => {
                 let a: StartArgs = parse(args)?;
                 let instance = InstanceId::new(a.harness);
-                let policy = RuntimePolicy { runtime_mode: a.mode.as_deref().map(mode).transpose()?.unwrap_or_default(), ..RuntimePolicy::default() };
+                let policy = RuntimePolicy {
+                    runtime_mode: a.mode.as_deref().map(mode).transpose()?.unwrap_or_default(),
+                    ..RuntimePolicy::default()
+                };
                 let model = a.model.map(|model| ModelSelection { instance_id: instance.clone(), model, options: Vec::new() });
-                let id = self.slots.create("sub", a.name, SlotSettings { instance: Some(instance), policy, model }, Starter::Lead).await.map_err(failed)?;
+                let id = self
+                    .slots
+                    .create("sub", a.name, SlotSettings { instance: Some(instance), policy, model }, Starter::Lead)
+                    .await
+                    .map_err(failed)?;
                 let opened = self.slots.open_session(&id, Open::New { resume: None }).await;
                 let slot = self.slots.get(&id).ok_or_else(|| ServiceError::NotFound(format!("slot {id}")))?;
                 match opened {
-                    Ok(o) => Ok(format!("Started {}.{}\n\nNext: slot_send it work.", self.describe(&slot), o.note.map(|n| format!(" {n}")).unwrap_or_default())),
-                    Err(e) => Ok(format!("Made {}, but its session didn't open: {e}\n\nNext: fix that and slot_send it (that tries again), or slot_close it.", slot.name)),
+                    Ok(o) => Ok(format!(
+                        "Started {}.{}\n\nNext: slot_send it work.",
+                        self.describe(&slot),
+                        o.note.map(|n| format!(" {n}")).unwrap_or_default()
+                    )),
+                    Err(e) => Ok(format!(
+                        "Made {}, but its session didn't open: {e}\n\nNext: fix that and slot_send it (that tries again), or slot_close it.",
+                        slot.name
+                    )),
                 }
             }
             "slot_close" => {
@@ -197,15 +225,25 @@ impl ToolSet for Slots {
                 let slot = self.sub(&a.slot)?;
                 let delivery = if a.add_to_running { Delivery::AddToRunning } else { Delivery::Queue };
                 let wait = a.wait_secs.map(|s| Duration::from_secs(s.min(MAX_WAIT_SECS)));
-                Ok(match self.slots.send(&slot.id, harness_contracts::Message::text(a.text), delivery, Origin::Lead, wait).await.map_err(failed)? {
-                    Sent::Started { .. } => format!("Sent to {}.\n\nNext: slot_read it later for its answer.", slot.name),
-                    Sent::Replied { text, .. } => format!("{} answered:\n\n{text}", slot.name),
-                    Sent::StillWorking { .. } => format!("{} is still working on it.\n\nNext: slot_read it later for its answer.", slot.name),
-                })
+                Ok(
+                    match self
+                        .slots
+                        .send(&slot.id, harness_contracts::Message::text(a.text), delivery, Origin::Lead, wait)
+                        .await
+                        .map_err(failed)?
+                    {
+                        Sent::Started { .. } => format!("Sent to {}.\n\nNext: slot_read it later for its answer.", slot.name),
+                        Sent::Replied { text, .. } => format!("{} answered:\n\n{text}", slot.name),
+                        Sent::StillWorking { .. } => {
+                            format!("{} is still working on it.\n\nNext: slot_read it later for its answer.", slot.name)
+                        }
+                    },
+                )
             }
             "tell_lead" => {
                 let a: TextArgs = parse(args)?;
-                let from: SlotId = caller.slot.clone().ok_or_else(|| ServiceError::InvalidOp("only a slot's agent reports to the lead".into()))?;
+                let from: SlotId =
+                    caller.slot.clone().ok_or_else(|| ServiceError::InvalidOp("only a slot's agent reports to the lead".into()))?;
                 let reported = self.slots.report(&from, a.text.clone()).await.map_err(failed)?;
                 let to_user = match self.notify.message(Some(&from), &a.text) {
                     Ok(_) => "",

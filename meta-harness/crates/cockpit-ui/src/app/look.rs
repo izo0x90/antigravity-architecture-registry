@@ -63,7 +63,10 @@ impl CockpitApp {
         };
         // The key that opened it, if it's down (a menu or the palette has none).
         let key = ctx.input(|i| {
-            self.bound_actions().into_iter().find(|b| b.action.id == "quicklook.toggle").and_then(|b| b.keys.into_iter().filter(|seq| seq.len() == 1).map(|mut seq| seq.remove(0)).find(|chord| chord.key_down(i)))
+            self.bound_actions()
+                .into_iter()
+                .find(|b| b.action.id == "quicklook.toggle")
+                .and_then(|b| b.keys.into_iter().filter(|seq| seq.len() == 1).map(|mut seq| seq.remove(0)).find(|chord| chord.key_down(i)))
         });
         // Its own card, held on what it shows.
         self.look_at(BufferId::new(BufferKind::Spec, PANE), key, ctx);
@@ -141,7 +144,10 @@ impl CockpitApp {
         let over = self.panel_rects.get(panel).copied().filter(|r| r.is_positive()).unwrap_or_else(|| ctx.content_rect());
         let screen = ctx.content_rect();
         let theme = crate::theme::look();
-        let size = egui::vec2(over.width().max(screen.width().min(theme.quick_look_width)).min(screen.width() - 2.0 * theme.space_l), screen.height() * theme.quick_look_height);
+        let size = egui::vec2(
+            over.width().max(screen.width().min(theme.quick_look_width)).min(screen.width() - 2.0 * theme.space_l),
+            screen.height() * theme.quick_look_height,
+        );
         // On the side away from the panel it's about, so that panel stays
         // in sight; with one panel there's no other side: over it.
         let (left, right) = (screen.left() + theme.space_l, (screen.right() - size.x - theme.space_l).max(screen.left()));
@@ -152,16 +158,25 @@ impl CockpitApp {
         };
         let pos = egui::pos2(x, screen.center().y - size.y / 2.0);
         let area = egui::Area::new(egui::Id::new("quick_look")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
-            Frame::NONE.fill(colors().panel).stroke(Stroke::new(theme.line_thin, colors().focus)).corner_radius(theme.radius_xl).inner_margin(crate::theme::margin(theme.space_m)).show(ui, |ui| {
-                ui.set_min_size(size - egui::vec2(2.0 * theme.space_m, 2.0 * theme.space_m));
-                ui.set_max_size(size - egui::vec2(2.0 * theme.space_m, 2.0 * theme.space_m));
-                ui.label(RichText::new(format!("{} Quick look", egui_phosphor::regular::EYE)).strong().size(theme.text_label).color(colors().text_strong));
-                self.render_view(Here { at: Host::Look, kind }, ui, true);
-            });
+            Frame::NONE
+                .fill(colors().panel)
+                .stroke(Stroke::new(theme.line_thin, colors().focus))
+                .corner_radius(theme.radius_xl)
+                .inner_margin(crate::theme::margin(theme.space_m))
+                .show(ui, |ui| {
+                    ui.set_min_size(size - egui::vec2(2.0 * theme.space_m, 2.0 * theme.space_m));
+                    ui.set_max_size(size - egui::vec2(2.0 * theme.space_m, 2.0 * theme.space_m));
+                    ui.label(
+                        RichText::new(format!("{} Quick look", egui_phosphor::regular::EYE))
+                            .strong()
+                            .size(theme.text_label)
+                            .color(colors().text_strong),
+                    );
+                    self.render_view(Here { at: Host::Look, kind }, ui, true);
+                });
         });
         // Over the panels: a tap outside closes it (a peek's key closes it
         // when let go).
         self.overlays.drawn_at(crate::overlay::Overlay::QuickLook, area.response.rect);
     }
-
 }

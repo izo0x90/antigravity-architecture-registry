@@ -27,7 +27,8 @@ impl DiscussionStore for MemoryStore {
     }
 
     fn kept_files(&self) -> Result<BTreeSet<String>, String> {
-        let mut files: BTreeSet<String> = self.kept.lock().unwrap().values().filter_map(|d| d.kept.as_ref().map(|k| k.file.clone())).collect();
+        let mut files: BTreeSet<String> =
+            self.kept.lock().unwrap().values().filter_map(|d| d.kept.as_ref().map(|k| k.file.clone())).collect();
         files.extend(self.unreadable.lock().unwrap().1.iter().cloned());
         Ok(files)
     }

@@ -1,9 +1,7 @@
 use std::fs;
 use tempfile::tempdir;
 
-use workspace_fs::{
-    read_client_text_file, write_client_text_file, ReadTextFileRequest, WriteTextFileRequest,
-};
+use workspace_fs::{ReadTextFileRequest, WriteTextFileRequest, read_client_text_file, write_client_text_file};
 
 #[test]
 fn test_reads_and_writes_client_files_within_session_roots() {
@@ -22,11 +20,7 @@ fn test_reads_and_writes_client_files_within_session_roots() {
     // 1. Full read
     let full = read_client_text_file(
         &allowed_roots,
-        &ReadTextFileRequest {
-            path: notes_file.to_str().unwrap().to_string(),
-            line: None,
-            limit: None,
-        },
+        &ReadTextFileRequest { path: notes_file.to_str().unwrap().to_string(), line: None, limit: None },
     )
     .expect("full read should succeed");
     assert_eq!(full.content, "one\ntwo\nthree\n");
@@ -34,11 +28,7 @@ fn test_reads_and_writes_client_files_within_session_roots() {
     // 2. Windowed read with line (1-indexed) and limit
     let window = read_client_text_file(
         &allowed_roots,
-        &ReadTextFileRequest {
-            path: notes_file.to_str().unwrap().to_string(),
-            line: Some(2),
-            limit: Some(1),
-        },
+        &ReadTextFileRequest { path: notes_file.to_str().unwrap().to_string(), line: Some(2), limit: Some(1) },
     )
     .expect("windowed read should succeed");
     assert_eq!(window.content, "two");
@@ -47,10 +37,7 @@ fn test_reads_and_writes_client_files_within_session_roots() {
     let nested_new = cwd.join("nested").join("new.txt");
     write_client_text_file(
         &allowed_roots,
-        &WriteTextFileRequest {
-            path: nested_new.to_str().unwrap().to_string(),
-            content: "created".to_string(),
-        },
+        &WriteTextFileRequest { path: nested_new.to_str().unwrap().to_string(), content: "created".to_string() },
     )
     .expect("nested write should succeed");
     assert_eq!(fs::read_to_string(&nested_new).unwrap(), "created");
@@ -59,10 +46,7 @@ fn test_reads_and_writes_client_files_within_session_roots() {
     let escape_file = outside.join("escape.txt");
     let escape_result = write_client_text_file(
         &allowed_roots,
-        &WriteTextFileRequest {
-            path: escape_file.to_str().unwrap().to_string(),
-            content: "nope".to_string(),
-        },
+        &WriteTextFileRequest { path: escape_file.to_str().unwrap().to_string(), content: "nope".to_string() },
     );
     assert!(escape_result.is_err());
     assert!(!escape_file.exists());
@@ -71,11 +55,7 @@ fn test_reads_and_writes_client_files_within_session_roots() {
     let missing_file = cwd.join("missing.txt");
     let missing_result = read_client_text_file(
         &allowed_roots,
-        &ReadTextFileRequest {
-            path: missing_file.to_str().unwrap().to_string(),
-            line: None,
-            limit: None,
-        },
+        &ReadTextFileRequest { path: missing_file.to_str().unwrap().to_string(), line: None, limit: None },
     );
     assert!(missing_result.is_err());
 }
@@ -101,11 +81,7 @@ fn test_enforces_max_file_size_and_symlink_escape() {
         let target_via_symlink = symlink_in_cwd.join("secret.env");
         let read_res = read_client_text_file(
             &allowed_roots,
-            &ReadTextFileRequest {
-                path: target_via_symlink.to_str().unwrap().to_string(),
-                line: None,
-                limit: None,
-            },
+            &ReadTextFileRequest { path: target_via_symlink.to_str().unwrap().to_string(), line: None, limit: None },
         );
         assert!(read_res.is_err(), "Symlink escape outside root must be rejected");
     }
@@ -113,15 +89,9 @@ fn test_enforces_max_file_size_and_symlink_escape() {
     // Relative path resolving into root
     let rel_file = cwd.join("relative.txt");
     fs::write(&rel_file, "hello").unwrap();
-    let rel_read = read_client_text_file(
-        &allowed_roots,
-        &ReadTextFileRequest {
-            path: "relative.txt".to_string(),
-            line: None,
-            limit: None,
-        },
-    )
-    .expect("relative path should resolve inside root");
+    let rel_read =
+        read_client_text_file(&allowed_roots, &ReadTextFileRequest { path: "relative.txt".to_string(), line: None, limit: None })
+            .expect("relative path should resolve inside root");
     assert_eq!(rel_read.content, "hello");
 }
 

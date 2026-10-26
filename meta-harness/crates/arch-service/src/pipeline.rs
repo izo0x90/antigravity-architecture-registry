@@ -15,7 +15,9 @@ use std::time::{Instant, SystemTime};
 use arch_graph::{ArchEvent, ChangeReason, Graph, IndexState, IndexStatus, IndexSummary, RepoPath, TypeSystem};
 use arch_store::{SqliteStore, Stamp};
 use code_analyzer::rows::{FileRow, read_version};
-use code_analyzer::{AmbiguousCall, Change, CodeRules, ExternalCall, FileExtract, Model, PackSet, UnverifiedFlow, Written, content_hash, extract_file};
+use code_analyzer::{
+    AmbiguousCall, Change, CodeRules, ExternalCall, FileExtract, Model, PackSet, UnverifiedFlow, Written, content_hash, extract_file,
+};
 use rayon::prelude::*;
 
 use crate::ServiceError;
@@ -88,7 +90,12 @@ impl Core {
         s.clone()
     }
 
-    pub fn timed<T>(&self, what: &'static str, asked: String, answer: impl FnOnce(&mut Timing) -> Result<T, ServiceError>) -> Result<T, ServiceError> {
+    pub fn timed<T>(
+        &self,
+        what: &'static str,
+        asked: String,
+        answer: impl FnOnce(&mut Timing) -> Result<T, ServiceError>,
+    ) -> Result<T, ServiceError> {
         let mut t = Timing::start(what, asked);
         let out = answer(&mut t);
         let timed = t.done(self.limits.slow_request_ms, crate::service::now_rfc3339());
@@ -105,7 +112,12 @@ impl Core {
     /// again.
     pub fn fingerprints(&self) -> String {
         let packs: Vec<&str> = self.packs.packs.iter().map(|p| p.fingerprint.as_str()).collect();
-        content_hash(&format!("{}|{}|{}", code_analyzer::LINKER_VERSION, serde_json::to_string(&self.types).unwrap_or_default(), packs.join(",")))
+        content_hash(&format!(
+            "{}|{}|{}",
+            code_analyzer::LINKER_VERSION,
+            serde_json::to_string(&self.types).unwrap_or_default(),
+            packs.join(",")
+        ))
     }
 
     /// `scope` as a repo-relative prefix ("" for the whole repo).
@@ -147,7 +159,8 @@ impl Core {
         let freed: Vec<Arc<Snapshot>> = {
             let mut retired = self.retired.lock().unwrap_or_else(PoisonError::into_inner);
             retired.push(old);
-            let (held, free): (Vec<_>, Vec<_>) = std::mem::take(&mut *retired).into_iter().partition(|s| Arc::strong_count(s) > 1 || Arc::strong_count(&s.graph) > 1);
+            let (held, free): (Vec<_>, Vec<_>) =
+                std::mem::take(&mut *retired).into_iter().partition(|s| Arc::strong_count(s) > 1 || Arc::strong_count(&s.graph) > 1);
             *retired = held;
             free
         };
@@ -239,7 +252,11 @@ impl Pipeline {
     }
 
     /// Runs `job` on the pipeline thread and waits for its answer.
-    pub fn run<T: Send + 'static>(&self, core: &Arc<Core>, job: impl FnOnce(&Core, &mut Model) -> T + Send + 'static) -> Result<T, ServiceError> {
+    pub fn run<T: Send + 'static>(
+        &self,
+        core: &Arc<Core>,
+        job: impl FnOnce(&Core, &mut Model) -> T + Send + 'static,
+    ) -> Result<T, ServiceError> {
         let jobs = self.jobs.get_or_init(|| {
             let (tx, rx) = channel::<Job>();
             let core = core.clone();
@@ -343,7 +360,12 @@ pub(crate) fn ingest(core: &Core, model: &mut Model, scopes: &[PathBuf], fresh: 
     if fresh {
         model.reset_keeping_answers();
     }
-    let what = scopes.iter().map(|s| core.scope_prefix(s)).map(|p| if p.is_empty() { "the repo".to_owned() } else { p }).collect::<Vec<_>>().join(", ");
+    let what = scopes
+        .iter()
+        .map(|s| core.scope_prefix(s))
+        .map(|p| if p.is_empty() { "the repo".to_owned() } else { p })
+        .collect::<Vec<_>>()
+        .join(", ");
     let out = core.timed("ingest", what, |t| ingest_timed(core, model, t, scopes, asked, fresh));
     if let Err(e) = &out {
         core.set_status(|s| {
@@ -354,7 +376,14 @@ pub(crate) fn ingest(core: &Core, model: &mut Model, scopes: &[PathBuf], fresh: 
     out
 }
 
-fn ingest_timed(core: &Core, model: &mut Model, t: &mut Timing, scopes: &[PathBuf], asked: bool, fresh: bool) -> Result<IngestReport, ServiceError> {
+fn ingest_timed(
+    core: &Core,
+    model: &mut Model,
+    t: &mut Timing,
+    scopes: &[PathBuf],
+    asked: bool,
+    fresh: bool,
+) -> Result<IngestReport, ServiceError> {
     let started = Instant::now();
     let mut report = IngestReport::default();
     // Every file first, so progress has a total.
@@ -362,7 +391,8 @@ fn ingest_timed(core: &Core, model: &mut Model, t: &mut Timing, scopes: &[PathBu
         let mut found = Vec::new();
         for scope in scopes {
             let files = match scope.exists() {
-                true => code_analyzer::walk_with(&core.ignores, &core.root, scope, &core.packs).map_err(|e| ServiceError::Index(e.to_string()))?,
+                true => code_analyzer::walk_with(&core.ignores, &core.root, scope, &core.packs)
+                    .map_err(|e| ServiceError::Index(e.to_string()))?,
                 false => Vec::new(),
             };
             found.push((scope.clone(), files));
@@ -431,7 +461,14 @@ fn ingest_timed(core: &Core, model: &mut Model, t: &mut Timing, scopes: &[PathBu
 }
 
 /// Reads the files found under each scope as needed; what changed.
-fn read_files(core: &Core, model: &Model, t: &mut Timing, found: &[(PathBuf, Vec<code_analyzer::SourceFile>)], report: &mut IngestReport, announced: &AtomicBool) -> Result<Change, ServiceError> {
+fn read_files(
+    core: &Core,
+    model: &Model,
+    t: &mut Timing,
+    found: &[(PathBuf, Vec<code_analyzer::SourceFile>)],
+    report: &mut IngestReport,
+    announced: &AtomicBool,
+) -> Result<Change, ServiceError> {
     let mut unique: BTreeMap<&RepoPath, &code_analyzer::SourceFile> = BTreeMap::new();
     for (_, files) in found {
         report.files += files.len();
@@ -439,7 +476,11 @@ fn read_files(core: &Core, model: &Model, t: &mut Timing, found: &[(PathBuf, Vec
     }
     let recent = std::time::Duration::from_millis(core.limits.store.recent_change_ms);
     let progress_every = std::time::Duration::from_millis(core.limits.pipeline.progress_ms);
-    let trusted_before = SystemTime::now().checked_sub(recent).unwrap_or(SystemTime::UNIX_EPOCH).duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64);
+    let trusted_before = SystemTime::now()
+        .checked_sub(recent)
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as i64);
     let done = AtomicUsize::new(0);
     let last = Mutex::new(Instant::now());
     let read: Vec<Result<Read, ServiceError>> = t.stage("read", || {
@@ -515,7 +556,9 @@ fn read_file(core: &Core, model: &Model, file: &code_analyzer::SourceFile, trust
     let version = read_version(&pack.fingerprint, core.rules.fingerprint(pack.name()));
     // Kept rows count only if read the same way: the same reader, pack, code
     // rules and module.
-    let kept = model.get(&file.path).filter(|rows| rows.file.read_version == version && rows.module().is_some_and(|m| m.detail.symbol == file.module));
+    let kept = model
+        .get(&file.path)
+        .filter(|rows| rows.file.read_version == version && rows.module().is_some_and(|m| m.detail.symbol == file.module));
     if let Some(rows) = kept
         && rows.file.modified != 0
         && rows.file.size == stamp.size
@@ -525,7 +568,14 @@ fn read_file(core: &Core, model: &Model, file: &code_analyzer::SourceFile, trust
     }
     let content = std::fs::read_to_string(&file.absolute).map_err(io)?;
     let hash = content_hash(&content);
-    let row = FileRow { path: file.path.clone(), language: pack.name().to_owned(), size: stamp.size, modified: stamp.modified, content_hash: hash.clone(), read_version: version };
+    let row = FileRow {
+        path: file.path.clone(),
+        language: pack.name().to_owned(),
+        size: stamp.size,
+        modified: stamp.modified,
+        content_hash: hash.clone(),
+        read_version: version,
+    };
     Ok(match kept {
         Some(rows) if rows.file.content_hash == hash => match rows.file == row {
             true => Read::Same,
@@ -552,7 +602,8 @@ mod tests {
         let catalog = nah_packs::Catalog::load(&nah_packs::Distribution::from_dir(&shipped).unwrap(), &places).unwrap();
         let packs = PackSet::from_catalog(&catalog).unwrap();
         let store = crate::temporary_facts(&crate::Limits::defaults().unwrap()).unwrap();
-        let service = ArchitectureService::open(dir.path(), packs, TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), store).unwrap();
+        let service =
+            ArchitectureService::open(dir.path(), packs, TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), store).unwrap();
         (dir, service)
     }
 

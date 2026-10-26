@@ -94,12 +94,27 @@ fn calls_start_at_the_entry_points_and_data_flow_at_what_they_take() {
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"app\"\n").unwrap();
     std::fs::write(root.join("src/main.rs"), APP).unwrap();
-    let s = ArchitectureService::open(&root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(FsPlans::new(&root).unwrap()), arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()).unwrap();
+    let s = ArchitectureService::open(
+        &root,
+        common::shipped_packs(),
+        TypeSystem::defaults().unwrap(),
+        Box::new(FsPlans::new(&root).unwrap()),
+        arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap(),
+    )
+    .unwrap();
     s.ingest(&root).unwrap();
     let calls = s.tree(&TreeRequest { view: ViewKind::Calls, depth: Some(0), ..TreeRequest::default() }).unwrap();
-    assert_eq!(calls.roots, ["rust:app::main::main", "rust:app::main::list_items", "rust:app::main::page_of", "rust:app::main::call"], "the main, the route's handler, the call that takes the MCP tools; not `tidy` (it calls something), an event's handler a match on a string no tool declares, or one that takes a tool's name among keys of its own");
+    assert_eq!(
+        calls.roots,
+        ["rust:app::main::main", "rust:app::main::list_items", "rust:app::main::page_of", "rust:app::main::call"],
+        "the main, the route's handler, the call that takes the MCP tools; not `tidy` (it calls something), an event's handler a match on a string no tool declares, or one that takes a tool's name among keys of its own"
+    );
     let data = s.tree(&TreeRequest { view: ViewKind::DataFlow, depth: Some(0), ..TreeRequest::default() }).unwrap();
-    assert_eq!(data.roots, ["type:Filter", "type:Page"], "what the handlers take, out of its wrapper (`Query<Page>`), the wrapper itself not");
+    assert_eq!(
+        data.roots,
+        ["type:Filter", "type:Page"],
+        "what the handlers take, out of its wrapper (`Query<Page>`), the wrapper itself not"
+    );
     // Contains starts at the repo: what nothing holds (here its one module).
     let contains = s.tree(&TreeRequest { view: ViewKind::Contains, depth: Some(0), ..TreeRequest::default() }).unwrap();
     assert_eq!(contains.roots, ["rust:app::main"]);

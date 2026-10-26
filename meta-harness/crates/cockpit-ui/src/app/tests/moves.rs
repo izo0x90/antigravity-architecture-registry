@@ -82,7 +82,11 @@ fn the_jump_list_crosses_views_and_slots() {
     ctrl(&ctx, &mut app, egui::Key::O);
     assert_eq!(app.desk.code().target_line, Some(10), "back within the code");
     ctrl(&ctx, &mut app, egui::Key::O);
-    assert_eq!((app.desk.panels.focused(), app.focused_kind(), selected(&app)), (1, BufferKind::Graph, "rust:a::step"), "back to the graph's panel, focused, where it was");
+    assert_eq!(
+        (app.desk.panels.focused(), app.focused_kind(), selected(&app)),
+        (1, BufferKind::Graph, "rust:a::step"),
+        "back to the graph's panel, focused, where it was"
+    );
     ctrl(&ctx, &mut app, egui::Key::I);
     assert_eq!((app.focused_kind(), app.desk.code().target_line), (BufferKind::Code, Some(10)));
     // Nothing left to go back to: says so.
@@ -99,7 +103,11 @@ fn the_same_moves_work_in_every_view() {
     app.desk.code_mut().set_content((1..=300).map(|i| format!("line {i}\n")).collect());
     app.desk.code_mut().target_line = Some(1);
     for _ in 0..3 {
-        app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::ThreadClosed { thread_id: harness_contracts::ThreadId::new("none") });
+        app.desk
+            .shared
+            .agents
+            .get_mut()
+            .apply(harness_contracts::ClientEvent::ThreadClosed { thread_id: harness_contracts::ThreadId::new("none") });
     }
     for kind in [BufferKind::Tree, BufferKind::Code, BufferKind::Spec, BufferKind::Queue, BufferKind::Chat] {
         focus(&ctx, &mut app, kind);
@@ -112,7 +120,10 @@ fn the_same_moves_work_in_every_view() {
         let order = |app: &CockpitApp| {
             let items = app.desk.view(app.focused_kind()).items();
             let c = cursor(app)?;
-            items.iter().position(|i| i.key == c).or_else(|| c.split_once(':').and_then(|(head, _)| items.iter().position(|i| i.key == head)))
+            items
+                .iter()
+                .position(|i| i.key == c)
+                .or_else(|| c.split_once(':').and_then(|(head, _)| items.iter().position(|i| i.key == head)))
         };
         let start = order(&app).unwrap_or(0);
         frame(&ctx, &mut app, key("j"));
@@ -191,15 +202,50 @@ fn f_labels_what_is_on_screen_in_every_view() {
     app.desk.graph_mut().set_tree(sample_tree());
     // Something in the inbox, to label.
     let kind = harness_contracts::NotificationKind::TurnFinished;
-    let notification = harness_contracts::Notification { id: harness_contracts::NotificationId::new("turn:1"), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, terminal: None, discussion: None, title: "done".into(), detail: None, at_ms: 0, state: harness_contracts::NotificationState::Open };
+    let notification = harness_contracts::Notification {
+        id: harness_contracts::NotificationId::new("turn:1"),
+        server: None,
+        level: kind.level(),
+        kind,
+        slot: None,
+        thread: None,
+        request: None,
+        terminal: None,
+        discussion: None,
+        title: "done".into(),
+        detail: None,
+        at_ms: 0,
+        state: harness_contracts::NotificationState::Open,
+    };
     app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::NotificationUpdated { notification });
     // A changed file, to label.
     use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, FileStatus, Group};
-    let changed = ChangedFile { path: "src/a.rs".into(), old_path: None, status: FileStatus::Modified, group: Group::Unstaged, added: 1, removed: 0, binary: false };
+    let changed = ChangedFile {
+        path: "src/a.rs".into(),
+        old_path: None,
+        status: FileStatus::Modified,
+        group: Group::Unstaged,
+        added: 1,
+        removed: 0,
+        binary: false,
+    };
     app.desk.shared.changes.take_list_for_test(ChangeList { comparison: Comparison::default(), files: vec![changed], offset: 0, total: 1 });
     // A tag, to label in the tags.
-    let subject = harness_contracts::Subject::TerminalLines { terminal: harness_contracts::TerminalId::new("t1"), shell: 1, first: 1, last: 1, command: None };
-    let tag = harness_contracts::Tag { id: harness_contracts::TagId::new("x1"), name: "seen".into(), colour: 0, note: String::new(), noted_by: String::new(), on: vec![harness_contracts::Tagged { subject, what: "terminal t1 lines 1-1".into(), at_ms: 0, by: "user".into(), kept: None }] };
+    let subject = harness_contracts::Subject::TerminalLines {
+        terminal: harness_contracts::TerminalId::new("t1"),
+        shell: 1,
+        first: 1,
+        last: 1,
+        command: None,
+    };
+    let tag = harness_contracts::Tag {
+        id: harness_contracts::TagId::new("x1"),
+        name: "seen".into(),
+        colour: 0,
+        note: String::new(),
+        noted_by: String::new(),
+        on: vec![harness_contracts::Tagged { subject, what: "terminal t1 lines 1-1".into(), at_ms: 0, by: "user".into(), kept: None }],
+    };
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag });
     frame(&ctx, &mut app, vec![]);
     app.desk.share();
@@ -208,7 +254,13 @@ fn f_labels_what_is_on_screen_in_every_view() {
         // The plan tree: its plan read.
         if kind == BufferKind::Plan {
             let mut plan = arch_graph::Plan::new("p", "Findings");
-            plan.items = vec![arch_graph::Item { id: arch_graph::ItemId("i1".into()), parent: None, title: "Decide".into(), text: String::new(), state: arch_graph::ItemState::Open }];
+            plan.items = vec![arch_graph::Item {
+                id: arch_graph::ItemId("i1".into()),
+                parent: None,
+                title: "Decide".into(),
+                text: String::new(),
+                state: arch_graph::ItemState::Open,
+            }];
             assert!(app.desk.net.answer("GET /api/arch/plans/p", 200, &serde_json::to_value(plan).unwrap()));
             for _ in 0..3 {
                 frame(&ctx, &mut app, vec![]);
@@ -217,7 +269,12 @@ fn f_labels_what_is_on_screen_in_every_view() {
         // A discussion: one shown.
         if kind == BufferKind::Discussion {
             let on = harness_contracts::Subject::Plan { plan: PlanId::new("p").unwrap() };
-            told(&app, harness_contracts::ClientEvent::DiscussionUpdated { discussion: crate::review::tests::discussion(1, on, harness_contracts::DiscussionStatus::Open) });
+            told(
+                &app,
+                harness_contracts::ClientEvent::DiscussionUpdated {
+                    discussion: crate::review::tests::discussion(1, on, harness_contracts::DiscussionStatus::Open),
+                },
+            );
             frame(&ctx, &mut app, vec![]);
             let _ = app.desk.view_mut(kind).show_target(&Target::Discussion(harness_contracts::DiscussionId::new("d1")));
             for _ in 0..2 {
@@ -383,7 +440,11 @@ fn marks_work_across_views() {
     app.desk.panels.focus(0);
     focus(&ctx, &mut app, BufferKind::Graph);
     keys(&ctx, &mut app, "'c");
-    assert_eq!((app.desk.panels.focused(), app.focused_kind(), app.desk.code().target_line), (1, BufferKind::Code, Some(6)), "back to the code, in its panel");
+    assert_eq!(
+        (app.desk.panels.focused(), app.focused_kind(), app.desk.code().target_line),
+        (1, BufferKind::Code, Some(6)),
+        "back to the code, in its panel"
+    );
     keys(&ctx, &mut app, "'t");
     assert_eq!((app.desk.panels.focused(), app.desk.tree().cursor.as_deref()), (2, Some("rust:b")));
     ctrl(&ctx, &mut app, egui::Key::O);
@@ -420,7 +481,9 @@ fn go_to_keys_work_from_every_view() {
     (worker.id, worker.role) = (harness_contracts::SlotId::new("worker-1"), "worker".into());
     app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::SlotUpdated { slot: worker });
     focus(&ctx, &mut app, BufferKind::Queue);
-    app.desk.queue_mut().on_event(&arch_graph::ArchEvent::QueueUpdated { snapshot: Box::new(crate::queue::tests::snapshot(arch_graph::QueueStatus::Running)) });
+    app.desk.queue_mut().on_event(&arch_graph::ArchEvent::QueueUpdated {
+        snapshot: Box::new(crate::queue::tests::snapshot(arch_graph::QueueStatus::Running)),
+    });
     keys(&ctx, &mut app, "gg");
     frame(&ctx, &mut app, key("o"));
     frame(&ctx, &mut app, vec![]);
@@ -435,7 +498,16 @@ fn go_to_keys_work_from_every_view() {
     focus(&ctx, &mut app, BufferKind::Code);
     app.desk.code_mut().move_to("6");
     let mut step = crate::goto::tests::detail("rust:a::step", vec![], vec![call("rust:a::run", "rust:a::step", 0, 3)]);
-    step.references = vec![arch_graph::code::Reference { file: "src/a.rs".into(), line: 3, start: 0, end: 4, kind: "call".into(), within: Some(arch_graph::ComponentId::new("rust:a::run")), evidence: "name".into(), stale: false }];
+    step.references = vec![arch_graph::code::Reference {
+        file: "src/a.rs".into(),
+        line: 3,
+        start: 0,
+        end: 4,
+        kind: "call".into(),
+        within: Some(arch_graph::ComponentId::new("rust:a::run")),
+        evidence: "name".into(),
+        stale: false,
+    }];
     let source = app.desk.graph().nav.source.clone();
     app.desk.details.insert(step, &source);
     keys(&ctx, &mut app, "gr");
@@ -444,7 +516,14 @@ fn go_to_keys_work_from_every_view() {
     app.desk.code_mut().move_to("2");
     keys(&ctx, &mut app, "gc");
     assert!(app.desk.pending_goto.is_some(), "waiting for run's relations");
-    app.desk.details.insert(crate::goto::tests::detail("rust:a::run", vec![call("rust:a::run", "rust:a::step", 0, 3), call("rust:a::run", "rust:x::log", 1, 4)], vec![]), &source);
+    app.desk.details.insert(
+        crate::goto::tests::detail(
+            "rust:a::run",
+            vec![call("rust:a::run", "rust:a::step", 0, 3), call("rust:a::run", "rust:x::log", 1, 4)],
+            vec![],
+        ),
+        &source,
+    );
     frame(&ctx, &mut app, vec![]);
     assert!(app.desk.pending_goto.is_none() && app.input_mode == InputMode::Palette, "two callees: pick one");
     let pick = app.bound_actions().into_iter().find(|b| b.action.id == "goto.pick").unwrap();
@@ -456,7 +535,13 @@ fn go_to_keys_work_from_every_view() {
     app.desk.spec_mut().show(step.clone());
     app.desk.spec_mut().detail = Some(crate::spec::tests::detail(&step, &ComponentId::new("rust:a::save")));
     focus(&ctx, &mut app, BufferKind::Spec);
-    app.desk.spec_mut().move_to(&crate::spec::Entry { section: crate::card::Section::Relations, item: crate::spec::SpecItem::Relation { kind: RelationKind::Calls, other: ComponentId::new("rust:a::save"), outgoing: true } }.key());
+    app.desk.spec_mut().move_to(
+        &crate::spec::Entry {
+            section: crate::card::Section::Relations,
+            item: crate::spec::SpecItem::Relation { kind: RelationKind::Calls, other: ComponentId::new("rust:a::save"), outgoing: true },
+        }
+        .key(),
+    );
     keys(&ctx, &mut app, "gs");
     assert_eq!(app.desk.spec().target.as_ref().map(|c| c.as_str()), Some("rust:a::save"));
     // Nothing under the cursor: says so.

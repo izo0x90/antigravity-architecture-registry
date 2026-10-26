@@ -10,8 +10,8 @@ use std::rc::Rc;
 
 use egui::RichText;
 
-use crate::kind::BufferKind;
 use crate::keymap::{Chord, InputMode};
+use crate::kind::BufferKind;
 use crate::nav::Target;
 use crate::net::NetClient;
 
@@ -22,21 +22,34 @@ pub enum Param {
     /// Pick one (the palette lists them, filterable).
     Choice(Vec<Choice>),
     /// On or off; runs with "true" or "false".
-    Toggle { on: bool },
+    Toggle {
+        on: bool,
+    },
     /// Free text (opens ready for typing or dictation), starting as
     /// `start` (what's there now, to edit).
-    Text { hint: String, start: String },
+    Text {
+        hint: String,
+        start: String,
+    },
     /// Writing of any length, in the typing box every conversation has
     /// (many lines: Enter sends, as the keymap says), starting as `start`.
     /// Written in a box (several lines). `links`: it takes links (`#`, `@`):
     /// its value is then the message (text and links) as JSON; else its text.
-    Writing { hint: String, start: harness_contracts::Message, links: bool },
+    Writing {
+        hint: String,
+        start: harness_contracts::Message,
+        links: bool,
+    },
     /// Typed text looked up as it's typed: the provider gets each query
     /// (`ActionProvider::search`) and lists what it found here, saying
     /// which query its rows are of (`of`: as it was typed; none: none
     /// answered yet). Rows of another query than what's typed are still
     /// shown, until the new ones come; Enter waits for those.
-    Search { hint: String, found: Vec<Choice>, of: Option<String> },
+    Search {
+        hint: String,
+        found: Vec<Choice>,
+        of: Option<String>,
+    },
 }
 
 impl Param {
@@ -680,7 +693,12 @@ pub fn closest(entry: &LeaderEntry, bound: &[Bound], path: &[char]) -> Layer {
         LeaderEntry::Group { key } => {
             let mut prefix = path.to_vec();
             prefix.push(*key);
-            bound.iter().filter(|b| b.leader.as_ref().is_some_and(|l| l.starts_with(&prefix))).map(|b| b.layer).min().unwrap_or(Layer::Everywhere)
+            bound
+                .iter()
+                .filter(|b| b.leader.as_ref().is_some_and(|l| l.starts_with(&prefix)))
+                .map(|b| b.layer)
+                .min()
+                .unwrap_or(Layer::Everywhere)
         }
     }
 }
@@ -736,7 +754,9 @@ pub fn choice_text(ui: &egui::Ui, label: &str, colour: Option<(egui::Color32, Ma
     let style = ui.style();
     let mut job = egui::text::LayoutJob::default();
     let mark = match colour {
-        Some((colour, Mark::Glyph(glyph))) => Some(RichText::new(format!("{glyph} ")).font(crate::theme::solid_font(ui, size)).color(colour)),
+        Some((colour, Mark::Glyph(glyph))) => {
+            Some(RichText::new(format!("{glyph} ")).font(crate::theme::solid_font(ui, size)).color(colour))
+        }
         Some((colour, Mark::Swatch)) => Some(RichText::new("\u{25a0} ").size(size).color(colour)),
         None => None,
     };
@@ -779,7 +799,10 @@ pub fn entry(ui: &mut egui::Ui, key: &str, words: &str, emphasis: Emphasis, widt
         };
         let pad = look.space_s;
         let pill_text = painter.layout_no_wrap(key.to_owned(), egui::FontId::monospace(look.text_body), ink);
-        let pill = egui::Rect::from_center_size(egui::pos2(rect.left() + pad + pill_text.size().x / 2.0 + pad, rect.center().y), pill_text.size() + egui::vec2(2.0 * pad, look.space_xs));
+        let pill = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + pad + pill_text.size().x / 2.0 + pad, rect.center().y),
+            pill_text.size() + egui::vec2(2.0 * pad, look.space_xs),
+        );
         painter.rect_filled(pill, look.radius_m, fill);
         painter.galley(pill.center() - pill_text.size() / 2.0, pill_text, ink);
         let room = (rect.right() - pill.right() - 2.0 * pad).max(0.0);
@@ -816,7 +839,12 @@ pub fn caption_and_key(ui: &egui::Ui, caption: &str, key: &str, tone: Option<Ton
     }
     text.append_to(&mut job, style, egui::FontSelection::Default, egui::Align::Center);
     if !key.is_empty() && ui.available_width() > KEY_SHOWN_ABOVE {
-        RichText::new(format!("  {key}")).monospace().size(look.text_small).color(crate::theme::colors().key).append_to(&mut job, style, egui::FontSelection::Default, egui::Align::Center);
+        RichText::new(format!("  {key}")).monospace().size(look.text_small).color(crate::theme::colors().key).append_to(
+            &mut job,
+            style,
+            egui::FontSelection::Default,
+            egui::Align::Center,
+        );
     }
     job.into()
 }
@@ -869,7 +897,9 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound, mode: &mut InputMode) -> Optio
             let shown = choices.iter().find(|c| c.current).map(|c| c.label.clone()).unwrap_or_else(|| "—".into());
             // Caption and picker stay on one row: wrap first if they won't fit, and
             // truncate the picker rather than let it push the panel wider.
-            let measure = |ui: &egui::Ui, text: egui::WidgetText| text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button).size().x;
+            let measure = |ui: &egui::Ui, text: egui::WidgetText| {
+                text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button).size().x
+            };
             let spacing = ui.spacing();
             let gap = spacing.item_spacing.x;
             let around = spacing.icon_width + spacing.icon_spacing + spacing.button_padding.x * 2.0;
@@ -899,8 +929,16 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound, mode: &mut InputMode) -> Optio
                     let mut list = ui.data_mut(|d| d.get_temp(list_id)).unwrap_or_else(|| crate::pick_list::PickList::at(current));
                     let keys = &crate::keymap::local().list;
                     let (moved, enter) = ui.input_mut(|i| (keys.moved(i), keys.picked(i)));
-                    let listing = crate::pick_list::Listing { id: action.id.as_str(), height, len: choices.len(), details, empty: "Nothing to choose" };
-                    if let Some(i) = list.show(ui, listing, moved, enter, crate::pick_list::every_row_picks, |i| crate::pick_list::Row::of_choice(&choices[i])) {
+                    let listing = crate::pick_list::Listing {
+                        id: action.id.as_str(),
+                        height,
+                        len: choices.len(),
+                        details,
+                        empty: "Nothing to choose",
+                    };
+                    if let Some(i) = list.show(ui, listing, moved, enter, crate::pick_list::every_row_picks, |i| {
+                        crate::pick_list::Row::of_choice(&choices[i])
+                    }) {
                         picked = (!choices[i].current).then(|| choices[i].value.clone());
                         ui.close();
                     }
@@ -927,14 +965,14 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound, mode: &mut InputMode) -> Optio
             picked.map(|v| ControlUse::Run(Some(v)))
         }
         (Param::None, Style::Choice) => {
-            let row = egui::Button::selectable(false, tinted(format!("{} {text}", egui_phosphor::regular::CARET_RIGHT))).min_size(egui::vec2(ui.available_width(), 0.0));
+            let row = egui::Button::selectable(false, tinted(format!("{} {text}", egui_phosphor::regular::CARET_RIGHT)))
+                .min_size(egui::vec2(ui.available_width(), 0.0));
             ui.add(row).on_hover_text(tip).clicked().then_some(ControlUse::Run(None))
         }
         (Param::None, _) => ui.button(tinted(text)).on_hover_text(tip).clicked().then_some(ControlUse::Run(None)),
         _ => ui.button(tinted(text)).on_hover_text(tip).clicked().then_some(ControlUse::OpenPalette),
     }
 }
-
 
 /// Snake/kebab name of a contract enum as serialized, for keymap names.
 pub fn wire_name(value: &impl serde::Serialize) -> String {
@@ -972,7 +1010,11 @@ mod tests {
         let mut all = vec![bound("panel", "1"), bound("new", "sn"), bound("graph.view", "gv"), bound("graph.flip", "z")];
         (all[2].layer, all[3].layer) = (Layer::Panel, Layer::Panel);
         let root = leader_entries(&all, &[]);
-        assert_eq!(root[..2], [LeaderEntry::Group { key: 'g' }, LeaderEntry::Action { key: 'z', index: 3 }], "the panel's own first: {root:?}");
+        assert_eq!(
+            root[..2],
+            [LeaderEntry::Group { key: 'g' }, LeaderEntry::Action { key: 'z', index: 3 }],
+            "the panel's own first: {root:?}"
+        );
         assert!(is_primary(&root[0], &all, &[]));
         assert!(!is_primary(&root[2], &all, &[]), "then everywhere's");
     }

@@ -77,5 +77,8 @@ pub enum Starter {
 pub enum SlotStatus {
     Ready,
     /// Its harness can't run now: why, and what fixes it.
-    Unavailable { reason: String, fix: Option<String> },
+    Unavailable {
+        reason: String,
+        fix: Option<String>,
+    },
 }

@@ -95,7 +95,12 @@ async fn the_agent_sees_the_same_tree_as_text() {
     // Up, and loading more, and where it sits.
     let (err, text) = mcp.tool("view", json!({ "view": "calls", "root": "rust:sample::log", "way": "up", "depth": 1 })).await;
     assert!(!err && text.contains("what calls it") && text.contains("key=rust:sample::run"), "{text}");
-    let leaf = tree["cards"].as_array().unwrap().iter().find(|c| c["more"].as_u64().unwrap_or(0) > 0).map(|c| c["key"].as_str().unwrap().to_owned());
+    let leaf = tree["cards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["more"].as_u64().unwrap_or(0) > 0)
+        .map(|c| c["key"].as_str().unwrap().to_owned());
     if let Some(card) = leaf {
         let (err, text) = mcp.tool("view", json!({ "view": "calls", "root": "rust:sample::run", "depth": 2, "expand": card })).await;
         assert!(!err, "{text}");

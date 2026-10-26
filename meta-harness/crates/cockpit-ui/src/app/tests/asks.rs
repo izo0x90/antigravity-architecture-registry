@@ -38,7 +38,9 @@ fn a_name_ctrl_clicked_goes_to_its_code_as_a_go_to_does() {
 fn a_session_no_agent_slot_runs_says_so_and_nothing_moves() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Queue);
-    app.desk.queue_mut().on_event(&arch_graph::ArchEvent::QueueUpdated { snapshot: Box::new(crate::queue::tests::snapshot(arch_graph::QueueStatus::Running)) });
+    app.desk.queue_mut().on_event(&arch_graph::ArchEvent::QueueUpdated {
+        snapshot: Box::new(crate::queue::tests::snapshot(arch_graph::QueueStatus::Running)),
+    });
     keys(&ctx, &mut app, "gg");
     let jumps = app.desk.jumps.clone();
     frame(&ctx, &mut app, key("o"));
@@ -76,7 +78,10 @@ fn going_back_to_a_card_moves_the_graph_to_it() {
     ctrl(&ctx, &mut app, egui::Key::I);
     frame(&ctx, &mut app, vec![]);
     frame(&ctx, &mut app, vec![]);
-    assert_eq!((app.focused_kind(), app.desk.spec().target.as_ref().map(ComponentId::as_str), selected(&app)), (BufferKind::Spec, Some("rust:a::save"), "rust:a::save"));
+    assert_eq!(
+        (app.focused_kind(), app.desk.spec().target.as_ref().map(ComponentId::as_str), selected(&app)),
+        (BufferKind::Spec, Some("rust:a::save"), "rust:a::save")
+    );
 }
 
 #[test]
@@ -108,7 +113,9 @@ fn what_buffers_share_reaches_each_one_shown_or_parked() {
     frame(&ctx, &mut app, vec![]);
     let save = ComponentId::new("rust:a::save");
     let on_save = crate::review::tests::on(&save, None);
-    app.desk.shared.discussions.get_mut().apply(&harness_contracts::ClientEvent::DiscussionUpdated { discussion: crate::review::tests::discussion(1, on_save, harness_contracts::DiscussionStatus::Open) });
+    app.desk.shared.discussions.get_mut().apply(&harness_contracts::ClientEvent::DiscussionUpdated {
+        discussion: crate::review::tests::discussion(1, on_save, harness_contracts::DiscussionStatus::Open),
+    });
     app.desk.shared.types.set(Some(arch_graph::TypeSystem::defaults().unwrap()));
     app.desk.shared.index.set(arch_graph::IndexStatus { stale: vec!["src/a.rs".into()], ..Default::default() });
     app.config.graph.readable_zoom = 0.37;

@@ -45,7 +45,10 @@ impl ChatStreamState {
     pub(super) fn saved_choices(&self) -> Option<Vec<Choice>> {
         self.agents().saved().map(|list| {
             list.iter()
-                .map(|s| Choice::new(s.native_id.to_string(), s.title.clone().unwrap_or_else(|| s.native_id.to_string())).detail(s.updated_at.clone()))
+                .map(|s| {
+                    Choice::new(s.native_id.to_string(), s.title.clone().unwrap_or_else(|| s.native_id.to_string()))
+                        .detail(s.updated_at.clone())
+                })
                 .collect()
         })
     }
@@ -77,7 +80,12 @@ impl ChatStreamState {
     /// it's on screen).
     pub(super) fn seen_now(&mut self, now: f64) {
         let slot = self.ui.slot.clone();
-        let has_updates = self.agents().store().notifications.values().any(|n| n.level == harness_contracts::Level::Update && n.slot.as_ref() == Some(&slot));
+        let has_updates = self
+            .agents()
+            .store()
+            .notifications
+            .values()
+            .any(|n| n.level == harness_contracts::Level::Update && n.slot.as_ref() == Some(&slot));
         if has_updates && self.seen.due(&slot, now, SEEN_EVERY) {
             self.act(Act::Seen);
         }

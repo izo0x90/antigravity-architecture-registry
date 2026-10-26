@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use harness_contracts::{
-    AdapterEvent, Attachment, Failure, RequestId, RequestResponse, RequestStatus, RuntimePolicy, SteerInput,
-    ThreadId, TurnId, TurnInput, TurnStatus,
+    AdapterEvent, Attachment, Failure, RequestId, RequestResponse, RequestStatus, RuntimePolicy, SteerInput, ThreadId, TurnId, TurnInput,
+    TurnStatus,
 };
 use harness_core::{HarnessError, Result, SessionRuntime};
 use tokio::sync::oneshot;
@@ -83,7 +83,9 @@ fn send_prompt(link: Arc<Link>, turn: TurnId, input: TurnInput) {
     let sent = link.cx.send_request(request).on_receiving_result(move |result| async move {
         match result {
             Ok(done) => on_end.shared.end_turn(&ended, convert::stop_reason(&done.stop_reason), None),
-            Err(err) => on_end.shared.end_turn(&ended, TurnStatus::Failed, Some(Failure { message: acp_error(err).to_string(), retryable: false })),
+            Err(err) => {
+                on_end.shared.end_turn(&ended, TurnStatus::Failed, Some(Failure { message: acp_error(err).to_string(), retryable: false }))
+            }
         }
         let next = lock(&on_end.shared.waiting).pop_front();
         if let Some((turn, input)) = next {

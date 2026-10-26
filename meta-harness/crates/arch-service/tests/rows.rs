@@ -26,7 +26,8 @@ fn copy_dir(from: &Path, to: &Path) {
 
 fn open(root: &Path) -> ArchitectureService {
     let facts = arch_service::open_facts(root, &arch_service::Limits::defaults().unwrap()).unwrap();
-    ArchitectureService::open(root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap()
+    ArchitectureService::open(root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts)
+        .unwrap()
 }
 
 /// Every fixture language in one project.
@@ -51,7 +52,17 @@ fn result(service: &ArchitectureService) -> BTreeSet<String> {
     // (what a server's answers are kept by).
     for f in service.file_rows() {
         for r in &f.refs {
-            out.insert(format!("ref {} {}-{} {} {:?} {:?} {} {:?}", f.file.path.as_str(), r.start, r.end, r.name, r.kind, r.target, r.evidence.name(), r.detail.call.as_ref().map(|(i, _)| i)));
+            out.insert(format!(
+                "ref {} {}-{} {} {:?} {:?} {} {:?}",
+                f.file.path.as_str(),
+                r.start,
+                r.end,
+                r.name,
+                r.kind,
+                r.target,
+                r.evidence.name(),
+                r.detail.call.as_ref().map(|(i, _)| i)
+            ));
         }
     }
     out
@@ -71,7 +82,10 @@ fn from_scratch(root: &Path) -> BTreeSet<String> {
 fn same(a: &BTreeSet<String>, b: &BTreeSet<String>, after: &str) {
     let only_a: Vec<_> = a.difference(b).take(5).collect();
     let only_b: Vec<_> = b.difference(a).take(5).collect();
-    assert!(only_a.is_empty() && only_b.is_empty(), "after {after}: kept differs from read again.\nonly kept: {only_a:#?}\nonly read again: {only_b:#?}");
+    assert!(
+        only_a.is_empty() && only_b.is_empty(),
+        "after {after}: kept differs from read again.\nonly kept: {only_a:#?}\nonly read again: {only_b:#?}"
+    );
 }
 
 /// A named change to the files.
@@ -97,20 +111,40 @@ fn every_change_gives_what_reading_everything_again_gives() {
     let rust = root.join("rust/src");
     let steps: Vec<Step> = vec![
         ("a body edited", Box::new(|| edit(&rust.join("util.rs"), "s.to_uppercase()", "s.to_lowercase()"))),
-        ("a function added", Box::new(|| edit(&rust.join("util.rs"), "pub fn helper() {}", "pub fn helper() {}\n\npub fn added() -> u32 { 1 }"))),
+        (
+            "a function added",
+            Box::new(|| edit(&rust.join("util.rs"), "pub fn helper() {}", "pub fn helper() {}\n\npub fn added() -> u32 { 1 }")),
+        ),
         ("a called function renamed", Box::new(|| edit(&rust.join("util.rs"), "pub fn shout(", "pub fn holler("))),
         ("the call follows it", Box::new(|| edit(&rust.join("lib.rs"), "util::shout(input)", "util::holler(input)"))),
-        ("a new file that calls into others", Box::new(|| std::fs::write(rust.join("extra.rs"), "use crate::store::Store;\n\npub fn more() { let s = Store::new(); s.save(\"x\"); crate::util::helper(); }\n").unwrap())),
+        (
+            "a new file that calls into others",
+            Box::new(|| {
+                std::fs::write(
+                    rust.join("extra.rs"),
+                    "use crate::store::Store;\n\npub fn more() { let s = Store::new(); s.save(\"x\"); crate::util::helper(); }\n",
+                )
+                .unwrap()
+            }),
+        ),
         ("its module declared", Box::new(|| edit(&rust.join("lib.rs"), "mod util;", "mod util;\nmod extra;"))),
-        ("a type's methods moved to another file", Box::new(|| std::fs::write(rust.join("extra.rs"), "use crate::store::Store;\n\nimpl Store {\n    pub fn flush(&self) {}\n}\n\npub fn more() { let s = Store::new(); s.flush(); }\n").unwrap())),
+        (
+            "a type's methods moved to another file",
+            Box::new(|| {
+                std::fs::write(rust.join("extra.rs"), "use crate::store::Store;\n\nimpl Store {\n    pub fn flush(&self) {}\n}\n\npub fn more() { let s = Store::new(); s.flush(); }\n").unwrap()
+            }),
+        ),
         ("a file deleted", Box::new(|| std::fs::remove_file(rust.join("extra.rs")).unwrap())),
         ("a placeholder added", Box::new(|| edit(&rust.join("util.rs"), "pub fn helper() {}", "pub fn helper() { todo!() }"))),
-        ("a Python body edited", Box::new(|| {
-            let py = root.join("python");
-            let file = walk_all(&py).into_iter().find(|p| p.extension().is_some_and(|e| e == "py")).unwrap();
-            let text = std::fs::read_to_string(&file).unwrap();
-            std::fs::write(&file, format!("{text}\n\ndef added_here():\n    return 1\n")).unwrap();
-        })),
+        (
+            "a Python body edited",
+            Box::new(|| {
+                let py = root.join("python");
+                let file = walk_all(&py).into_iter().find(|p| p.extension().is_some_and(|e| e == "py")).unwrap();
+                let text = std::fs::read_to_string(&file).unwrap();
+                std::fs::write(&file, format!("{text}\n\ndef added_here():\n    return 1\n")).unwrap();
+            }),
+        ),
     ];
     for (what, step) in steps {
         step();
@@ -149,7 +183,9 @@ fn a_change_reads_only_the_changed_file_and_relinks_its_dependents_from_rows() {
     service.ingest(&root).unwrap();
     let calls = |service: &ArchitectureService, from: &str, to: &str| {
         let graph = service.observed().unwrap();
-        graph.outgoing(&arch_graph::ComponentId::for_symbol("rust", from), Some(arch_graph::RelationKind::Calls)).any(|r| r.target == arch_graph::ComponentId::for_symbol("rust", to))
+        graph
+            .outgoing(&arch_graph::ComponentId::for_symbol("rust", from), Some(arch_graph::RelationKind::Calls))
+            .any(|r| r.target == arch_graph::ComponentId::for_symbol("rust", to))
     };
     assert!(calls(&service, "sample::Upper::apply", "sample::util::shout"));
     // The callee is renamed: the caller's link goes, without the caller being read.
@@ -185,7 +221,16 @@ fn a_change_relinks_only_files_of_its_own_language() {
     edit(&util, "s.to_uppercase()", "s.to_lowercase()");
     let linked = service.refresh(std::slice::from_ref(&util)).unwrap().ingest.linked;
     let graph = service.observed().unwrap();
-    let into_util = |file: &str| service.file_rows().iter().find(|r| r.file.path.as_str() == file).is_some_and(|r| r.refs.iter().any(|x| x.target.as_ref().and_then(|t| graph.component(t)).is_some_and(|c| c.file().is_some_and(|f| f.as_str() == "rust/src/util.rs"))));
+    let into_util = |file: &str| {
+        service.file_rows().iter().find(|r| r.file.path.as_str() == file).is_some_and(|r| {
+            r.refs.iter().any(|x| {
+                x.target
+                    .as_ref()
+                    .and_then(|t| graph.component(t))
+                    .is_some_and(|c| c.file().is_some_and(|f| f.as_str() == "rust/src/util.rs"))
+            })
+        })
+    };
     assert!(linked.iter().all(|p| p.as_str() == "rust/src/util.rs" || into_util(p.as_str())), "{linked:?}");
     same(&result(&service), &from_scratch(&root), "a body edit");
 }
@@ -198,7 +243,10 @@ fn a_link_into_a_changed_file_stays() {
     service.ingest(&root).unwrap();
     let link = |service: &ArchitectureService| {
         let graph = service.observed().unwrap();
-        graph.outgoing(&arch_graph::ComponentId::for_symbol("rust", "sample::run"), Some(arch_graph::RelationKind::Calls)).find(|r| r.target == arch_graph::ComponentId::for_symbol("rust", "sample::store::Store::save")).cloned()
+        graph
+            .outgoing(&arch_graph::ComponentId::for_symbol("rust", "sample::run"), Some(arch_graph::RelationKind::Calls))
+            .find(|r| r.target == arch_graph::ComponentId::for_symbol("rust", "sample::store::Store::save"))
+            .cloned()
     };
     let before = link(&service).expect("run calls Store::save");
     // The callee's file changes around it; the call into it isn't dropped.
@@ -225,7 +273,11 @@ fn every_unresolved_ref_keeps_why() {
     let evidence = |name: &str| rows.iter().filter(|r| r.1 == name).map(|r| r.3.clone()).collect::<BTreeSet<_>>();
     // `helper()` in ambiguous(): two helpers share the name.
     let helper = rows.iter().find(|r| r.0 == "rust/src/lib.rs" && r.1 == "helper" && r.3 == "ambiguous").expect("helper() is ambiguous");
-    assert!(helper.4.contains("sample::util::helper") && helper.4.contains("sample::store::helper"), "the candidates are kept: {}", helper.4);
+    assert!(
+        helper.4.contains("sample::util::helper") && helper.4.contains("sample::store::helper"),
+        "the candidates are kept: {}",
+        helper.4
+    );
     assert!(evidence("to_uppercase").contains("external"), "a call outside the repo: {:?}", evidence("to_uppercase"));
     assert!(evidence("save").contains("name"), "a call linked by name");
     for row in &rows {
@@ -248,7 +300,11 @@ fn the_readers_output_is_rows_and_the_version_is_the_databases() {
     let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
     let files = count("SELECT count(*) FROM files");
     assert!(files >= 6, "{files}");
-    assert_eq!(count("SELECT count(*) FROM components WHERE name = 'run' AND file = 'rust/src/lib.rs' AND name_start IS NOT NULL"), 1, "a definition with its name's place");
+    assert_eq!(
+        count("SELECT count(*) FROM components WHERE name = 'run' AND file = 'rust/src/lib.rs' AND name_start IS NOT NULL"),
+        1,
+        "a definition with its name's place"
+    );
     assert!(count("SELECT count(*) FROM refs WHERE file = 'rust/src/lib.rs' AND kind = 'call'") >= 5, "calls with their names' places");
     assert!(count("SELECT count(*) FROM flows WHERE file = 'rust/src/lib.rs'") >= 1, "data flow");
     assert!(count("SELECT count(*) FROM placeholders WHERE file = 'rust/src/lib.rs'") >= 1, "todo!() is a placeholder");
@@ -286,7 +342,8 @@ fn every_ref_spans_its_name() {
         .map(Result::unwrap)
         .collect();
     let text = |file: &str| std::fs::read_to_string(root.join(file)).unwrap();
-    let wrong: Vec<_> = rows.iter().filter(|(file, start, end, name, _)| text(file).get(*start as usize..*end as usize) != Some(name.as_str())).collect();
+    let wrong: Vec<_> =
+        rows.iter().filter(|(file, start, end, name, _)| text(file).get(*start as usize..*end as usize) != Some(name.as_str())).collect();
     assert!(wrong.is_empty(), "refs not spanning their names: {wrong:#?}");
     assert!(rows.iter().any(|r| r.0 == "rust/src/odd.rs" && r.3 == "default"), "`<T as Trait>::default` is named `default`");
     assert!(rows.iter().any(|r| r.0 == "rust/src/odd.rs" && r.3 == "is_data"));
@@ -356,15 +413,27 @@ fn edits_whose_effect_goes_through_imports_impls_and_type_names_give_what_readin
     let root = fixtures(dir.path());
     let rust = root.join("rust/src");
     let files = [
-        ("bell.rs", "pub trait Loud {\n    fn loud(&self) -> u32;\n}\n\npub struct Bell;\n\npub fn ring(b: &Bell) -> u32 {\n    b.loud()\n}\n\npub fn ring_any(b: &dyn Loud) -> u32 {\n    b.loud()\n}\n\npub fn ring_new() -> u32 {\n    let b = Bell;\n    b.loud()\n}\n"),
+        (
+            "bell.rs",
+            "pub trait Loud {\n    fn loud(&self) -> u32;\n}\n\npub struct Bell;\n\npub fn ring(b: &Bell) -> u32 {\n    b.loud()\n}\n\npub fn ring_any(b: &dyn Loud) -> u32 {\n    b.loud()\n}\n\npub fn ring_new() -> u32 {\n    let b = Bell;\n    b.loud()\n}\n",
+        ),
         ("imp.rs", "use crate::bell::{Bell, Loud};\n\nimpl Loud for Bell {\n    fn loud(&self) -> u32 {\n        1\n    }\n}\n"),
-        ("g.rs", "use crate::util::fresh as fr;\nuse std::fmt::Display;\n\npub fn calls_fresh() {\n    fr();\n}\n\npub fn shows(x: &dyn Display) -> std::fmt::Result {\n    crate::util::helper();\n    crate::util::nope();\n    Ok(())\n}\n"),
+        (
+            "g.rs",
+            "use crate::util::fresh as fr;\nuse std::fmt::Display;\n\npub fn calls_fresh() {\n    fr();\n}\n\npub fn shows(x: &dyn Display) -> std::fmt::Result {\n    crate::util::helper();\n    crate::util::nope();\n    Ok(())\n}\n",
+        ),
         ("g2.rs", "use crate::util::*;\n\npub fn keep2(s: &Store) {\n    s.save(\"x\");\n}\n"),
         ("h.rs", "use crate::store::Store;\n\nimpl Store {\n    pub fn flush(&self) {}\n}\n"),
         ("g3.rs", "use crate::store::Store;\n\npub fn use_flush(s: &Store) {\n    s.flush();\n}\n"),
         ("reex.rs", "pub use crate::bell::ring;\n"),
-        ("g5.rs", "fn make_fn() -> fn() {\n    crate::util::helper\n}\n\npub fn chain() {\n    make_fn()();\n    crate::util::helper();\n}\n"),
-        ("kc.rs", "pub trait Chime {\n    fn chime(&self) -> u32 {\n        1\n    }\n\n    fn strike(&self);\n}\n\npub trait Other {\n    fn chime(&self) -> u32 {\n        2\n    }\n\n    fn strike(&self);\n}\n\npub struct Gong;\n\npub struct Holder<T>(pub T);\n"),
+        (
+            "g5.rs",
+            "fn make_fn() -> fn() {\n    crate::util::helper\n}\n\npub fn chain() {\n    make_fn()();\n    crate::util::helper();\n}\n",
+        ),
+        (
+            "kc.rs",
+            "pub trait Chime {\n    fn chime(&self) -> u32 {\n        1\n    }\n\n    fn strike(&self);\n}\n\npub trait Other {\n    fn chime(&self) -> u32 {\n        2\n    }\n\n    fn strike(&self);\n}\n\npub struct Gong;\n\npub struct Holder<T>(pub T);\n",
+        ),
         ("kg.rs", "use crate::kc::{Chime, Gong, Other};\n\nimpl Chime for Gong {\n    fn strike(&self) {}\n}\n"),
         ("ku.rs", "use crate::kc::Gong;\n\npub fn hit(g: &Gong) -> u32 {\n    g.chime()\n}\n"),
         ("kg2.rs", "use crate::kc::{Chime, Holder, Other};\n\nimpl<T> Chime for Holder<T> {\n    fn strike(&self) {}\n}\n"),
@@ -377,24 +446,53 @@ fn edits_whose_effect_goes_through_imports_impls_and_type_names_give_what_readin
     for (name, text) in files {
         std::fs::write(rust.join(name), text).unwrap();
     }
-    edit(&rust.join("lib.rs"), "mod util;", "mod util;\nmod bell;\nmod imp;\nmod g;\nmod g2;\nmod h;\nmod g3;\nmod reex;\nmod g4;\nmod g5;\nmod kc;\nmod kg;\nmod ku;\nmod pot;\nmod stir;\nmod cook;\nmod kg2;\nmod hu;");
+    edit(
+        &rust.join("lib.rs"),
+        "mod util;",
+        "mod util;\nmod bell;\nmod imp;\nmod g;\nmod g2;\nmod h;\nmod g3;\nmod reex;\nmod g4;\nmod g5;\nmod kc;\nmod kg;\nmod ku;\nmod pot;\nmod stir;\nmod cook;\nmod kg2;\nmod hu;",
+    );
     // A base two levels up.
-    std::fs::write(root.join("python/pz.py"), "class Base0:\n    def m(self):\n        return 1\n\n\nclass Base1:\n    def m(self):\n        return 2\n").unwrap();
+    std::fs::write(
+        root.join("python/pz.py"),
+        "class Base0:\n    def m(self):\n        return 1\n\n\nclass Base1:\n    def m(self):\n        return 2\n",
+    )
+    .unwrap();
     std::fs::write(root.join("python/pmid.py"), "from pz import Base0, Base1\n\n\nclass Mid(Base0):\n    pass\n").unwrap();
     std::fs::write(root.join("python/pleaf.py"), "from pmid import Mid\n\n\nclass Leaf(Mid):\n    pass\n").unwrap();
     std::fs::write(root.join("python/pu2.py"), "from pleaf import Leaf\n\n\ndef run2(b: Leaf):\n    return b.m()\n").unwrap();
-    std::fs::write(root.join("typescript/src/tz.ts"), "export class Base0 {\n  m(): number {\n    return 1;\n  }\n}\n\nexport class Base1 {\n  m(): number {\n    return 2;\n  }\n}\n").unwrap();
-    std::fs::write(root.join("typescript/src/tmid.ts"), "import { Base0, Base1 } from \"./tz\";\n\nexport class Mid extends Base0 {}\n").unwrap();
+    std::fs::write(
+        root.join("typescript/src/tz.ts"),
+        "export class Base0 {\n  m(): number {\n    return 1;\n  }\n}\n\nexport class Base1 {\n  m(): number {\n    return 2;\n  }\n}\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("typescript/src/tmid.ts"), "import { Base0, Base1 } from \"./tz\";\n\nexport class Mid extends Base0 {}\n")
+        .unwrap();
     std::fs::write(root.join("typescript/src/tleaf.ts"), "import { Mid } from \"./tmid\";\n\nexport class Leaf extends Mid {}\n").unwrap();
-    std::fs::write(root.join("typescript/src/tu2.ts"), "import { Leaf } from \"./tleaf\";\n\nexport function run2(b: Leaf): number {\n  return b.m();\n}\n").unwrap();
+    std::fs::write(
+        root.join("typescript/src/tu2.ts"),
+        "import { Leaf } from \"./tleaf\";\n\nexport function run2(b: Leaf): number {\n  return b.m();\n}\n",
+    )
+    .unwrap();
     // Python: a call through a class whose base another file names.
-    std::fs::write(root.join("python/pa.py"), "class A:\n    def m(self):\n        return 1\n\n\nclass C:\n    def m(self):\n        return 2\n").unwrap();
+    std::fs::write(
+        root.join("python/pa.py"),
+        "class A:\n    def m(self):\n        return 1\n\n\nclass C:\n    def m(self):\n        return 2\n",
+    )
+    .unwrap();
     std::fs::write(root.join("python/pb.py"), "from pa import A, C\n\n\nclass B(A):\n    pass\n").unwrap();
     std::fs::write(root.join("python/pu.py"), "from pb import B\n\n\ndef run(b: B):\n    return b.m()\n").unwrap();
     // TypeScript: the same through `extends`.
-    std::fs::write(root.join("typescript/src/ta.ts"), "export class A {\n  m(): number {\n    return 1;\n  }\n}\n\nexport class C {\n  m(): number {\n    return 2;\n  }\n}\n").unwrap();
+    std::fs::write(
+        root.join("typescript/src/ta.ts"),
+        "export class A {\n  m(): number {\n    return 1;\n  }\n}\n\nexport class C {\n  m(): number {\n    return 2;\n  }\n}\n",
+    )
+    .unwrap();
     std::fs::write(root.join("typescript/src/tb.ts"), "import { A, C } from \"./ta\";\n\nexport class B extends A {}\n").unwrap();
-    std::fs::write(root.join("typescript/src/tu.ts"), "import { B } from \"./tb\";\n\nexport function run(b: B): number {\n  return b.m();\n}\n").unwrap();
+    std::fs::write(
+        root.join("typescript/src/tu.ts"),
+        "import { B } from \"./tb\";\n\nexport function run(b: B): number {\n  return b.m();\n}\n",
+    )
+    .unwrap();
     let service = open(&root);
     service.ingest(&root).unwrap();
     same(&result(&service), &from_scratch(&root), "the first read");
@@ -428,7 +526,13 @@ fn edits_whose_effect_goes_through_imports_impls_and_type_names_give_what_readin
     has("rust/src/g.rs", ("helper", "call", "name"));
     // Each ref spans its name only.
     let text = std::fs::read_to_string(rust.join("g.rs")).unwrap();
-    let spans: Vec<(String, u32, u32)> = db(&root).prepare("SELECT name, start, \"end\" FROM refs WHERE file = 'rust/src/g.rs'").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect();
+    let spans: Vec<(String, u32, u32)> = db(&root)
+        .prepare("SELECT name, start, \"end\" FROM refs WHERE file = 'rust/src/g.rs'")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
     for (name, start, end) in &spans {
         assert_eq!(&text[*start as usize..*end as usize], name, "the ref spans its name");
     }
@@ -437,25 +541,52 @@ fn edits_whose_effect_goes_through_imports_impls_and_type_names_give_what_readin
     let steps: Vec<Step> = vec![
         ("a trait's impl removed in another file", Box::new(|| edit(&rust.join("imp.rs"), impl_text, ""))),
         ("the impl added back", Box::new(|| edit(&rust.join("imp.rs"), "Loud};\n\n", &format!("Loud}};\n\n{impl_text}")))),
-        ("a name an alias imports defined later", Box::new(|| edit(&rust.join("util.rs"), "pub fn helper() {}", "pub fn helper() {}\n\npub fn fresh() {}"))),
-        ("a same-named type added where a glob import reaches", Box::new(|| edit(&rust.join("util.rs"), "pub fn helper() {}", "pub fn helper() {}\n\npub struct Store;"))),
-        ("a type renamed while its methods live in another file", Box::new(|| edit(&rust.join("store.rs"), "pub struct Store {", "pub struct Repo {"))),
+        (
+            "a name an alias imports defined later",
+            Box::new(|| edit(&rust.join("util.rs"), "pub fn helper() {}", "pub fn helper() {}\n\npub fn fresh() {}")),
+        ),
+        (
+            "a same-named type added where a glob import reaches",
+            Box::new(|| edit(&rust.join("util.rs"), "pub fn helper() {}", "pub fn helper() {}\n\npub struct Store;")),
+        ),
+        (
+            "a type renamed while its methods live in another file",
+            Box::new(|| edit(&rust.join("store.rs"), "pub struct Store {", "pub struct Repo {")),
+        ),
         ("a re-export pointed elsewhere", Box::new(|| edit(&rust.join("reex.rs"), "crate::bell::ring;", "crate::bell::ring_new as ring;"))),
         ("a re-export removed", Box::new(|| edit(&rust.join("reex.rs"), "pub use crate::bell::ring_new as ring;\n", ""))),
-        ("a type's impl switched to another trait in another file", Box::new(|| edit(&rust.join("kg.rs"), "impl Chime for Gong", "impl Other for Gong"))),
+        (
+            "a type's impl switched to another trait in another file",
+            Box::new(|| edit(&rust.join("kg.rs"), "impl Chime for Gong", "impl Other for Gong")),
+        ),
         ("a Python class's base changed in another file", Box::new(|| edit(&root.join("python/pb.py"), "class B(A):", "class B(C):"))),
-        ("a TypeScript class's base changed in another file", Box::new(|| edit(&root.join("typescript/src/tb.ts"), "extends A", "extends C"))),
-        ("a generic type's impl switched to another trait in another file", Box::new(|| edit(&rust.join("kg2.rs"), "impl<T> Chime for Holder<T>", "impl<T> Other for Holder<T>"))),
+        (
+            "a TypeScript class's base changed in another file",
+            Box::new(|| edit(&root.join("typescript/src/tb.ts"), "extends A", "extends C")),
+        ),
+        (
+            "a generic type's impl switched to another trait in another file",
+            Box::new(|| edit(&rust.join("kg2.rs"), "impl<T> Chime for Holder<T>", "impl<T> Other for Holder<T>")),
+        ),
         ("a Python base two levels up changed", Box::new(|| edit(&root.join("python/pmid.py"), "class Mid(Base0):", "class Mid(Base1):"))),
-        ("a TypeScript base two levels up changed", Box::new(|| edit(&root.join("typescript/src/tmid.ts"), "extends Base0", "extends Base1"))),
-        ("a type renamed while its impl lives in another file", Box::new(|| {
-            edit(&rust.join("pot.rs"), "pub struct Pot;", "pub struct Kettle;");
-            edit(&rust.join("pot.rs"), "-> Pot {\n    Pot", "-> Kettle {\n    Kettle");
-        })),
+        (
+            "a TypeScript base two levels up changed",
+            Box::new(|| edit(&root.join("typescript/src/tmid.ts"), "extends Base0", "extends Base1")),
+        ),
+        (
+            "a type renamed while its impl lives in another file",
+            Box::new(|| {
+                edit(&rust.join("pot.rs"), "pub struct Pot;", "pub struct Kettle;");
+                edit(&rust.join("pot.rs"), "-> Pot {\n    Pot", "-> Kettle {\n    Kettle");
+            }),
+        ),
     ];
     let calls = |service: &ArchitectureService, lang: &str, from: &str| -> Vec<String> {
         let graph = service.observed().unwrap();
-        graph.outgoing(&arch_graph::ComponentId::for_symbol(lang, from), Some(arch_graph::RelationKind::Calls)).map(|r| r.target.as_str().to_owned()).collect()
+        graph
+            .outgoing(&arch_graph::ComponentId::for_symbol(lang, from), Some(arch_graph::RelationKind::Calls))
+            .map(|r| r.target.as_str().to_owned())
+            .collect()
     };
     // Calls made through a type whose impl or base lives in another file.
     let through = |service: &ArchitectureService| {
@@ -469,14 +600,34 @@ fn edits_whose_effect_goes_through_imports_impls_and_type_names_give_what_readin
         ]
     };
     let ids = |list: [&str; 6]| list.map(|id| vec![id.to_owned()]);
-    assert_eq!(through(&service), ids(["rust:sample::kc::Chime::chime", "python:python.pa.A.m", "typescript:typescript.src.ta.A.m", "rust:sample::kc::Chime::chime", "python:python.pz.Base0.m", "typescript:typescript.src.tz.Base0.m"]));
+    assert_eq!(
+        through(&service),
+        ids([
+            "rust:sample::kc::Chime::chime",
+            "python:python.pa.A.m",
+            "typescript:typescript.src.ta.A.m",
+            "rust:sample::kc::Chime::chime",
+            "python:python.pz.Base0.m",
+            "typescript:typescript.src.tz.Base0.m"
+        ])
+    );
     for (what, step) in steps {
         step();
         service.refresh(&walk_all(&root)).unwrap();
         same(&result(&service), &from_scratch(&root), what);
     }
     // Each now goes where the changed impl or base leads.
-    assert_eq!(through(&service), ids(["rust:sample::kc::Other::chime", "python:python.pa.C.m", "typescript:typescript.src.ta.C.m", "rust:sample::kc::Other::chime", "python:python.pz.Base1.m", "typescript:typescript.src.tz.Base1.m"]));
+    assert_eq!(
+        through(&service),
+        ids([
+            "rust:sample::kc::Other::chime",
+            "python:python.pa.C.m",
+            "typescript:typescript.src.ta.C.m",
+            "rust:sample::kc::Other::chime",
+            "python:python.pz.Base1.m",
+            "typescript:typescript.src.tz.Base1.m"
+        ])
+    );
 }
 
 #[test]
@@ -524,27 +675,71 @@ fn a_reason_says_what_a_name_really_is() {
     service.ingest(&root).unwrap();
     let rows = service.file_rows();
     let reason = |file: &str, name: &str| -> Vec<(String, Option<String>)> {
-        rows.iter().filter(|f| f.file.path.as_str() == file).flat_map(|f| f.refs.iter().filter(|r| r.name == name).map(|r| (r.evidence.name().to_owned(), r.target.as_ref().map(|t| t.as_str().to_owned())))).collect()
+        rows.iter()
+            .filter(|f| f.file.path.as_str() == file)
+            .flat_map(|f| {
+                f.refs
+                    .iter()
+                    .filter(|r| r.name == name)
+                    .map(|r| (r.evidence.name().to_owned(), r.target.as_ref().map(|t| t.as_str().to_owned())))
+            })
+            .collect()
     };
     // Through the crate root's re-exports: the real definitions.
-    assert!(reason("src/lib.rs", "open").contains(&("name".into(), Some("rust:proj::store::open".into()))), "{:?}", reason("src/lib.rs", "open"));
-    assert!(reason("src/store.rs", "Kind").iter().any(|(e, t)| e == "name" && t.as_deref() == Some("rust:proj::kinds::Kind")), "{:?}", reason("src/store.rs", "Kind"));
+    assert!(
+        reason("src/lib.rs", "open").contains(&("name".into(), Some("rust:proj::store::open".into()))),
+        "{:?}",
+        reason("src/lib.rs", "open")
+    );
+    assert!(
+        reason("src/store.rs", "Kind").iter().any(|(e, t)| e == "name" && t.as_deref() == Some("rust:proj::kinds::Kind")),
+        "{:?}",
+        reason("src/store.rs", "Kind")
+    );
     // `Self::` in an impl: the type's own; a derived one, a member.
-    assert!(reason("src/kinds.rs", "make").contains(&("name".into(), Some("rust:proj::kinds::Kind::make".into()))), "{:?}", reason("src/kinds.rs", "make"));
+    assert!(
+        reason("src/kinds.rs", "make").contains(&("name".into(), Some("rust:proj::kinds::Kind::make".into()))),
+        "{:?}",
+        reason("src/kinds.rs", "make")
+    );
     assert!(reason("src/kinds.rs", "default").contains(&("member".into(), None)), "{:?}", reason("src/kinds.rs", "default"));
     // `Self` as a type is the enclosing one.
-    assert!(reason("src/kinds.rs", "Self").iter().all(|(e, t)| e == "name" && t.as_deref() == Some("rust:proj::kinds::Kind")), "{:?}", reason("src/kinds.rs", "Self"));
+    assert!(
+        reason("src/kinds.rs", "Self").iter().all(|(e, t)| e == "name" && t.as_deref() == Some("rust:proj::kinds::Kind")),
+        "{:?}",
+        reason("src/kinds.rs", "Self")
+    );
     // A variant written as a struct; a constant and a type alias (items no
     // card shows): something of the repo, not missing.
     let square: Vec<_> = reason("src/kinds.rs", "Shape::Square").into_iter().chain(reason("src/kinds.rs", "Square")).collect();
     assert!(!square.is_empty() && square.iter().all(|(e, _)| e == "member"), "{square:?}");
-    assert!(!reason("src/store.rs", "LIMIT").is_empty() && reason("src/store.rs", "LIMIT").iter().all(|(e, _)| e == "member"), "{:?}", reason("src/store.rs", "LIMIT"));
-    assert!(!reason("src/store.rs", "Res").is_empty() && reason("src/store.rs", "Res").iter().all(|(e, _)| e == "member"), "{:?}", reason("src/store.rs", "Res"));
+    assert!(
+        !reason("src/store.rs", "LIMIT").is_empty() && reason("src/store.rs", "LIMIT").iter().all(|(e, _)| e == "member"),
+        "{:?}",
+        reason("src/store.rs", "LIMIT")
+    );
+    assert!(
+        !reason("src/store.rs", "Res").is_empty() && reason("src/store.rs", "Res").iter().all(|(e, _)| e == "member"),
+        "{:?}",
+        reason("src/store.rs", "Res")
+    );
     // A path through the crate root's re-export, and a re-export one module
     // up (`use super::Rect`, the parent having `pub use layout::Rect`).
-    assert!(reason("src/store.rs", "Kind").iter().all(|(e, t)| e == "name" && t.as_deref() == Some("rust:proj::kinds::Kind")), "{:?}", reason("src/store.rs", "Kind"));
-    assert!(reason("src/store.rs", "one").contains(&("name".into(), Some("rust:proj::kinds::Kind::one".into()))), "{:?}", reason("src/store.rs", "one"));
-    assert!(reason("src/tree/held.rs", "Rect").iter().all(|(e, t)| e == "name" && t.as_deref() == Some("rust:proj::tree::layout::Rect")), "{:?}", reason("src/tree/held.rs", "Rect"));
+    assert!(
+        reason("src/store.rs", "Kind").iter().all(|(e, t)| e == "name" && t.as_deref() == Some("rust:proj::kinds::Kind")),
+        "{:?}",
+        reason("src/store.rs", "Kind")
+    );
+    assert!(
+        reason("src/store.rs", "one").contains(&("name".into(), Some("rust:proj::kinds::Kind::one".into()))),
+        "{:?}",
+        reason("src/store.rs", "one")
+    );
+    assert!(
+        reason("src/tree/held.rs", "Rect").iter().all(|(e, t)| e == "name" && t.as_deref() == Some("rust:proj::tree::layout::Rect")),
+        "{:?}",
+        reason("src/tree/held.rs", "Rect")
+    );
     // A variant and a derived method: members of a repo type, not components.
     assert!(reason("src/lib.rs", "Bad").contains(&("member".into(), None)), "{:?}", reason("src/lib.rs", "Bad"));
     assert!(reason("src/lib.rs", "default").contains(&("member".into(), None)), "{:?}", reason("src/lib.rs", "default"));

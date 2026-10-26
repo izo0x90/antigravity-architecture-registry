@@ -34,7 +34,18 @@ fn focused_it_types_every_key_into_its_program_but_the_leave_keys() {
     frame(&ctx, &mut app, press(egui::Key::Tab, false));
     frame(&ctx, &mut app, press(egui::Key::ArrowUp, false));
     ctrl(&ctx, &mut app, egui::Key::C);
-    assert_eq!(inputs(&app), [text("l"), text("s"), named(TermKey::Enter, false), named(TermKey::Tab, false), named(TermKey::Up, false), named(TermKey::Char('c'), true)], "keys the cockpit binds (Tab, Enter) are the program's while typing");
+    assert_eq!(
+        inputs(&app),
+        [
+            text("l"),
+            text("s"),
+            named(TermKey::Enter, false),
+            named(TermKey::Tab, false),
+            named(TermKey::Up, false),
+            named(TermKey::Char('c'), true)
+        ],
+        "keys the cockpit binds (Tab, Enter) are the program's while typing"
+    );
     assert!(matches!(app.input_mode, InputMode::Insert { .. }), "Tab didn't move to another panel");
 
     // Escape once: held for a moment (it may be the first of two), then the program's.
@@ -96,7 +107,12 @@ fn each_panel_showing_it_is_a_reader_and_one_not_drawn_lets_its_socket_go() {
     for _ in 0..3 {
         frame(&ctx, &mut app, vec![]);
     }
-    let readers = app.desk.all_of::<TerminalBuffer>(BufferKind::Terminal).iter().filter(|t| t.sent().iter().any(|s| matches!(s, ToTerminal::Size { .. }))).count();
+    let readers = app
+        .desk
+        .all_of::<TerminalBuffer>(BufferKind::Terminal)
+        .iter()
+        .filter(|t| t.sent().iter().any(|s| matches!(s, ToTerminal::Size { .. })))
+        .count();
     assert_eq!(readers, 2, "two panels, two readers, each its own size");
     // Its panel shows something else (it's hidden): its socket goes.
     app.desk.panels.focus(0);
@@ -112,7 +128,10 @@ fn with_no_terminal_one_is_opened_and_shown_and_an_ended_one_starts_again() {
     let (ctx, mut app) = app_with_graph();
     focus(&ctx, &mut app, BufferKind::Terminal);
     let asked = sent(&app);
-    assert!(asked.contains(&"GET /api/terminals".to_owned()) && !asked.contains(&"POST /api/terminals".to_owned()), "which there are asked first: none heard of isn't none: {asked:?}");
+    assert!(
+        asked.contains(&"GET /api/terminals".to_owned()) && !asked.contains(&"POST /api/terminals".to_owned()),
+        "which there are asked first: none heard of isn't none: {asked:?}"
+    );
     app.desk.shared.terminals.get_mut().answered_list(Vec::new());
     frame(&ctx, &mut app, vec![]);
     frame(&ctx, &mut app, vec![]);
@@ -164,7 +183,10 @@ fn the_pop_up_terminal_is_its_own_over_everything_and_its_key_hides_it() {
     assert!(!sent(&app).contains(&"POST /api/terminals".to_owned()), "no new one");
     assert_eq!(app.input_mode, InputMode::Insert { at: Host::Look });
     let views = app.saved_ui().views;
-    assert!(views.iter().any(|(b, p)| *b == pop && p.read::<serde_json::Value>().is_some_and(|v| v["id"] == "t9")), "its terminal is in its place: {views:?}");
+    assert!(
+        views.iter().any(|(b, p)| *b == pop && p.read::<serde_json::Value>().is_some_and(|v| v["id"] == "t9")),
+        "its terminal is in its place: {views:?}"
+    );
 }
 
 /// Out of typing, in the terminal, its cursor on the live screen's last line.
@@ -182,7 +204,13 @@ fn search_goes_through_the_whole_scrollback_on_the_server() {
     app.desk.terminal_mut().arrive(vec![crate::terminal::tests::screen_under(&["$ ls", "Cargo.toml  src", "$ "], 600)]);
     not_typing(&ctx, &mut app);
     keys(&ctx, &mut app, "/make");
-    let asked: Vec<String> = app.desk.terminal().sent().into_iter().filter_map(|s| if let ToTerminal::Search { query } = s { Some(query) } else { None }).collect();
+    let asked: Vec<String> = app
+        .desk
+        .terminal()
+        .sent()
+        .into_iter()
+        .filter_map(|s| if let ToTerminal::Search { query } = s { Some(query) } else { None })
+        .collect();
     assert_eq!(asked.last().map(String::as_str), Some("make"), "the server is asked as it's typed: {asked:?}");
     // The server found it 500 lines up: line 100.
     let found = harness_contracts::Found { line: 100, col: 2, len: 4, text: "$ make all".into() };
@@ -202,18 +230,33 @@ fn a_file_on_a_terminal_line_is_gone_to_in_the_code() {
     let spots = app.desk.terminal().spots();
     let link = spots.iter().find(|s| s.key.ends_with(":7")).expect("the file's hint, at its column");
     app.desk.view_mut(BufferKind::Terminal).move_to(&link.key.clone());
-    assert_eq!(app.desk.terminal().target(), Some(Target::Span { file: "src/b.rs".into(), start: 9, end: 9 }), "on the file, the target is its line");
+    assert_eq!(
+        app.desk.terminal().target(),
+        Some(Target::Span { file: "src/b.rs".into(), start: 9, end: 9 }),
+        "on the file, the target is its line"
+    );
     frame(&ctx, &mut app, key("g"));
     frame(&ctx, &mut app, key("d"));
     frame(&ctx, &mut app, vec![]);
     let calls = sent(&app);
-    assert!(calls.iter().any(|c| c.contains("src/b.rs") || c.contains("src%2Fb.rs")), "the code view opens the file: {calls:?} {:?} {:?}", app.note, app.desk.view(app.focused_kind()).target());
+    assert!(
+        calls.iter().any(|c| c.contains("src/b.rs") || c.contains("src%2Fb.rs")),
+        "the code view opens the file: {calls:?} {:?} {:?}",
+        app.note,
+        app.desk.view(app.focused_kind()).target()
+    );
 }
 
 /// The lines the terminal asked its server for last, answered (it asks
 /// one at a time; an answer it has already is let go).
 pub(super) fn answer_lines(app: &mut CockpitApp) {
-    let asked = app.desk.terminal().sent().into_iter().filter_map(|s| if let ToTerminal::Lines { from, count } = s { Some((from, count)) } else { None }).next_back();
+    let asked = app
+        .desk
+        .terminal()
+        .sent()
+        .into_iter()
+        .filter_map(|s| if let ToTerminal::Lines { from, count } = s { Some((from, count)) } else { None })
+        .next_back();
     if let Some((from, count)) = asked {
         app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered_lines(from, count)]);
     }
@@ -315,7 +358,10 @@ fn scrolled_back_while_typing_the_programs_cursor_stays_on_the_grid_for_the_brow
     app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(1000, 0)]);
     focus(&ctx, &mut app, BufferKind::Terminal);
     let grid = app.desk.terminal().typing_rect().expect("drawn");
-    let wheel = vec![egui::Event::PointerMoved(grid.center()), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 5000.0), modifiers: egui::Modifiers::NONE }];
+    let wheel = vec![
+        egui::Event::PointerMoved(grid.center()),
+        egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 5000.0), modifiers: egui::Modifiers::NONE },
+    ];
     frame(&ctx, &mut app, wheel);
     let ime = frame(&ctx, &mut app, vec![]).platform_output.ime.expect("typing: where its cursor is");
     assert!(matches!(app.input_mode, InputMode::Insert { .. }), "still typing");
@@ -419,7 +465,11 @@ fn the_cursor_is_there_only_while_not_typing_from_the_programs_line_and_never_on
 fn a_place_in_a_terminal_follows_new_layouts_a_go_to_under_way_and_says_when_it_cannot_be_gone_back_to() {
     let (ctx, mut app) = full_app();
     frame(&ctx, &mut app, vec![]);
-    assert!(app.desk.net.answer("GET /api/terminals", 200, &serde_json::json!([crate::terminals::tests::terminal("t1"), crate::terminals::tests::terminal("t2")])));
+    assert!(app.desk.net.answer(
+        "GET /api/terminals",
+        200,
+        &serde_json::json!([crate::terminals::tests::terminal("t1"), crate::terminals::tests::terminal("t2")])
+    ));
     app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(1000, 0)]);
     not_typing(&ctx, &mut app);
     app.run_move(BufferKind::Terminal, Move::Motion(Motion::Line(1010)), None, &ctx);
@@ -434,7 +484,8 @@ fn a_place_in_a_terminal_follows_new_layouts_a_go_to_under_way_and_says_when_it_
     app.desk.view_mut(BufferKind::Terminal).motion(crate::nav::Motion::Last, 1);
     app.desk.view_mut(BufferKind::Terminal).restore(&place);
     frame(&ctx, &mut app, vec![]);
-    let asked = app.desk.terminal().sent().into_iter().filter(|s| matches!(s, ToTerminal::LineNow { shell: 1, first: 1010, last: 1010 })).count();
+    let asked =
+        app.desk.terminal().sent().into_iter().filter(|s| matches!(s, ToTerminal::LineNow { shell: 1, first: 1010, last: 1010 })).count();
     assert_eq!(asked, 2, "asked where line 1010 is now: for the cursor the new width moved, and for the place");
     assert_eq!(cursor(&app), None, "not landed until the server says");
     answer_line_now(&mut app, Some(8));
@@ -446,14 +497,19 @@ fn a_place_in_a_terminal_follows_new_layouts_a_go_to_under_way_and_says_when_it_
     assert_eq!(cursor(&app), None);
     assert!(app.desk.terminal().status().is_empty(), "following the output");
     // A go-to under way (its lines not here yet): its place is where it's going.
-    let target = crate::nav::Target::TerminalLines { terminal: harness_contracts::TerminalId::new("t1"), shell: 1, first: 1012, last: 1012 };
+    let target =
+        crate::nav::Target::TerminalLines { terminal: harness_contracts::TerminalId::new("t1"), shell: 1, first: 1012, last: 1012 };
     let harness_contracts::FromTerminal::Screen { mut update } = crate::terminal::tests::numbered(1008, 0) else { unreachable!() };
     (update.size.cols, update.alternate) = (60, true);
     app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::Screen { update }]);
     frame(&ctx, &mut app, vec![]);
     app.desk.view_mut(BufferKind::Terminal).show_target(&target).unwrap();
     frame(&ctx, &mut app, vec![]);
-    assert_eq!(app.desk.view(BufferKind::Terminal).place_in_words(&app.desk.view(BufferKind::Terminal).place()), "terminal t1 line 1012", "kept while a program has the whole screen");
+    assert_eq!(
+        app.desk.view(BufferKind::Terminal).place_in_words(&app.desk.view(BufferKind::Terminal).place()),
+        "terminal t1 line 1012",
+        "kept while a program has the whole screen"
+    );
     let harness_contracts::FromTerminal::Screen { mut update } = crate::terminal::tests::numbered(1008, 0) else { unreachable!() };
     update.size.cols = 60;
     app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::Screen { update }]);
@@ -473,7 +529,13 @@ fn a_place_in_a_terminal_follows_new_layouts_a_go_to_under_way_and_says_when_it_
 /// The server's answer to where the lines last asked about are now:
 /// `moved` further on (none: where they were).
 pub(super) fn answer_line_now(app: &mut CockpitApp, moved: Option<i64>) {
-    let asked = app.desk.terminal().sent().into_iter().filter_map(|s| if let ToTerminal::LineNow { shell, first, last } = s { Some((shell, first, last)) } else { None }).next_back();
+    let asked = app
+        .desk
+        .terminal()
+        .sent()
+        .into_iter()
+        .filter_map(|s| if let ToTerminal::LineNow { shell, first, last } = s { Some((shell, first, last)) } else { None })
+        .next_back();
     let Some((shell, first, last)) = asked else { panic!("nothing asked") };
     let now = moved.map(|by| (first.saturating_add_signed(by), last.saturating_add_signed(by))).or(Some((first, last)));
     app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::LineNow { shell, first, last, now }]);
@@ -487,7 +549,17 @@ pub(super) fn with_commands(top: u64, commands: Vec<harness_contracts::TerminalC
 }
 
 pub(super) fn command(id: u64, prompt: u64, end: Option<u64>, text: &str) -> harness_contracts::TerminalCommand {
-    harness_contracts::TerminalCommand { id, prompt, input: prompt, input_col: 2, output: Some(prompt + 1), end, text: text.into(), code: Some(0), ran_ms: Some(5) }
+    harness_contracts::TerminalCommand {
+        id,
+        prompt,
+        input: prompt,
+        input_col: 2,
+        output: Some(prompt + 1),
+        end,
+        text: text.into(),
+        code: Some(0),
+        ran_ms: Some(5),
+    }
 }
 
 #[test]
@@ -501,7 +573,10 @@ fn not_typing_it_moves_by_command_and_copies_one_s_output_or_runs_it_again() {
         update.rows[23].1 = vec![harness_contracts::Run { text: format!("$ {typed}"), style: Default::default(), wide: false }];
         harness_contracts::FromTerminal::Screen { update }
     };
-    app.desk.terminal_mut().arrive(vec![at_prompt("", vec![command(1, 1003, Some(1008), "make"), command(2, 1008, Some(1012), "make test"), waiting.clone()])]);
+    app.desk.terminal_mut().arrive(vec![at_prompt(
+        "",
+        vec![command(1, 1003, Some(1008), "make"), command(2, 1008, Some(1012), "make test"), waiting.clone()],
+    )]);
     not_typing(&ctx, &mut app);
     keys(&ctx, &mut app, "[[");
     assert_eq!(cursor(&app).as_deref(), Some("1008"), "from the program's line (in the third, running), the one before");
@@ -516,7 +591,8 @@ fn not_typing_it_moves_by_command_and_copies_one_s_output_or_runs_it_again() {
     assert!(app.desk.terminal().sent().contains(&ToTerminal::CommandOutput { command: 2 }), "asked for");
     app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::CommandOutput { command: 2, text: Some("ok 1\nok 2".into()) }]);
     let out = frame(&ctx, &mut app, vec![]);
-    let copied: Vec<&String> = out.platform_output.commands.iter().filter_map(|c| if let egui::OutputCommand::CopyText(t) = c { Some(t) } else { None }).collect();
+    let copied: Vec<&String> =
+        out.platform_output.commands.iter().filter_map(|c| if let egui::OutputCommand::CopyText(t) = c { Some(t) } else { None }).collect();
     assert_eq!(copied, ["ok 1\nok 2"]);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.note.as_deref(), Some("Copied its output (2 lines)."));
@@ -530,7 +606,10 @@ fn not_typing_it_moves_by_command_and_copies_one_s_output_or_runs_it_again() {
     // is, `?`: it doesn't apply here; run, it says why).
     let mut typed = command(3, 1023, None, "");
     (typed.output, typed.input_col) = (None, 0);
-    for (screen, how) in [(at_prompt("rm -rf out", vec![typed]), "the cursor moved on"), (at_prompt("rm -rf out", vec![waiting.clone()]), "the cursor at its start")] {
+    for (screen, how) in [
+        (at_prompt("rm -rf out", vec![typed]), "the cursor moved on"),
+        (at_prompt("rm -rf out", vec![waiting.clone()]), "the cursor at its start"),
+    ] {
         app.desk.terminal_mut().arrive(vec![screen]);
         frame(&ctx, &mut app, vec![]);
         let before = inputs(&app).len();

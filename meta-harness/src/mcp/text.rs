@@ -53,9 +53,8 @@ pub fn next_steps(plan: &Plan, graph: &Graph, types: &TypeSystem, only: Option<&
             Stage::PlanApproved | Stage::Skeleton => Some(Stage::Implemented),
             Stage::Implemented => continue,
         };
-        let waiting: Vec<String> = goal
-            .map(|g| arch_service::stage_gate(plan, graph, types, id, g).into_iter().map(|f| f.message).collect())
-            .unwrap_or_default();
+        let waiting: Vec<String> =
+            goal.map(|g| arch_service::stage_gate(plan, graph, types, id, g).into_iter().map(|f| f.message).collect()).unwrap_or_default();
         let step = if !waiting.is_empty() {
             format!("waits: {}", waiting.join("; "))
         } else {
@@ -94,7 +93,11 @@ pub(crate) fn walkthrough_steps(plan: &Plan, only: Option<&ComponentId>) -> Stri
         }
     }
     if !any {
-        let _ = write!(out, " every component is explained; navigate with source plan:{} (and a root at the entry point) to show the user only these components.", plan.id);
+        let _ = write!(
+            out,
+            " every component is explained; navigate with source plan:{} (and a root at the entry point) to show the user only these components.",
+            plan.id
+        );
     }
     out
 }

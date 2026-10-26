@@ -12,7 +12,10 @@ use harness_core::ProviderDriver;
 /// The harness pack providing the antigravity instance, when it's
 /// installed on this machine; else why not.
 fn installed(catalog: &nah_packs::Catalog) -> Result<(), String> {
-    let pack = catalog.of_kind(nah_packs::Kind::Harness).find(|p| p.manifest.provides.as_ref().is_some_and(|p| p.instance.as_deref() == Some("antigravity"))).ok_or("no harness pack provides antigravity")?;
+    let pack = catalog
+        .of_kind(nah_packs::Kind::Harness)
+        .find(|p| p.manifest.provides.as_ref().is_some_and(|p| p.instance.as_deref() == Some("antigravity")))
+        .ok_or("no harness pack provides antigravity")?;
     let lock = nah_packs::Lock::read(&catalog.lock_path).map_err(|e| e.to_string())?;
     if lock.packs.contains_key(pack.name()) { Ok(()) } else { Err(format!("{} isn't installed on this machine", pack.name())) }
 }
@@ -25,7 +28,10 @@ async fn the_driver_starts_the_installed_pack_and_opens_a_session_needs_the_pack
         return eprintln!("skipped: {why}");
     }
     // The launch comes from the pack (its check passed), not an old install.
-    let entry = meta_harness::packs::harness_launches(&catalog).into_iter().find(|e| e.profile.instance.as_str() == "antigravity").expect("the antigravity harness");
+    let entry = meta_harness::packs::harness_launches(&catalog)
+        .into_iter()
+        .find(|e| e.profile.instance.as_str() == "antigravity")
+        .expect("the antigravity harness");
     let launch = match &entry.launch {
         HarnessLaunch::Ready { launch } => launch.clone(),
         other => panic!("no launch from the pack: {other:?}"),
@@ -40,7 +46,13 @@ async fn the_driver_starts_the_installed_pack_and_opens_a_session_needs_the_pack
     let status = instance.snapshot().borrow().status.clone();
     println!("probe: {status:?} in {:?}", started.elapsed());
     assert_eq!(status, ProviderStatus::Ready, "ACP initialize through the driver");
-    let config = SessionConfig { thread_id: ThreadId::new("e2e"), policy: RuntimePolicy::default(), model: None, resume: None, mcp_servers: Vec::new() };
+    let config = SessionConfig {
+        thread_id: ThreadId::new("e2e"),
+        policy: RuntimePolicy::default(),
+        model: None,
+        resume: None,
+        mcp_servers: Vec::new(),
+    };
     let started = std::time::Instant::now();
     let opened = tokio::time::timeout(Duration::from_secs(600), instance.adapter().open_session(config)).await.expect("a session in time");
     let signed_in = instance.snapshot().borrow().auth.status;

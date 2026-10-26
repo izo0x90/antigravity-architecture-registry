@@ -70,7 +70,12 @@ impl CockpitAuth {
     /// A home server, relaying the user: `Authorization: Bearer <secret>`
     /// (the secret is never taken from a URL, but for the launch link).
     fn bearer(&self, parts: &Parts) -> bool {
-        parts.headers.get(axum::http::header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).is_some_and(|secret| secret.trim() == &*self.token)
+        parts
+            .headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .is_some_and(|secret| secret.trim() == &*self.token)
     }
 
     fn admits(&self, cookies: &str) -> bool {
@@ -150,7 +155,24 @@ pub mod can {
         };
     }
 
-    markers!(ViewRead, ViewDrive, PlanEdit, CodeCheck, SlotsObserve, SlotsManage, SlotsMessage, SlotsReport, UserNotify, RequestsAnswer, PlansApprove, SessionsControl, ChangesStage, ShellDrive, TagsEdit, Discuss);
+    markers!(
+        ViewRead,
+        ViewDrive,
+        PlanEdit,
+        CodeCheck,
+        SlotsObserve,
+        SlotsManage,
+        SlotsMessage,
+        SlotsReport,
+        UserNotify,
+        RequestsAnswer,
+        PlansApprove,
+        SessionsControl,
+        ChangesStage,
+        ShellDrive,
+        TagsEdit,
+        Discuss
+    );
 }
 
 /// Extractor: the request's caller has the capability `C`, else 403. Put it
@@ -226,7 +248,11 @@ where
         if CockpitAuth::from_ref(state).bearer(parts) || Arc::<Tickets>::from_ref(state).admit(&q) {
             Ok(Ticketed)
         } else {
-            Err((StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": "only the cockpit connects here (with a ticket from /api/cockpit/ticket)" }))).into_response())
+            Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": "only the cockpit connects here (with a ticket from /api/cockpit/ticket)" })),
+            )
+                .into_response())
         }
     }
 }

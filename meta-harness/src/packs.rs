@@ -79,8 +79,15 @@ fn own_settings(catalog: &Catalog, instances: &[String]) -> Result<BTreeMap<Stri
             }
             let entry = out.entry(instance.clone()).or_default();
             match own.program {
-                Some(program) => entry.launch = Some((Launch { program, args: own.args, env: own.env.into_iter().collect(), env_remove: own.env_remove }, file.clone())),
-                None if !own.args.is_empty() || !own.env.is_empty() || !own.env_remove.is_empty() => return Err(wrong(format!("{instance}: a launch's args or env without its program"))),
+                Some(program) => {
+                    entry.launch = Some((
+                        Launch { program, args: own.args, env: own.env.into_iter().collect(), env_remove: own.env_remove },
+                        file.clone(),
+                    ))
+                }
+                None if !own.args.is_empty() || !own.env.is_empty() || !own.env_remove.is_empty() => {
+                    return Err(wrong(format!("{instance}: a launch's args or env without its program")));
+                }
                 None => {}
             }
             if let Some(home) = own.home {
@@ -100,7 +107,9 @@ fn home_of(project: &Path, instance: &str, home: &str) -> Result<Option<PathBuf>
         "kept" => return Ok(Some(arch_service::kept_harness_home(project, instance))),
         "" => return Err("its home is empty: native, kept, or a folder".into()),
         path => match path.strip_prefix("~/") {
-            Some(rest) => PathBuf::from(std::env::var("HOME").map_err(|_| "~ in its home, and no HOME to say where that is".to_owned())?).join(rest),
+            Some(rest) => {
+                PathBuf::from(std::env::var("HOME").map_err(|_| "~ in its home, and no HOME to say where that is".to_owned())?).join(rest)
+            }
             None => project.join(path),
         },
     };
@@ -126,8 +135,15 @@ fn home_of(project: &Path, instance: &str, home: &str) -> Result<Option<PathBuf>
         rest.into_iter().rev().fold(at.canonicalize().unwrap_or(at), |at, name| at.join(name))
     };
     let (real_home, real_project) = (real(&normal), real(project));
-    if normal.starts_with(project) || project.starts_with(&normal) || real_home.starts_with(&real_project) || real_project.starts_with(&real_home) {
-        return Err(format!("its home {} is in the project (or holds it): a home kept in the project is `kept` (.nah/harness/); a folder of your own is outside it", normal.display()));
+    if normal.starts_with(project)
+        || project.starts_with(&normal)
+        || real_home.starts_with(&real_project)
+        || real_project.starts_with(&real_home)
+    {
+        return Err(format!(
+            "its home {} is in the project (or holds it): a home kept in the project is `kept` (.nah/harness/); a folder of your own is outside it",
+            normal.display()
+        ));
     }
     Ok(Some(normal))
 }
@@ -151,7 +167,8 @@ fn instance_of(pack: &nah_packs::Pack, provides: &nah_packs::Provides) -> String
 /// later one's left out, and logged.
 pub fn harness_launches(catalog: &Catalog) -> Vec<HarnessEntry> {
     let lock = Lock::read(&catalog.lock_path);
-    let harnesses: Vec<(&nah_packs::Pack, &nah_packs::Provides)> = catalog.of_kind(nah_packs::Kind::Harness).filter_map(|pack| pack.manifest.provides.as_ref().map(|p| (pack, p))).collect();
+    let harnesses: Vec<(&nah_packs::Pack, &nah_packs::Provides)> =
+        catalog.of_kind(nah_packs::Kind::Harness).filter_map(|pack| pack.manifest.provides.as_ref().map(|p| (pack, p))).collect();
     let instances: Vec<String> = harnesses.iter().map(|(pack, provides)| instance_of(pack, provides)).collect();
     let own = own_settings(catalog, &instances);
     let mut out: Vec<HarnessEntry> = Vec::new();
@@ -164,8 +181,14 @@ pub fn harness_launches(catalog: &Catalog) -> Vec<HarnessEntry> {
         let launch = match (&own, mine.and_then(|m| m.launch.as_ref()), &lock) {
             (Err(e), _, _) => HarnessLaunch::Unavailable { reason: e.to_string(), fix: Some("fix the file it names".into()) },
             (Ok(_), Some((launch, _)), _) => HarnessLaunch::Ready { launch: launch.clone() },
-            (Ok(_), None, Err(e)) => HarnessLaunch::Unavailable { reason: format!("can't read the packs' lock: {e}"), fix: Some(format!("meta-harness pack install {}", pack.name())) },
-            (Ok(_), None, Ok(lock)) => pack_launch(catalog, lock, pack.name()).unwrap_or_else(|e| HarnessLaunch::Unavailable { reason: e.to_string(), fix: Some(format!("meta-harness pack install {}", pack.name())) }),
+            (Ok(_), None, Err(e)) => HarnessLaunch::Unavailable {
+                reason: format!("can't read the packs' lock: {e}"),
+                fix: Some(format!("meta-harness pack install {}", pack.name())),
+            },
+            (Ok(_), None, Ok(lock)) => pack_launch(catalog, lock, pack.name()).unwrap_or_else(|e| HarnessLaunch::Unavailable {
+                reason: e.to_string(),
+                fix: Some(format!("meta-harness pack install {}", pack.name())),
+            }),
         };
         let profile = HarnessProfile {
             instance: InstanceId::new(&instance),
@@ -192,7 +215,9 @@ fn pack_launch(catalog: &Catalog, lock: &Lock, name: &str) -> Result<HarnessLaun
         }
         State::Missing => HarnessLaunch::Unavailable { reason: format!("{name} isn't installed"), fix: install },
         State::Broken(why) => HarnessLaunch::Unavailable { reason: format!("{name} fails its check: {why}"), fix: install },
-        state @ (State::OutOfRange { .. } | State::Outdated { .. }) => HarnessLaunch::Unavailable { reason: format!("{name}: {}", state), fix: update },
+        state @ (State::OutOfRange { .. } | State::Outdated { .. }) => {
+            HarnessLaunch::Unavailable { reason: format!("{name}: {}", state), fix: update }
+        }
     })
 }
 
@@ -211,13 +236,14 @@ pub enum Command {
     Which(String),
 }
 
-
 /// What the lock records of `pack`, without running anything.
 fn recorded(lock: &Lock, pack: &nah_packs::Pack) -> String {
     match (&pack.manifest.tool, lock.packs.get(pack.name())) {
         (None, _) => "nothing to install".into(),
         (Some(_), None) => "not installed (or found on its own: pack check)".into(),
-        (Some(_), Some(i)) if i.pack_version != pack.manifest.pack.version => format!("pack {} installed, {} available", i.pack_version, pack.manifest.pack.version),
+        (Some(_), Some(i)) if i.pack_version != pack.manifest.pack.version => {
+            format!("pack {} installed, {} available", i.pack_version, pack.manifest.pack.version)
+        }
         (Some(_), Some(i)) => format!("installed {} for {} (pack check to check it)", i.tool_version.as_deref().unwrap_or("?"), i.platform),
     }
 }
@@ -306,11 +332,17 @@ pub fn run(command: &Command, catalog: &Catalog) -> Result<String, PackError> {
         Command::Which(name) => {
             let pack = catalog.get(name)?;
             let (launch, from) = match (&pack.manifest.provides, &pack.manifest.server) {
-                (Some(provides), _) => match own_settings(catalog, &harness_instances(catalog))?.remove(&instance_of(pack, provides)).and_then(|own| own.launch) {
+                (Some(provides), _) => match own_settings(catalog, &harness_instances(catalog))?
+                    .remove(&instance_of(pack, provides))
+                    .and_then(|own| own.launch)
+                {
                     Some((launch, file)) => (launch, format!("{} for {}", file.display(), instance_of(pack, provides))),
                     None => {
                         let l = nah_packs::harness_launch(catalog, &lock, name)?;
-                        (Launch { program: l.program, args: l.args, env: l.env, env_remove: l.env_remove }, format!("the pack, installed for {}", lock.packs[name].platform))
+                        (
+                            Launch { program: l.program, args: l.args, env: l.env, env_remove: l.env_remove },
+                            format!("the pack, installed for {}", lock.packs[name].platform),
+                        )
                     }
                 },
                 (None, Some(_)) => {

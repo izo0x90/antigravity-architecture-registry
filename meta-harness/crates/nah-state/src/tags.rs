@@ -14,7 +14,10 @@ use crate::{Activity, StateDb, StateError, failed, log_in};
 fn logged(tx: &Transaction<'_>, tag: &Tag, change: &Change) -> Result<(), StateError> {
     let at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
     let detail = (!change.detail.is_empty()).then(|| change.detail.clone());
-    log_in(tx, &Activity { at_ms, actor: change.by.clone(), action: change.action.to_owned(), subject: format!("tag {}", tag.name), detail })
+    log_in(
+        tx,
+        &Activity { at_ms, actor: change.by.clone(), action: change.action.to_owned(), subject: format!("tag {}", tag.name), detail },
+    )
 }
 
 impl TagStore for StateDb {

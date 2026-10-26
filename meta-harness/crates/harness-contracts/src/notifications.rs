@@ -75,7 +75,15 @@ impl NotificationKind {
     pub fn level(self) -> Level {
         match self {
             Self::Approval | Self::Question | Self::Link | Self::SignIn | Self::Discussion => Level::Waiting,
-            Self::SessionCrashed | Self::TurnFailed | Self::TurnFinished | Self::Message | Self::ServerLost | Self::TerminalBell | Self::ShellEnded | Self::CommandFinished | Self::CommandFailed => Level::Update,
+            Self::SessionCrashed
+            | Self::TurnFailed
+            | Self::TurnFinished
+            | Self::Message
+            | Self::ServerLost
+            | Self::TerminalBell
+            | Self::ShellEnded
+            | Self::CommandFinished
+            | Self::CommandFailed => Level::Update,
         }
     }
 
@@ -182,13 +190,33 @@ mod tests {
     use super::*;
 
     fn note(id: &str, kind: NotificationKind, at_ms: u64) -> Notification {
-        Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, terminal: None, discussion: None, title: id.into(), detail: None, at_ms, state: NotificationState::Open }
+        Notification {
+            id: NotificationId::new(id),
+            server: None,
+            level: kind.level(),
+            kind,
+            slot: None,
+            thread: None,
+            request: None,
+            terminal: None,
+            discussion: None,
+            title: id.into(),
+            detail: None,
+            at_ms,
+            state: NotificationState::Open,
+        }
     }
 
     #[test]
     fn waiting_comes_first_then_failures_then_the_rest_oldest_first() {
         use NotificationKind as K;
-        let mut all = vec![note("done", K::TurnFinished, 1), note("crash", K::SessionCrashed, 5), note("ask", K::Question, 9), note("allow", K::Approval, 3), note("failed", K::TurnFailed, 2)];
+        let mut all = vec![
+            note("done", K::TurnFinished, 1),
+            note("crash", K::SessionCrashed, 5),
+            note("ask", K::Question, 9),
+            note("allow", K::Approval, 3),
+            note("failed", K::TurnFailed, 2),
+        ];
         all.sort_by(order);
         let ids: Vec<&str> = all.iter().map(|n| n.id.as_str()).collect();
         assert_eq!(ids, ["allow", "ask", "failed", "crash", "done"]);

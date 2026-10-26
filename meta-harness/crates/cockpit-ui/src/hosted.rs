@@ -178,7 +178,14 @@ pub struct TopLine<'a> {
 /// name; its discussions a speech bubble and a few words); under it, its
 /// settings (`bound`: the panel's layer of where you are). Where the top
 /// line was drawn.
-pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, top: &TopLine<'_>, bound: &[Bound], notes: &[(NoteMark, String, egui::Color32)], cx: &mut RunCx<'_>) -> egui::Rect {
+pub fn header(
+    ui: &mut egui::Ui,
+    panel: &dyn Hosted,
+    top: &TopLine<'_>,
+    bound: &[Bound],
+    notes: &[(NoteMark, String, egui::Color32)],
+    cx: &mut RunCx<'_>,
+) -> egui::Rect {
     let look = crate::theme::look();
     // One line that wraps (a narrow panel, a phone): nothing overlaps.
     // The groups first: what follows them grows and wraps after them.
@@ -203,7 +210,9 @@ pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, top: &TopLine<'_>, bound: &
         for (mark, name, colour) in notes {
             match mark {
                 NoteMark::Tag => ui.label(crate::theme::tag_mark(ui, *colour, look.text_small)),
-                NoteMark::Discussions => ui.label(RichText::new(egui_phosphor::fill::CHAT_CIRCLE).font(crate::theme::solid_font(ui, look.text_small)).color(*colour)),
+                NoteMark::Discussions => ui.label(
+                    RichText::new(egui_phosphor::fill::CHAT_CIRCLE).font(crate::theme::solid_font(ui, look.text_small)).color(*colour),
+                ),
             };
             ui.add(egui::Label::new(RichText::new(name).size(look.text_small).color(*colour)).truncate());
         }

@@ -157,7 +157,11 @@ fn stack(children: &[(usize, Outline)], gap: f32) -> (Vec<(usize, f32)>, Outline
     let mut placed = Vec::with_capacity(children.len());
     let mut all: Outline = Vec::new();
     for (c, outline) in children {
-        let shift = if all.is_empty() { 0.0 } else { outline.iter().zip(&all).map(|((top, _), (_, bottom))| bottom + gap - top).fold(f32::MIN, f32::max) };
+        let shift = if all.is_empty() {
+            0.0
+        } else {
+            outline.iter().zip(&all).map(|((top, _), (_, bottom))| bottom + gap - top).fold(f32::MIN, f32::max)
+        };
         for (level, (top, bottom)) in outline.iter().enumerate() {
             match all.get_mut(level) {
                 Some((t, b)) => {
@@ -402,7 +406,12 @@ fn treemap(tree: &mut Tree, config: &LayoutConfig, out_of_time: &dyn Fn() -> boo
     while let Some((i, rect)) = todo.pop() {
         tree.cards[i].rect = rect;
         if let Some(k) = placed_kids.get(&i).filter(|k| !k.is_empty()) {
-            let inside = Rect { x: rect.x + config.pad, y: rect.y + config.header, w: rect.w - config.pad * 2.0, h: rect.h - config.header - config.pad };
+            let inside = Rect {
+                x: rect.x + config.pad,
+                y: rect.y + config.header,
+                w: rect.w - config.pad * 2.0,
+                h: rect.h - config.header - config.pad,
+            };
             todo.extend(fill_rows(k, &need, inside, config));
         }
     }
@@ -455,7 +464,8 @@ fn rows(items: &[usize], need: &[(f32, f32)], config: &LayoutConfig) -> Vec<Vec<
 fn rows_size(items: &[usize], need: &[(f32, f32)], config: &LayoutConfig) -> (f32, f32) {
     let rows = rows(items, need, config);
     let width = rows.iter().map(|r| r.iter().map(|&i| need[i].0).sum::<f32>() + config.box_gap * (r.len() - 1) as f32).fold(0.0, f32::max);
-    let height = rows.iter().map(|r| r.iter().map(|&i| need[i].1).fold(0.0, f32::max)).sum::<f32>() + config.box_gap * rows.len().saturating_sub(1) as f32;
+    let height = rows.iter().map(|r| r.iter().map(|&i| need[i].1).fold(0.0, f32::max)).sum::<f32>()
+        + config.box_gap * rows.len().saturating_sub(1) as f32;
     (width, height)
 }
 
@@ -540,7 +550,9 @@ fn crosses(a: Point, b: Point, r: &Rect) -> bool {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let (mut t0, mut t1) = (0.0f32, 1.0f32);
     let inset = 0.5;
-    for (p, q) in [(-dx, a.0 - (r.x + inset)), (dx, (r.right() - inset) - a.0), (-dy, a.1 - (r.y + inset)), (dy, (r.bottom() - inset) - a.1)] {
+    for (p, q) in
+        [(-dx, a.0 - (r.x + inset)), (dx, (r.right() - inset) - a.0), (-dy, a.1 - (r.y + inset)), (dy, (r.bottom() - inset) - a.1)]
+    {
         if p == 0.0 {
             if q < 0.0 {
                 return false;

@@ -9,7 +9,15 @@ use crate::nav::{Fold, Move};
 
 /// The moves a view says apply or not where its cursor is (the motions
 /// are always offered).
-const CHECKED: [Move; 7] = [Move::Enter, Move::Leave, Move::Fold(Fold::Toggle), Move::Fold(Fold::Open), Move::Fold(Fold::Close), Move::Fold(Fold::OpenAll), Move::Fold(Fold::CloseAll)];
+const CHECKED: [Move; 7] = [
+    Move::Enter,
+    Move::Leave,
+    Move::Fold(Fold::Toggle),
+    Move::Fold(Fold::Open),
+    Move::Fold(Fold::Close),
+    Move::Fold(Fold::OpenAll),
+    Move::Fold(Fold::CloseAll),
+];
 
 /// The app with every view holding something, the Changes view included.
 fn app() -> (egui::Context, CockpitApp) {
@@ -24,9 +32,22 @@ fn app() -> (egui::Context, CockpitApp) {
 /// every action offered with its label and whether it applies (a fold done
 /// says Unfold after).
 fn seen(app: &CockpitApp) -> String {
-    let views: Vec<String> = BufferKind::ALL.iter().map(|k| format!("{:?} {:?}", app.desk.view(*k).place(), app.desk.view(*k).target())).collect();
-    let bound: Vec<String> = app.bound_actions().iter().map(|b| format!("{}={}:{}", b.action.id, b.action.label, b.action.when.holds(&app.situation()))).collect();
-    format!("{:?} {} {} {} {:?} {}", app.focused_kind(), views.join(";"), app.quick_look.is_some(), app.desk.pending_goto.is_some(), app.desk.jumps, bound.join("|"))
+    let views: Vec<String> =
+        BufferKind::ALL.iter().map(|k| format!("{:?} {:?}", app.desk.view(*k).place(), app.desk.view(*k).target())).collect();
+    let bound: Vec<String> = app
+        .bound_actions()
+        .iter()
+        .map(|b| format!("{}={}:{}", b.action.id, b.action.label, b.action.when.holds(&app.situation())))
+        .collect();
+    format!(
+        "{:?} {} {} {} {:?} {}",
+        app.focused_kind(),
+        views.join(";"),
+        app.quick_look.is_some(),
+        app.desk.pending_goto.is_some(),
+        app.desk.jumps,
+        bound.join("|")
+    )
 }
 
 /// Why nothing happened, if anything said so.

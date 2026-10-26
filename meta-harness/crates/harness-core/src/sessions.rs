@@ -72,10 +72,7 @@ impl SessionManager {
     }
 
     pub async fn close(&self, thread_id: &ThreadId) -> Result<()> {
-        let session = self
-            .write()
-            .remove(thread_id)
-            .ok_or_else(|| HarnessError::NotFound { what: format!("thread {thread_id}") })?;
+        let session = self.write().remove(thread_id).ok_or_else(|| HarnessError::NotFound { what: format!("thread {thread_id}") })?;
         session.close().await?;
         self.hub.publish(ClientEvent::ThreadClosed { thread_id: thread_id.clone() });
         Ok(())

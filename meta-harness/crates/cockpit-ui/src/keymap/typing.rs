@@ -25,7 +25,10 @@ pub struct Leaving(Option<(Vec<egui::Event>, Chord, f64)>);
 impl Chord {
     /// Whether a key press (with the modifiers it was pressed with) is this chord.
     fn is_press(&self, key: egui::Key, mods: egui::Modifiers) -> bool {
-        self.physical() == Some(key) && self.ctrl == (mods.ctrl || mods.command) && self.alt == mods.alt && (self.shift == mods.shift || !self.is_named())
+        self.physical() == Some(key)
+            && self.ctrl == (mods.ctrl || mods.command)
+            && self.alt == mods.alt
+            && (self.shift == mods.shift || !self.is_named())
     }
 
     fn is_named(&self) -> bool {
@@ -216,10 +219,25 @@ mod tests {
     fn keys_are_what_a_terminal_expects_as_a_browser_gives_them() {
         let typed = |events: Vec<egui::Event>| terminal_input(&events);
         assert_eq!(typed(vec![key(egui::Key::A, NONE), egui::Event::Text("a".into())]), [Typed::Input(input("a"))], "text as typed");
-        assert_eq!(typed(vec![key(egui::Key::Enter, NONE), key(egui::Key::Tab, NONE), key(egui::Key::ArrowUp, NONE)]), [named(TermKey::Enter, false, false), named(TermKey::Tab, false, false), named(TermKey::Up, false, false)].map(Typed::Input));
-        assert_eq!(typed(vec![key(egui::Key::C, CTRL), egui::Event::Copy]), [Typed::Input(named(TermKey::Char('c'), true, false)), Typed::Copy], "Ctrl+C: ^C (and the copy, for a selection)");
-        assert_eq!(typed(vec![key(egui::Key::B, ALT), egui::Event::Text("b".into())]), [Typed::Input(named(TermKey::Char('b'), false, true))], "Alt+B by its key, its text dropped");
-        assert_eq!(typed(vec![key(egui::Key::V, CTRL), egui::Event::Paste("ls\n".into())]), [Typed::Input(TerminalInput::Paste { text: "ls\n".into() })], "Ctrl+V: the paste, not ^V");
+        assert_eq!(
+            typed(vec![key(egui::Key::Enter, NONE), key(egui::Key::Tab, NONE), key(egui::Key::ArrowUp, NONE)]),
+            [named(TermKey::Enter, false, false), named(TermKey::Tab, false, false), named(TermKey::Up, false, false)].map(Typed::Input)
+        );
+        assert_eq!(
+            typed(vec![key(egui::Key::C, CTRL), egui::Event::Copy]),
+            [Typed::Input(named(TermKey::Char('c'), true, false)), Typed::Copy],
+            "Ctrl+C: ^C (and the copy, for a selection)"
+        );
+        assert_eq!(
+            typed(vec![key(egui::Key::B, ALT), egui::Event::Text("b".into())]),
+            [Typed::Input(named(TermKey::Char('b'), false, true))],
+            "Alt+B by its key, its text dropped"
+        );
+        assert_eq!(
+            typed(vec![key(egui::Key::V, CTRL), egui::Event::Paste("ls\n".into())]),
+            [Typed::Input(TerminalInput::Paste { text: "ls\n".into() })],
+            "Ctrl+V: the paste, not ^V"
+        );
         assert_eq!(typed(vec![key(egui::Key::Backslash, CTRL)]), [Typed::Input(named(TermKey::Char('\\'), true, false))]);
         let cmd = egui::Modifiers { mac_cmd: true, command: true, ..NONE };
         assert_eq!(typed(vec![key(egui::Key::C, cmd), egui::Event::Copy]), [Typed::Copy], "Cmd+C is the platform's copy only");
@@ -254,7 +272,11 @@ mod tests {
         let mut leaving = Leaving::default();
         frame(&mut leaving, &keys, 1.0, vec![key(egui::Key::Escape, NONE)]);
         let (typing, passed) = frame(&mut leaving, &keys, 1.05, vec![key(egui::Key::J, NONE), egui::Event::Text("j".into())]);
-        assert_eq!((typing, passed), (Typing::Stays, vec![key(egui::Key::Escape, NONE), key(egui::Key::J, NONE), egui::Event::Text("j".into())]), "vim's Escape then j, in order");
+        assert_eq!(
+            (typing, passed),
+            (Typing::Stays, vec![key(egui::Key::Escape, NONE), key(egui::Key::J, NONE), egui::Event::Text("j".into())]),
+            "vim's Escape then j, in order"
+        );
         frame(&mut leaving, &keys, 2.0, vec![key(egui::Key::Backslash, CTRL)]);
         let (typing, passed) = frame(&mut leaving, &keys, 2.05, vec![key(egui::Key::N, NONE), egui::Event::Text("n".into())]);
         assert_eq!((typing, passed), (Typing::Leaves, vec![]), "ctrl+\\ n leaves; neither key reaches the program");

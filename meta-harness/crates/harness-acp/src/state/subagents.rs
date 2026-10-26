@@ -71,7 +71,11 @@ impl SessionState {
             let parent = self.child(on);
             let title = title.unwrap_or_else(|| "sub-agent".into());
             let status = status.unwrap_or(SubagentStatus::Idle);
-            let at = self.start_subagent(parent, SubagentId::new(session.clone()), Started { title, kind: None, description, prompt: None, status, can_cancel: can_cancel.unwrap_or(false) });
+            let at = self.start_subagent(
+                parent,
+                SubagentId::new(session.clone()),
+                Started { title, kind: None, description, prompt: None, status, can_cancel: can_cancel.unwrap_or(false) },
+            );
             self.children.insert(session, Told { at, parent: on.to_owned() });
             return;
         };
@@ -98,7 +102,8 @@ impl SessionState {
     /// task (the latest).
     pub(super) fn session_message(&mut self, message: SessionMessage) {
         let SessionMessage { from, to, text } = message;
-        let answered = from.as_deref().and_then(|f| self.children.get(f)).filter(|t| to.as_deref() == Some(t.parent.as_str())).map(|t| t.at);
+        let answered =
+            from.as_deref().and_then(|f| self.children.get(f)).filter(|t| to.as_deref() == Some(t.parent.as_str())).map(|t| t.at);
         if let Some(at) = answered {
             self.change_subagent(at, |s| set(&mut s.answer, Some(text)));
         } else if let Some(at) = to.as_deref().and_then(|s| self.child(s)) {
@@ -149,10 +154,18 @@ impl SessionState {
             ItemStatus::InProgress | ItemStatus::Completed => {
                 let Some(Starting::Asked(list)) = self.starting.insert(native.to_owned(), Starting::Done) else { return };
                 let Some(by) = &self.started_by else { return };
-                let read = |one: &Value, pointer: Option<&str>| pointer.and_then(|p| one.pointer(p)).and_then(Value::as_str).map(str::to_owned);
+                let read =
+                    |one: &Value, pointer: Option<&str>| pointer.and_then(|p| one.pointer(p)).and_then(Value::as_str).map(str::to_owned);
                 let started: Vec<Started> = list
                     .iter()
-                    .map(|one| Started { title: read(one, Some(&by.title)).unwrap_or_else(|| "sub-agent".into()), kind: read(one, by.kind.as_deref()), description: None, prompt: read(one, by.prompt.as_deref()), status: SubagentStatus::Running, can_cancel: false })
+                    .map(|one| Started {
+                        title: read(one, Some(&by.title)).unwrap_or_else(|| "sub-agent".into()),
+                        kind: read(one, by.kind.as_deref()),
+                        description: None,
+                        prompt: read(one, by.prompt.as_deref()),
+                        status: SubagentStatus::Running,
+                        can_cancel: false,
+                    })
                     .collect();
                 for (n, one) in started.into_iter().enumerate() {
                     self.start_subagent(None, SubagentId::new(format!("{native}/{n}")), one);
@@ -201,12 +214,26 @@ impl SessionState {
         let under = parent.map(|p| self.subagents[p].item_id.clone());
         let turn: Option<TurnId> = under.as_ref().and_then(|i| self.item_index.get(i)).map(|&i| self.items[i].turn_id.clone());
         let was = (std::mem::replace(&mut self.parent, under), std::mem::replace(&mut self.turn, turn));
-        let item_id: ItemId = self.push_item(ItemBody::Subagent { subagent_id: id.clone() }, item_status(one.status), Some(one.title.clone()), None);
+        let item_id: ItemId =
+            self.push_item(ItemBody::Subagent { subagent_id: id.clone() }, item_status(one.status), Some(one.title.clone()), None);
         (self.parent, self.turn) = was;
         let started_ms = harness_core::now_ms();
         let ended_ms = (!one.status.working()).then_some(started_ms);
         let Started { title, kind, description, prompt, status, can_cancel } = one;
-        self.subagents.push(Subagent { id, thread_id: self.thread.id.clone(), item_id, title, kind, description, prompt, answer: None, status, started_ms, ended_ms, can_cancel });
+        self.subagents.push(Subagent {
+            id,
+            thread_id: self.thread.id.clone(),
+            item_id,
+            title,
+            kind,
+            description,
+            prompt,
+            answer: None,
+            status,
+            started_ms,
+            ended_ms,
+            can_cancel,
+        });
         let at = self.subagents.len() - 1;
         self.emit(AdapterEvent::SubagentUpdated { subagent: self.subagents[at].clone() });
         at
@@ -277,7 +304,17 @@ mod tests {
     }
 
     fn thread() -> Thread {
-        Thread { id: ThreadId::new("t"), instance_id: InstanceId::new("i"), native_id: None, title: None, status: ThreadStatus::Idle, policy: RuntimePolicy::default(), model: None, controls: Default::default(), mcp_servers: Vec::new() }
+        Thread {
+            id: ThreadId::new("t"),
+            instance_id: InstanceId::new("i"),
+            native_id: None,
+            title: None,
+            status: ThreadStatus::Idle,
+            policy: RuntimePolicy::default(),
+            model: None,
+            controls: Default::default(),
+            mcp_servers: Vec::new(),
+        }
     }
 
     /// A session as `pack`'s adapter keeps it.
@@ -318,7 +355,8 @@ mod tests {
     }
 
     fn announced(child: &str, title: &str, state: Option<&str>) -> Value {
-        let mut update = serde_json::json!({ "sessionUpdate": "subagent_update", "sessionId": child, "title": title, "capabilities": { "cancel": {} } });
+        let mut update =
+            serde_json::json!({ "sessionUpdate": "subagent_update", "sessionId": child, "title": title, "capabilities": { "cancel": {} } });
         if let Some(state) = state {
             update["state"] = serde_json::json!({ "state": state });
         }
@@ -341,8 +379,15 @@ mod tests {
     fn a_sub_agent_claude_code_announces_is_one_with_its_steps_under_it() {
         let state = replayed("claude-code", include_str!("../../fixtures/subagent-cancelled-claude-code-0.95.0.json"));
         let [one] = state.subagents.as_slice() else { panic!("{:?}", state.subagents) };
-        assert_eq!((one.title.as_str(), one.description.as_deref(), one.can_cancel, one.status), ("general-purpose", Some("Run sleep 90"), true, SubagentStatus::Cancelled));
-        assert!(one.prompt.as_deref().is_some_and(|p| p.starts_with("Your only job: run the shell command `sleep 90`")), "{:?}", one.prompt);
+        assert_eq!(
+            (one.title.as_str(), one.description.as_deref(), one.can_cancel, one.status),
+            ("general-purpose", Some("Run sleep 90"), true, SubagentStatus::Cancelled)
+        );
+        assert!(
+            one.prompt.as_deref().is_some_and(|p| p.starts_with("Your only job: run the shell command `sleep 90`")),
+            "{:?}",
+            one.prompt
+        );
         assert!(one.ended_ms.is_some_and(|e| e >= one.started_ms));
         assert_eq!(item(&state, &one.item_id).status, ItemStatus::Cancelled);
         let under: Vec<&harness_contracts::TurnItem> = state.items.iter().filter(|i| i.parent_id.as_ref() == Some(&one.item_id)).collect();
@@ -361,7 +406,10 @@ mod tests {
     fn a_sub_agent_antigravity_starts_is_one_from_its_start_call() {
         let state = replayed("antigravity-acp", include_str!("../../fixtures/subagent-antigravity-1.4.3.json"));
         let [one] = state.subagents.as_slice() else { panic!("{:?}", state.subagents) };
-        assert_eq!((one.title.as_str(), one.kind.as_deref(), one.can_cancel, one.status), ("File Counter", Some("research"), false, SubagentStatus::Idle));
+        assert_eq!(
+            (one.title.as_str(), one.kind.as_deref(), one.can_cancel, one.status),
+            ("File Counter", Some("research"), false, SubagentStatus::Idle)
+        );
         assert!(one.prompt.as_deref().is_some_and(|p| p.starts_with("Count the .py files")) && one.description.is_none(), "{one:?}");
         assert!(state.items.iter().all(|i| i.parent_id.as_ref() != Some(&one.item_id)), "nothing said to be its");
         assert_eq!(state.cancellable(&one.id), None);
@@ -379,7 +427,11 @@ mod tests {
         send(&mut state, recorded["replay"].as_array().unwrap());
         state.replayed();
         // (Followed once it's open: told once, as it is, not as at work.)
-        let told: Vec<SubagentStatus> = state.replay().into_iter().filter_map(|e| if let AdapterEvent::SubagentUpdated { subagent } = e { Some(subagent.status) } else { None }).collect();
+        let told: Vec<SubagentStatus> = state
+            .replay()
+            .into_iter()
+            .filter_map(|e| if let AdapterEvent::SubagentUpdated { subagent } = e { Some(subagent.status) } else { None })
+            .collect();
         assert_eq!(told, [SubagentStatus::Idle]);
         let [one] = state.subagents.as_slice() else { panic!("{:?}", state.subagents) };
         assert_eq!((one.title.as_str(), one.status), ("File Counter", SubagentStatus::Idle));
@@ -393,8 +445,15 @@ mod tests {
         let mut state = session("antigravity-acp");
         state.begin_turn(&TurnInput::of("go"));
         let input = serde_json::json!({ "Subagents": [{ "Role": "Helper", "Prompt": "x", "TypeName": "research" }] });
-        let call = |id: &str, status| acp::SessionUpdate::ToolCall(acp::ToolCall::new(id.to_owned(), "Run invoke_subagent?").raw_input(input.clone()).status(status));
-        let update = |id: &str, status| acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(id.to_owned(), acp::ToolCallUpdateFields::new().raw_input(input.clone()).status(status)));
+        let call = |id: &str, status| {
+            acp::SessionUpdate::ToolCall(acp::ToolCall::new(id.to_owned(), "Run invoke_subagent?").raw_input(input.clone()).status(status))
+        };
+        let update = |id: &str, status| {
+            acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+                id.to_owned(),
+                acp::ToolCallUpdateFields::new().raw_input(input.clone()).status(status),
+            ))
+        };
         state.apply(&call("c1", acp::ToolCallStatus::Pending));
         assert!(state.subagents.is_empty(), "asked: not yet");
         state.apply(&update("c1", acp::ToolCallStatus::Failed));
@@ -414,19 +473,42 @@ mod tests {
     fn a_sub_agents_steps_and_its_own_sub_agents_are_under_it() {
         let mut state = session("claude-code");
         let turn = state.begin_turn(&TurnInput::of("look around"));
-        send(&mut state, &[on(PARENT, says("mine ")), on(PARENT, announced("a", "Explorer", Some("running"))), on("a", says("its ")), on(PARENT, says("too")), on("a", says("own"))]);
+        send(
+            &mut state,
+            &[
+                on(PARENT, says("mine ")),
+                on(PARENT, announced("a", "Explorer", Some("running"))),
+                on("a", says("its ")),
+                on(PARENT, says("too")),
+                on("a", says("own")),
+            ],
+        );
         let a = state.subagents[0].item_id.clone();
-        let said: Vec<(String, Option<&ItemId>)> = state.items.iter().filter(|i| matches!(i.body, ItemBody::AssistantMessage { .. })).map(|i| (i.body.said().unwrap_or_default(), i.parent_id.as_ref())).collect();
+        let said: Vec<(String, Option<&ItemId>)> = state
+            .items
+            .iter()
+            .filter(|i| matches!(i.body, ItemBody::AssistantMessage { .. }))
+            .map(|i| (i.body.said().unwrap_or_default(), i.parent_id.as_ref()))
+            .collect();
         assert_eq!(said, [("mine too".to_owned(), None), ("its own".to_owned(), Some(&a))], "each sender's text in one message of its own");
         let (_, added) = state.inject(&TurnInput::of("also this")).unwrap();
         assert_eq!(state.items[state.item_index[&added]].parent_id, None, "your message is yours");
         let call = serde_json::json!({ "sessionUpdate": "tool_call", "toolCallId": "run-1", "title": "Run tests" });
         send(&mut state, &[on("a", call)]);
-        let request = state.open_request(Some("run-1"), harness_contracts::RequestKind::Question, "Run them?".into(), None, Vec::new(), Vec::new());
+        let request =
+            state.open_request(Some("run-1"), harness_contracts::RequestKind::Question, "Run them?".into(), None, Vec::new(), Vec::new());
         let asked = state.items.iter().find(|i| matches!(&i.body, ItemBody::Request { request_id } if *request_id == request)).unwrap();
         assert_eq!(asked.parent_id.as_ref(), Some(&a), "the request where its call is");
         // One it starts: under it, its task told on either session.
-        send(&mut state, &[on("a", announced("b", "Reader", Some("running"))), on("a", message("a", "b", "read it")), on("b", message("a", "b", "read it")), on("b", message("b", "a", "read"))]);
+        send(
+            &mut state,
+            &[
+                on("a", announced("b", "Reader", Some("running"))),
+                on("a", message("a", "b", "read it")),
+                on("b", message("a", "b", "read it")),
+                on("b", message("b", "a", "read")),
+            ],
+        );
         let b = &state.subagents[1];
         assert_eq!(item(&state, &b.item_id).parent_id.as_ref(), Some(&a));
         assert_eq!((b.prompt.as_deref(), b.answer.as_deref()), (Some("read it"), Some("read")));
@@ -436,7 +518,10 @@ mod tests {
         send(&mut state, &[on("b", says("later"))]);
         assert_eq!(state.turns.len(), turns, "no turn of its own");
         let later = state.items.last().unwrap();
-        assert_eq!((later.turn_id == item(&state, &state.subagents[1].item_id).turn_id, later.parent_id.as_ref()), (true, Some(&state.subagents[1].item_id)));
+        assert_eq!(
+            (later.turn_id == item(&state, &state.subagents[1].item_id).turn_id, later.parent_id.as_ref()),
+            (true, Some(&state.subagents[1].item_id))
+        );
         // Announced not saying how it's doing.
         send(&mut state, &[on(PARENT, announced("c", "Resumed", None))]);
         assert!(!state.subagents[2].status.working());

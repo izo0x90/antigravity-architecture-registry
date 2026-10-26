@@ -72,18 +72,34 @@ impl Platforms {
     /// The platform for an operating system, architecture and page size:
     /// of those that match, the one that says the most.
     pub fn for_target(&self, os: &str, arch: &str, page_size: u64) -> Result<&PlatformDef, PackError> {
-        let matching: Vec<&PlatformDef> = self.list.iter().filter(|p| p.matches.os == os && p.matches.arch == arch && p.matches.page_size.is_none_or(|s| s == page_size)).collect();
-        let most = matching.iter().map(|p| p.matches.page_size.is_some()).max().ok_or_else(|| PackError::Config(format!("platforms.toml has no platform for {os} {arch} ({page_size}-byte pages)")))?;
+        let matching: Vec<&PlatformDef> = self
+            .list
+            .iter()
+            .filter(|p| p.matches.os == os && p.matches.arch == arch && p.matches.page_size.is_none_or(|s| s == page_size))
+            .collect();
+        let most = matching
+            .iter()
+            .map(|p| p.matches.page_size.is_some())
+            .max()
+            .ok_or_else(|| PackError::Config(format!("platforms.toml has no platform for {os} {arch} ({page_size}-byte pages)")))?;
         match matching.into_iter().filter(|p| p.matches.page_size.is_some() == most).collect::<Vec<_>>().as_slice() {
             [one] => Ok(one),
-            many => Err(PackError::Config(format!("platforms.toml: {} all match {os} {arch} ({page_size}-byte pages) as closely", many.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")))),
+            many => Err(PackError::Config(format!(
+                "platforms.toml: {} all match {os} {arch} ({page_size}-byte pages) as closely",
+                many.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+            ))),
         }
     }
 
     /// `platform`, then the platforms it narrows (same os and arch, no page
     /// size): a pack without an entry for the narrow one uses the general.
     pub fn and_general<'a>(&'a self, platform: &'a PlatformDef) -> impl Iterator<Item = &'a PlatformDef> {
-        let general = self.list.iter().filter(move |p| platform.matches.page_size.is_some() && p.matches.page_size.is_none() && p.matches.os == platform.matches.os && p.matches.arch == platform.matches.arch);
+        let general = self.list.iter().filter(move |p| {
+            platform.matches.page_size.is_some()
+                && p.matches.page_size.is_none()
+                && p.matches.os == platform.matches.os
+                && p.matches.arch == platform.matches.arch
+        });
         std::iter::once(platform).chain(general)
     }
 

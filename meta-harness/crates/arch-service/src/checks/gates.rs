@@ -32,8 +32,12 @@ pub fn stage_gate(plan: &Plan, graph: &Graph, types: &TypeSystem, id: &Component
         .filter_map(|dep| plan.component(&dep).map(|d| (dep, d.stage)))
         .filter(|(_, at)| *at < min)
         .map(|(dep, at)| {
-            Finding::error(FindingCode::DependencyNotReady, component(id), format!("{stage:?} needs {dep} at {min:?} or later; it is {at:?}"))
-                .suggest(format!("move {dep} along first"))
+            Finding::error(
+                FindingCode::DependencyNotReady,
+                component(id),
+                format!("{stage:?} needs {dep} at {min:?} or later; it is {at:?}"),
+            )
+            .suggest(format!("move {dep} along first"))
         })
         .collect()
 }

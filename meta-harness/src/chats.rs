@@ -12,7 +12,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use harness_contracts::{AdapterEvent, ClientEvent, ContentBlock, DETAIL, ItemBody, NativeId, Slot, Subject, ThreadId, Turn, TurnId, TurnItem, message_numbers};
+use harness_contracts::{
+    AdapterEvent, ClientEvent, ContentBlock, DETAIL, ItemBody, NativeId, Slot, Subject, ThreadId, Turn, TurnId, TurnItem, message_numbers,
+};
 use harness_core::{EventHub, SlotManager};
 
 /// The most of a whole session that's read (and kept, when it's noted).
@@ -40,7 +42,9 @@ type TurnAt<'a> = (&'a NativeId, u32, &'a str);
 
 fn turn_at(subject: &Subject) -> Option<TurnAt<'_>> {
     match subject {
-        Subject::ChatTurn { session, turn, turn_id } | Subject::ChatMessage { session, turn, turn_id, .. } => Some((session, *turn, turn_id)),
+        Subject::ChatTurn { session, turn, turn_id } | Subject::ChatMessage { session, turn, turn_id, .. } => {
+            Some((session, *turn, turn_id))
+        }
         _ => None,
     }
 }
@@ -81,12 +85,17 @@ impl Chats {
             loop {
                 match events.blocking_recv().map(|s| s.event) {
                     Ok(ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } }) => {
-                        let was = numbers.lock().unwrap_or_else(PoisonError::into_inner).insert(turn.id.clone(), (turn.thread_id.clone(), turn.ordinal));
+                        let was = numbers
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .insert(turn.id.clone(), (turn.thread_id.clone(), turn.ordinal));
                         if was.is_some_and(|(_, n)| n != turn.ordinal) && !tell() {
                             return;
                         }
                     }
-                    Ok(ClientEvent::ThreadClosed { thread_id }) => numbers.lock().unwrap_or_else(PoisonError::into_inner).retain(|_, (thread, _)| *thread != thread_id),
+                    Ok(ClientEvent::ThreadClosed { thread_id }) => {
+                        numbers.lock().unwrap_or_else(PoisonError::into_inner).retain(|_, (thread, _)| *thread != thread_id)
+                    }
                     Ok(ClientEvent::SlotClosed { .. }) if !tell() => return,
                     // Missed some: the numbers as they are now, and every note kept where its turn is.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
@@ -182,7 +191,8 @@ fn turn_text(items: &[TurnItem]) -> String {
                 if let Some(input) = input {
                     out.push_str(&detail(&input.to_string()));
                 }
-                let text: Vec<&str> = output.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect();
+                let text: Vec<&str> =
+                    output.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect();
                 out.push_str(&detail(&text.join("\n")));
             }
             ItemBody::Reasoning { text, .. } => {
@@ -223,7 +233,9 @@ impl nah_things::Resolve for Chats {
     }
 
     fn name(&self, subject: &Subject) -> String {
-        let (Subject::ChatSession { session } | Subject::ChatTurn { session, .. } | Subject::ChatMessage { session, .. }) = subject else { return String::new() };
+        let (Subject::ChatSession { session } | Subject::ChatTurn { session, .. } | Subject::ChatMessage { session, .. }) = subject else {
+            return String::new();
+        };
         subject.name(&harness_contracts::Known { chat: self.who(session), ..harness_contracts::Known::default() })
     }
 
@@ -243,7 +255,11 @@ impl nah_things::Resolve for Chats {
                 items.sort_by_key(|i| i.ordinal);
                 let text = format!("turn {}\n{}", turn.ordinal, turn_text(&items));
                 if out.len() + text.len() > SESSION_MOST {
-                    out.push_str(&format!("\n(turns {} to {} left out: name a turn for each)", turn.ordinal, turns.last().map_or(turn.ordinal, |t| t.ordinal)));
+                    out.push_str(&format!(
+                        "\n(turns {} to {} left out: name a turn for each)",
+                        turn.ordinal,
+                        turns.last().map_or(turn.ordinal, |t| t.ordinal)
+                    ));
                     break;
                 }
                 if n > 0 {
@@ -273,19 +289,28 @@ impl nah_things::Resolve for Chats {
         let rest = words.trim().strip_prefix("chat ")?;
         let (who, what) = rest.split_once(" turn ").map_or((rest, None), |(who, what)| (who, Some(what)));
         Some((|| {
-            let sessions = |slots: Vec<Slot>| slots.into_iter().flat_map(|s| s.sessions.into_iter().filter_map(|x| x.native_id)).collect::<Vec<_>>();
+            let sessions =
+                |slots: Vec<Slot>| slots.into_iter().flat_map(|s| s.sessions.into_iter().filter_map(|x| x.native_id)).collect::<Vec<_>>();
             let session = if let Some(start) = who.strip_prefix("session ") {
                 let start = start.trim();
                 let held = self.named.lock().unwrap_or_else(PoisonError::into_inner).get(start).cloned();
-                held.or_else(|| sessions(self.slots.list()).into_iter().find(|n| n.as_str().starts_with(start))).ok_or_else(|| format!("no session's id starts {start}"))?
+                held.or_else(|| sessions(self.slots.list()).into_iter().find(|n| n.as_str().starts_with(start)))
+                    .ok_or_else(|| format!("no session's id starts {start}"))?
             } else {
                 let (slot_name, start) = match who.split_once('@') {
                     Some((slot, start)) => (slot, Some(start)),
                     None => (who, None),
                 };
-                let slot = self.slots.list().into_iter().find(|s| s.name == slot_name).ok_or_else(|| format!("no agent slot is named {slot_name:?}"))?;
+                let slot = self
+                    .slots
+                    .list()
+                    .into_iter()
+                    .find(|s| s.name == slot_name)
+                    .ok_or_else(|| format!("no agent slot is named {slot_name:?}"))?;
                 match start {
-                    Some(start) if !start.is_empty() => slot.sessions.iter().filter_map(|s| s.native_id.clone()).find(|n| n.as_str().starts_with(start)),
+                    Some(start) if !start.is_empty() => {
+                        slot.sessions.iter().filter_map(|s| s.native_id.clone()).find(|n| n.as_str().starts_with(start))
+                    }
                     Some(_) => None,
                     None => slot.current_session().and_then(|s| s.native_id.clone()),
                 }
@@ -294,7 +319,9 @@ impl nah_things::Resolve for Chats {
             let Some(what) = what else { return Ok(Subject::ChatSession { session }) };
             let number = |n: &str| n.trim().parse::<u32>().map_err(|_| format!("{n:?} isn't a number"));
             Ok(match what.split_once(" message ") {
-                Some((turn, message)) => Subject::ChatMessage { session, turn: number(turn)?, message: number(message)?, turn_id: String::new() },
+                Some((turn, message)) => {
+                    Subject::ChatMessage { session, turn: number(turn)?, message: number(message)?, turn_id: String::new() }
+                }
                 None => Subject::ChatTurn { session, turn: number(what)?, turn_id: String::new() },
             })
         })())
@@ -357,14 +384,24 @@ impl nah_things::Resolve for Chats {
         // Read by the turn's own id (numbered anew meanwhile, it's still the one).
         let subject = match subject.clone() {
             Subject::ChatTurn { session, turn, .. } => Subject::ChatTurn { session, turn, turn_id: running.id.to_string() },
-            Subject::ChatMessage { session, turn, message, .. } => Subject::ChatMessage { session, turn, message, turn_id: running.id.to_string() },
+            Subject::ChatMessage { session, turn, message, .. } => {
+                Subject::ChatMessage { session, turn, message, turn_id: running.id.to_string() }
+            }
             other => other,
         };
-        let chats = Chats { slots: self.slots.clone(), hub: self.hub.clone(), named: Mutex::default(), moved: OnceLock::new(), numbers: self.numbers.clone() };
+        let chats = Chats {
+            slots: self.slots.clone(),
+            hub: self.hub.clone(),
+            named: Mutex::default(),
+            moved: OnceLock::new(),
+            numbers: self.numbers.clone(),
+        };
         std::thread::spawn(move || {
             loop {
                 match events.blocking_recv().map(|s| s.event) {
-                    Ok(ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: t } }) if t.id == running.id && t.status.is_terminal() => {
+                    Ok(ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: t } })
+                        if t.id == running.id && t.status.is_terminal() =>
+                    {
                         let end = chats.now(&subject).unwrap_or_default();
                         let rest = match end.strip_prefix(&so_far) {
                             Some(rest) => rest.to_owned(),
@@ -399,14 +436,33 @@ mod tests {
     use harness_contracts::{ItemId, ItemStatus, ThreadId, ToolKind, TurnId};
 
     fn item(ordinal: u32, body: ItemBody) -> TurnItem {
-        TurnItem { id: ItemId::new(format!("i{ordinal}")), thread_id: ThreadId::new("t"), turn_id: TurnId::new("u"), native_id: None, parent_id: None, ordinal, status: ItemStatus::Completed, title: None, body }
+        TurnItem {
+            id: ItemId::new(format!("i{ordinal}")),
+            thread_id: ThreadId::new("t"),
+            turn_id: TurnId::new("u"),
+            native_id: None,
+            parent_id: None,
+            ordinal,
+            status: ItemStatus::Completed,
+            title: None,
+            body,
+        }
     }
 
     #[test]
     fn a_turn_says_your_message_the_answer_and_a_line_per_tool_call_with_what_it_gave_under_it() {
         let items = [
             item(0, ItemBody::UserMessage { text: "fix the build".into(), pieces: Vec::new() }),
-            item(1, ItemBody::ToolCall { kind: ToolKind::Execute, name: "Bash".into(), input: None, output: vec![ContentBlock::Text { text: "error: 1\nwarning: 2".into() }], locations: Vec::new() }),
+            item(
+                1,
+                ItemBody::ToolCall {
+                    kind: ToolKind::Execute,
+                    name: "Bash".into(),
+                    input: None,
+                    output: vec![ContentBlock::Text { text: "error: 1\nwarning: 2".into() }],
+                    locations: Vec::new(),
+                },
+            ),
             item(2, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Fixed.".into() }], streaming: false }),
         ];
         assert_eq!(turn_text(&items), format!("you: fix the build\n• Bash\n{DETAIL}error: 1\n{DETAIL}warning: 2\nFixed.\n"));

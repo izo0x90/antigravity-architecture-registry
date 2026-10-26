@@ -99,4 +99,3 @@ pub struct QueueSnapshot {
     /// Every component's next job, in dependency order.
     pub jobs: Vec<Job>,
 }
-

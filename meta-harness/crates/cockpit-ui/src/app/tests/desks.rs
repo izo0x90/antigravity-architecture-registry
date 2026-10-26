@@ -3,10 +3,17 @@
 //! servers, and each desk's calls go to its own server.
 
 use super::*;
-use harness_contracts::{ClientEvent, HomeEvent, LinkState, Notification, NotificationId, NotificationKind, NotificationState, ServerView, SlotId};
+use harness_contracts::{
+    ClientEvent, HomeEvent, LinkState, Notification, NotificationId, NotificationKind, NotificationState, ServerView, SlotId,
+};
 
 fn view(name: &str) -> ServerView {
-    ServerView { name: name.into(), url: if name == "here" { String::new() } else { format!("http://{name}:8080") }, link: LinkState::Connected, project: true }
+    ServerView {
+        name: name.into(),
+        url: if name == "here" { String::new() } else { format!("http://{name}:8080") },
+        link: LinkState::Connected,
+        project: true,
+    }
 }
 
 fn from_home(app: &CockpitApp, events: Vec<HomeEvent>) {
@@ -19,7 +26,21 @@ fn event(server: &str, event: ClientEvent) -> HomeEvent {
 }
 
 fn note(id: &str, kind: NotificationKind, at_ms: u64) -> ClientEvent {
-    let notification = Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: Some(SlotId::new("lead")), thread: None, request: None, terminal: None, discussion: None, title: format!("{id} title"), detail: None, at_ms, state: NotificationState::Open };
+    let notification = Notification {
+        id: NotificationId::new(id),
+        server: None,
+        level: kind.level(),
+        kind,
+        slot: Some(SlotId::new("lead")),
+        thread: None,
+        request: None,
+        terminal: None,
+        discussion: None,
+        title: format!("{id} title"),
+        detail: None,
+        at_ms,
+        state: NotificationState::Open,
+    };
     ClientEvent::NotificationUpdated { notification }
 }
 
@@ -27,7 +48,14 @@ fn note(id: &str, kind: NotificationKind, at_ms: u64) -> ClientEvent {
 /// cloud, an update here.
 fn two_desks() -> (egui::Context, CockpitApp) {
     let (ctx, mut app) = full_app();
-    from_home(&app, vec![HomeEvent::Servers { servers: vec![view("here"), view("cloud")] }, event("cloud", note("req:c1", NotificationKind::Approval, 5)), event("here", note("turn:h1", NotificationKind::TurnFinished, 3))]);
+    from_home(
+        &app,
+        vec![
+            HomeEvent::Servers { servers: vec![view("here"), view("cloud")] },
+            event("cloud", note("req:c1", NotificationKind::Approval, 5)),
+            event("here", note("turn:h1", NotificationKind::TurnFinished, 3)),
+        ],
+    );
     frame(&ctx, &mut app, vec![]);
     (ctx, app)
 }
@@ -39,12 +67,18 @@ fn each_server_gets_a_desk_fed_its_own_events_and_whats_waiting_is_counted_acros
     assert_eq!(app.away["cloud"].shared.agents.get().store().notifications.len(), 1, "taken while not shown");
     assert!(app.desk.shared.agents.get().store().notifications.contains_key(&NotificationId::new("turn:h1")));
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains(&format!("{} 1", egui_phosphor::regular::BELL)) && text.contains(&format!("{} 1", egui_phosphor::regular::TRAY)), "{text}");
+    assert!(
+        text.contains(&format!("{} 1", egui_phosphor::regular::BELL)) && text.contains(&format!("{} 1", egui_phosphor::regular::TRAY)),
+        "{text}"
+    );
     assert!(text.contains("here •"), "the chip says something waits elsewhere: {text}");
     // A Resync for one server drops only its desk's state.
     from_home(&app, vec![event("cloud", ClientEvent::Resync)]);
     frame(&ctx, &mut app, vec![]);
-    assert!(app.away["cloud"].shared.agents.get().store().notifications.is_empty() && app.away["cloud"].net.reconnected, "dropped; it refetches when shown");
+    assert!(
+        app.away["cloud"].shared.agents.get().store().notifications.is_empty() && app.away["cloud"].net.reconnected,
+        "dropped; it refetches when shown"
+    );
     assert_eq!(app.desk.shared.agents.get().store().notifications.len(), 1, "here's untouched");
 }
 
@@ -67,9 +101,17 @@ fn switching_keeps_each_desk_as_it_was_and_its_calls_go_to_its_server() {
 fn the_next_waiting_crosses_servers_and_a_removed_server_takes_its_desk_away() {
     let (ctx, mut app) = two_desks();
     from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.next_waiting"}"#).unwrap();
-    assert_eq!((app.desk.server.as_str(), app.looked_at().map(|id| id.to_string()).as_deref()), ("cloud", Some("req:c1")), "its desk shown, the look on it");
+    assert_eq!(
+        (app.desk.server.as_str(), app.looked_at().map(|id| id.to_string()).as_deref()),
+        ("cloud", Some("req:c1")),
+        "its desk shown, the look on it"
+    );
     keys(&ctx, &mut app, "J");
-    assert_eq!((app.desk.server.as_str(), app.looked_at().map(|id| id.to_string()).as_deref()), ("here", Some("turn:h1")), "J crosses to here's update");
+    assert_eq!(
+        (app.desk.server.as_str(), app.looked_at().map(|id| id.to_string()).as_deref()),
+        ("here", Some("turn:h1")),
+        "J crosses to here's update"
+    );
     let actions = from_outside(&ctx, &mut app, r#"{"op":"actions"}"#).unwrap();
     let waiting = actions.as_array().unwrap().iter().find(|a| a["id"] == "attention.waiting").expect("listed");
     assert!(waiting.to_string().contains("\"cloud/req:c1\""), "{waiting}");

@@ -39,7 +39,8 @@ pub struct Panels {
 
 impl Default for Panels {
     fn default() -> Self {
-        Self::new(vec![BufferId::new(BufferKind::Chat, 0), BufferId::new(BufferKind::Graph, 0)], 0).with_put_away(vec![(2, BufferId::new(BufferKind::Code, 0))])
+        Self::new(vec![BufferId::new(BufferKind::Chat, 0), BufferId::new(BufferKind::Graph, 0)], 0)
+            .with_put_away(vec![(2, BufferId::new(BufferKind::Code, 0))])
     }
 }
 
@@ -157,7 +158,12 @@ impl Panels {
     /// left one of two as near).
     pub fn panel_of_kind(&self, kind: BufferKind) -> Option<usize> {
         let focused = self.focused as i64;
-        self.shown.iter().enumerate().filter(|(_, p)| p.kind == kind).min_by_key(|(panel, _)| ((*panel as i64 - focused).abs(), *panel)).map(|(panel, _)| panel)
+        self.shown
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.kind == kind)
+            .min_by_key(|(panel, _)| ((*panel as i64 - focused).abs(), *panel))
+            .map(|(panel, _)| panel)
     }
 
     /// A view of `kind` that isn't anywhere yet: the first of its kind is
@@ -211,7 +217,8 @@ impl Panels {
         if let Some(panel) = self.panel_of(buffer) {
             return panel;
         }
-        let panel = self.panel_of_kind(buffer.kind).unwrap_or(if self.shown.len() == 1 { 0 } else { (self.focused + 1) % self.shown.len() });
+        let panel =
+            self.panel_of_kind(buffer.kind).unwrap_or(if self.shown.len() == 1 { 0 } else { (self.focused + 1) % self.shown.len() });
         self.place(panel, buffer)
     }
 
@@ -317,7 +324,10 @@ mod tests {
         // The queue moves rather than being doubled; a chat is another one.
         c.show(2, K::Queue);
         assert_eq!(c.kinds(), vec![K::Graph, K::Code, K::Queue]);
-        assert_eq!(Panels::new(vec![BufferId::new(K::Queue, 0), BufferId::new(K::Queue, 1), BufferId::new(K::Tree, 0)], 5).buffers(), [BufferId::new(K::Queue, 0), BufferId::new(K::Tree, 0)]);
+        assert_eq!(
+            Panels::new(vec![BufferId::new(K::Queue, 0), BufferId::new(K::Queue, 1), BufferId::new(K::Tree, 0)], 5).buffers(),
+            [BufferId::new(K::Queue, 0), BufferId::new(K::Tree, 0)]
+        );
         assert_eq!(Panels::new(vec![BufferId::new(K::Chat, 0), BufferId::new(K::Chat, 1)], 0).buffers().len(), 2, "two chats");
     }
 
@@ -331,12 +341,18 @@ mod tests {
         assert_eq!((c.buffers(), c.focused()), (buffers.as_slice(), 3), "as they were, focus on the same view");
         c.set_count(12, 10);
         assert_eq!(c.len(), 10, "up to the most there may be");
-        assert!(K::ALL.iter().take(c.len()).all(|k| c.panel_of_kind(*k).is_some()), "every kind first (as many as there are panels), then more code views");
+        assert!(
+            K::ALL.iter().take(c.len()).all(|k| c.panel_of_kind(*k).is_some()),
+            "every kind first (as many as there are panels), then more code views"
+        );
     }
 
     #[test]
     fn a_view_goes_to_the_nearest_column_of_its_kind_or_beside_the_focused_one() {
-        let mut c = Panels::new(vec![BufferId::new(K::Graph, 0), BufferId::new(K::Chat, 0), BufferId::new(K::Code, 0), BufferId::new(K::Graph, 1)], 2);
+        let mut c = Panels::new(
+            vec![BufferId::new(K::Graph, 0), BufferId::new(K::Chat, 0), BufferId::new(K::Code, 0), BufferId::new(K::Graph, 1)],
+            2,
+        );
         assert_eq!(c.panel_of_kind(K::Graph), Some(3), "the nearer graph");
         let third = c.new_buffer(K::Graph);
         assert_eq!(c.ensure_visible(third), 3, "a graph not shown takes the nearest graph's panel");

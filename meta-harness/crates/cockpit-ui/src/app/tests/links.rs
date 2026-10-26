@@ -94,10 +94,20 @@ fn an_at_typed_in_a_prompt_links_a_file_found_and_the_prompt_sends_the_link() {
     frame(&ctx, &mut app, vec![egui::Event::Text("a.rs".into())]);
     frame(&ctx, &mut app, vec![]);
     let calls = sent(&app);
-    let asked = |kind: &str| calls.iter().find(|c| c.starts_with(&format!("GET /api/search?q=a.rs&kind={kind}&"))).cloned().unwrap_or_else(|| panic!("{kind} asked: {calls:?}"));
+    let asked = |kind: &str| {
+        calls
+            .iter()
+            .find(|c| c.starts_with(&format!("GET /api/search?q=a.rs&kind={kind}&")))
+            .cloned()
+            .unwrap_or_else(|| panic!("{kind} asked: {calls:?}"))
+    };
     let file = serde_json::json!({ "query": "a.rs", "kind": "files", "hits": [{ "kind": "files", "label": "src/a.rs", "detail": "", "file": "src/a.rs" }], "total": 1 });
     assert!(app.desk.net.answer(&asked("files"), 200, &file));
-    assert!(app.desk.net.answer(&asked("symbols"), 200, &serde_json::json!({ "query": "a.rs", "kind": "symbols", "hits": [], "total": 0 })));
+    assert!(app.desk.net.answer(
+        &asked("symbols"),
+        200,
+        &serde_json::json!({ "query": "a.rs", "kind": "symbols", "hits": [], "total": 0 })
+    ));
     frame(&ctx, &mut app, vec![]);
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     frame(&ctx, &mut app, vec![]);
@@ -106,7 +116,12 @@ fn an_at_typed_in_a_prompt_links_a_file_found_and_the_prompt_sends_the_link() {
     bodies(&app, "");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     let thing = serde_json::json!({ "kind": "thing", "subject": { "kind": "code_file", "path": "src/a.rs" } });
-    assert_eq!(bodies(&app, "POST /api/slots/lead/prompt"), [serde_json::json!({ "text": "read @src/a.rs now", "links": [{ "start": 5, "end": 14, "to": thing, "include": "auto" }], "addToRunning": false })]);
+    assert_eq!(
+        bodies(&app, "POST /api/slots/lead/prompt"),
+        [
+            serde_json::json!({ "text": "read @src/a.rs now", "links": [{ "start": 5, "end": 14, "to": thing, "include": "auto" }], "addToRunning": false })
+        ]
+    );
 }
 
 /// The `@` picker's rows stay as they are while what's typed next is

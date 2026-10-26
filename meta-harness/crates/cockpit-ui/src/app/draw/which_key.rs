@@ -16,7 +16,9 @@ impl CockpitApp {
     /// Where the menu is, in words: the leader, then each group gone into.
     pub(in crate::app) fn menu_path(&self) -> Vec<String> {
         let kind = self.focused_kind();
-        std::iter::once(self.config.keymap.leader.label()).chain((1..=self.leader_path.len()).map(|depth| self.group_name(&self.leader_path[..depth], kind))).collect()
+        std::iter::once(self.config.keymap.leader.label())
+            .chain((1..=self.leader_path.len()).map(|depth| self.group_name(&self.leader_path[..depth], kind)))
+            .collect()
     }
 
     /// The groups a panel's top line offers where `here` is (`bound`: what's
@@ -42,7 +44,13 @@ impl CockpitApp {
             .map(|(key, ..)| {
                 let name = self.group_name(&[key], here.kind);
                 let keys = crate::keymap::local().leader_hint(&[key]);
-                crate::hosted::GroupButton { key, tip: format!("{name} ({keys})\nIts menu: what it holds about where it is"), keys, name, asks: (MENU.to_owned(), Some(key.to_string())) }
+                crate::hosted::GroupButton {
+                    key,
+                    tip: format!("{name} ({keys})\nIts menu: what it holds about where it is"),
+                    keys,
+                    name,
+                    asks: (MENU.to_owned(), Some(key.to_string())),
+                }
             })
             .collect()
     }
@@ -59,7 +67,13 @@ impl CockpitApp {
     /// The top bar's button for every menu: the leader's own (its root).
     pub(in crate::app) fn every_menu(&self) -> crate::hosted::GroupButton {
         let keys = self.config.keymap.leader.label();
-        crate::hosted::GroupButton { key: ' ', name: "Menus".into(), tip: format!("Menus ({keys})\nEvery menu, as the leader opens them"), keys, asks: (MENU.to_owned(), Some(String::new())) }
+        crate::hosted::GroupButton {
+            key: ' ',
+            name: "Menus".into(),
+            tip: format!("Menus ({keys})\nEvery menu, as the leader opens them"),
+            keys,
+            asks: (MENU.to_owned(), Some(String::new())),
+        }
     }
 
     /// The which-key menu, opened (the leader's key, or a group's button):
@@ -100,66 +114,96 @@ impl CockpitApp {
         let path: Vec<(usize, String)> = self.menu_path().into_iter().enumerate().collect();
         let mut back_to: Option<usize> = None;
 
-        let hud = egui::Area::new(egui::Id::new("which_key_floating_hud")).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0)).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
-            // Its width from its first pass (its measuring one): anchored by
-            // its middle, it's where it stays from the first frame shown.
-            ui.set_width(hud_w);
-            Frame::NONE.fill(colors().overlay).stroke(Stroke::new(crate::theme::look().line_thin, colors().focus)).corner_radius(crate::theme::look().radius_xl).inner_margin(crate::theme::margin2(crate::theme::look().space_xl, crate::theme::look().space_sm)).show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for (depth, part) in &path {
-                        let here = *depth == self.leader_path.len();
-                        let text = RichText::new(format!("{part} \u{203a}")).strong().size(crate::theme::look().text_body).color(if here { colors().info } else { colors().muted });
-                        if ui.add(egui::Button::new(text).frame(false)).clicked() && !here {
-                            back_to = Some(*depth);
-                        }
-                    }
-                    let esc = egui::Button::new(RichText::new(self.config.keymap.back.label()).color(colors().key).monospace().size(crate::theme::look().text_body)).corner_radius(crate::theme::look().radius_m);
-                    if ui.add(esc).clicked() {
-                        back = true;
-                    }
-                });
-                ui.separator();
-                // The focused view's entries first, under its name; then the rest.
-                let (own, rest): (Vec<&LeaderEntry>, Vec<&LeaderEntry>) = entries.iter().partition(|e| is_primary(e, &bound, &self.leader_path));
-                // Explicit rows sized to the screen (wrapping layouts ignore Area widths).
-                let per_row = ((hud_w - 28.0) / (ENTRY_W + ui.spacing().item_spacing.x)).floor().max(1.0) as usize;
-                let fingers = if self.fingers { crate::actions::Fingers::Yes } else { crate::actions::Fingers::No };
-                let view_name = self.focused_kind().words();
-                let blocks = [(Some(view_name.as_str()), own), (None, rest)];
-                for (heading, block) in blocks.iter().filter(|(_, b)| !b.is_empty()) {
-                    match heading {
-                        Some(name) => {
-                            ui.label(RichText::new(*name).monospace().strong().size(crate::theme::look().text_small).color(colors().focus));
-                        }
-                        None if blocks[0].1.is_empty() => {}
-                        None => {
-                            ui.separator();
-                        }
-                    }
-                for row in block.chunks(per_row) {
-                    ui.horizontal(|ui| {
-                        for entry in row {
-                            let primary = heading.is_some();
-                            let mut path = self.leader_path.clone();
-                            path.push(entry.key());
-                            let (key, label, detail) = match entry {
-                                LeaderEntry::Group { key } => (*key, format!("{}…", self.group_name(&path, self.focused_kind())), "Its actions"),
-                                LeaderEntry::Action { key, index } => (*key, bound[*index].action.label.clone(), bound[*index].action.detail.as_str()),
-                            };
-                            // What it does and its keys (hover, or a finger held on it).
-                            let tip = format!("{label} ({})\n{detail}", crate::keymap::local().leader_hint(&path));
-                            // One thing to tap, its whole cell (the same size in
-                            // every pass: the menu doesn't move once shown).
-                            let emphasis = if primary { crate::actions::Emphasis::Own } else { crate::actions::Emphasis::Plain };
-                            if crate::actions::entry(ui, &key.to_string(), &label, emphasis, ENTRY_W, fingers, &tip).clicked() {
-                                tapped = Some(key);
+        let hud = egui::Area::new(egui::Id::new("which_key_floating_hud"))
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0))
+            .order(egui::Order::Foreground)
+            .constrain(true)
+            .show(ctx, |ui| {
+                // Its width from its first pass (its measuring one): anchored by
+                // its middle, it's where it stays from the first frame shown.
+                ui.set_width(hud_w);
+                Frame::NONE
+                    .fill(colors().overlay)
+                    .stroke(Stroke::new(crate::theme::look().line_thin, colors().focus))
+                    .corner_radius(crate::theme::look().radius_xl)
+                    .inner_margin(crate::theme::margin2(crate::theme::look().space_xl, crate::theme::look().space_sm))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            for (depth, part) in &path {
+                                let here = *depth == self.leader_path.len();
+                                let text = RichText::new(format!("{part} \u{203a}"))
+                                    .strong()
+                                    .size(crate::theme::look().text_body)
+                                    .color(if here { colors().info } else { colors().muted });
+                                if ui.add(egui::Button::new(text).frame(false)).clicked() && !here {
+                                    back_to = Some(*depth);
+                                }
+                            }
+                            let esc = egui::Button::new(
+                                RichText::new(self.config.keymap.back.label())
+                                    .color(colors().key)
+                                    .monospace()
+                                    .size(crate::theme::look().text_body),
+                            )
+                            .corner_radius(crate::theme::look().radius_m);
+                            if ui.add(esc).clicked() {
+                                back = true;
+                            }
+                        });
+                        ui.separator();
+                        // The focused view's entries first, under its name; then the rest.
+                        let (own, rest): (Vec<&LeaderEntry>, Vec<&LeaderEntry>) =
+                            entries.iter().partition(|e| is_primary(e, &bound, &self.leader_path));
+                        // Explicit rows sized to the screen (wrapping layouts ignore Area widths).
+                        let per_row = ((hud_w - 28.0) / (ENTRY_W + ui.spacing().item_spacing.x)).floor().max(1.0) as usize;
+                        let fingers = if self.fingers { crate::actions::Fingers::Yes } else { crate::actions::Fingers::No };
+                        let view_name = self.focused_kind().words();
+                        let blocks = [(Some(view_name.as_str()), own), (None, rest)];
+                        for (heading, block) in blocks.iter().filter(|(_, b)| !b.is_empty()) {
+                            match heading {
+                                Some(name) => {
+                                    ui.label(
+                                        RichText::new(*name)
+                                            .monospace()
+                                            .strong()
+                                            .size(crate::theme::look().text_small)
+                                            .color(colors().focus),
+                                    );
+                                }
+                                None if blocks[0].1.is_empty() => {}
+                                None => {
+                                    ui.separator();
+                                }
+                            }
+                            for row in block.chunks(per_row) {
+                                ui.horizontal(|ui| {
+                                    for entry in row {
+                                        let primary = heading.is_some();
+                                        let mut path = self.leader_path.clone();
+                                        path.push(entry.key());
+                                        let (key, label, detail) = match entry {
+                                            LeaderEntry::Group { key } => {
+                                                (*key, format!("{}…", self.group_name(&path, self.focused_kind())), "Its actions")
+                                            }
+                                            LeaderEntry::Action { key, index } => {
+                                                (*key, bound[*index].action.label.clone(), bound[*index].action.detail.as_str())
+                                            }
+                                        };
+                                        // What it does and its keys (hover, or a finger held on it).
+                                        let tip = format!("{label} ({})\n{detail}", crate::keymap::local().leader_hint(&path));
+                                        // One thing to tap, its whole cell (the same size in
+                                        // every pass: the menu doesn't move once shown).
+                                        let emphasis =
+                                            if primary { crate::actions::Emphasis::Own } else { crate::actions::Emphasis::Plain };
+                                        if crate::actions::entry(ui, &key.to_string(), &label, emphasis, ENTRY_W, fingers, &tip).clicked() {
+                                            tapped = Some(key);
+                                        }
+                                    }
+                                });
                             }
                         }
                     });
-                }
-                }
             });
-        });
         self.overlays.drawn_at(crate::overlay::Overlay::Menu, hud.response.rect);
 
         if let Some(depth) = back_to {

@@ -7,8 +7,8 @@ use std::path::Path;
 
 use arch_graph::TypeSystem;
 use arch_graph::tree::{TreeRequest, ViewKind};
-use code_analyzer::{CodeRules, FileExtract, PackSet, extract_file, walk};
 use arch_service::{ArchitectureService, MemoryPlans};
+use code_analyzer::{CodeRules, FileExtract, PackSet, extract_file, walk};
 use criterion::{Criterion, criterion_group, criterion_main};
 
 fn repo() -> std::path::PathBuf {
@@ -37,13 +37,32 @@ fn hot(c: &mut Criterion) {
         b.iter(|| {
             let read = facts
                 .iter()
-                .map(|e| (code_analyzer::rows::FileRow { path: e.file.clone(), language: e.language.clone(), size: 0, modified: 0, content_hash: e.content_hash.clone(), read_version: String::new() }, e.clone()))
+                .map(|e| {
+                    (
+                        code_analyzer::rows::FileRow {
+                            path: e.file.clone(),
+                            language: e.language.clone(),
+                            size: 0,
+                            modified: 0,
+                            content_hash: e.content_hash.clone(),
+                            read_version: String::new(),
+                        },
+                        e.clone(),
+                    )
+                })
                 .collect();
             code_analyzer::Model::default().apply(&packs, &types, code_analyzer::Change { read, ..code_analyzer::Change::default() })
         })
     });
 
-    let service = ArchitectureService::open(&root, shipped_packs(), types.clone(), Box::new(MemoryPlans::default()), arch_service::temporary_facts(&arch_service::Limits::defaults().unwrap()).unwrap()).unwrap();
+    let service = ArchitectureService::open(
+        &root,
+        shipped_packs(),
+        types.clone(),
+        Box::new(MemoryPlans::default()),
+        arch_service::temporary_facts(&arch_service::Limits::defaults().unwrap()).unwrap(),
+    )
+    .unwrap();
     service.ingest(&root).unwrap();
     for (view, depth) in [(ViewKind::Contains, 4), (ViewKind::Calls, 4), (ViewKind::DataFlow, 4)] {
         let request = TreeRequest { view, depth: Some(depth), ..TreeRequest::default() };
@@ -52,7 +71,13 @@ fn hot(c: &mut Criterion) {
         let walked = service.tree(&request).unwrap();
         let layout = service.trees().layout.clone();
         // The copy each run lays out is made outside the timing.
-        c.bench_function(&format!("layout {} depth {depth}", view.name()), |b| b.iter_batched_ref(|| walked.clone(), |tree| arch_graph::tree::lay_out(tree, &layout, &|| false), criterion::BatchSize::SmallInput));
+        c.bench_function(&format!("layout {} depth {depth}", view.name()), |b| {
+            b.iter_batched_ref(
+                || walked.clone(),
+                |tree| arch_graph::tree::lay_out(tree, &layout, &|| false),
+                criterion::BatchSize::SmallInput,
+            )
+        });
     }
 
     let graph = service.observed().unwrap();

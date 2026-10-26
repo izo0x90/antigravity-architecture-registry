@@ -10,9 +10,8 @@
 //! through the server's one search, listed in the palette as they're typed.
 //! Picking one makes its card the root, in this view if it can show it.
 
-use arch_graph::tree::{ViewKind, Way};
 use arch_graph::Source;
-
+use arch_graph::tree::{ViewKind, Way};
 
 use arch_search::{Hit, SearchKind};
 
@@ -50,7 +49,9 @@ impl GraphState {
         let card = self.card(key);
         match view {
             // A component; a data card stands for its type's component.
-            ViewKind::Contains => card.and_then(|c| c.component.as_ref()).map(|id| id.0.clone()).or_else(|| (!key.starts_with("type:")).then(|| key.clone())),
+            ViewKind::Contains => {
+                card.and_then(|c| c.component.as_ref()).map(|id| id.0.clone()).or_else(|| (!key.starts_with("type:")).then(|| key.clone()))
+            }
             // Calls start from something that can be called; anything else starts afresh.
             ViewKind::Calls => card.filter(|c| c.callable).and_then(|c| c.component.as_ref()).map(|id| id.0.clone()),
             // Data flow shows data: a data card stays, anything else starts afresh.
@@ -69,7 +70,6 @@ impl GraphState {
             (ViewKind::DataFlow, Way::Down) => "Flip: show where it goes",
         }
     }
-
 }
 
 impl ActionProvider for GraphState {
@@ -84,53 +84,183 @@ impl ActionProvider for GraphState {
                 Choice::new(v.name(), v.name().replace('_', " ")).detail(detail).current(*v == self.nav.view)
             })
             .collect();
-        out.push(f("graph.view", "Switch view (contains, calls, data flow)", "What the graph draws: what holds what, what calls what, or where data goes", G::SetView).param(Param::Choice(views)).setting("View", Some(egui_phosphor::regular::GRAPH)).group(Group::View).jump());
-        out.push(f("graph.plan", "Show the code, or one plan", "The code as it is, or a plan's components (built or not); every view reads from it", G::SetPlan).param(Param::Choice(self.source_choices())).setting("Source", None).group(Group::View).jump());
+        out.push(
+            f(
+                "graph.view",
+                "Switch view (contains, calls, data flow)",
+                "What the graph draws: what holds what, what calls what, or where data goes",
+                G::SetView,
+            )
+            .param(Param::Choice(views))
+            .setting("View", Some(egui_phosphor::regular::GRAPH))
+            .group(Group::View)
+            .jump(),
+        );
+        out.push(
+            f(
+                "graph.plan",
+                "Show the code, or one plan",
+                "The code as it is, or a plan's components (built or not); every view reads from it",
+                G::SetPlan,
+            )
+            .param(Param::Choice(self.source_choices()))
+            .setting("Source", None)
+            .group(Group::View)
+            .jump(),
+        );
         if self.nav.source != Source::Code {
-            out.push(f("graph.full_code", "Show the plan in the full code", "The plan's components among all the code's, not on their own", G::FullCode).param(Param::Toggle { on: self.nav.full_code }).setting("Full code", None).group(Group::View).jump());
+            out.push(
+                f(
+                    "graph.full_code",
+                    "Show the plan in the full code",
+                    "The plan's components among all the code's, not on their own",
+                    G::FullCode,
+                )
+                .param(Param::Toggle { on: self.nav.full_code })
+                .setting("Full code", None)
+                .group(Group::View)
+                .jump(),
+            );
         }
         if self.nav.only_changed || !self.changed.is_empty() {
-            out.push(f("graph.only_changed", "Show only what the changes touch", "Only the components the comparison changed (and what holds them)", G::OnlyChanged).param(Param::Toggle { on: self.nav.only_changed }).setting("Only changed", None).group(Group::View).importance(MINOR).jump());
+            out.push(
+                f(
+                    "graph.only_changed",
+                    "Show only what the changes touch",
+                    "Only the components the comparison changed (and what holds them)",
+                    G::OnlyChanged,
+                )
+                .param(Param::Toggle { on: self.nav.only_changed })
+                .setting("Only changed", None)
+                .group(Group::View)
+                .importance(MINOR)
+                .jump(),
+            );
         }
-        out.push(f("graph.flip", self.flip_label(), "The other way round: what leads to it instead of what it leads to", G::Flip).group(Group::View).importance(SECONDARY).jump());
-        out.push(f("graph.depth_less", "Show fewer levels", "One level less below the root", G::Depth(-1)).group(Group::View).importance(MINOR).jump());
-        out.push(f("graph.depth_more", "Show more levels", "One level more below the root", G::Depth(1)).group(Group::View).importance(MINOR).jump());
+        out.push(
+            f("graph.flip", self.flip_label(), "The other way round: what leads to it instead of what it leads to", G::Flip)
+                .group(Group::View)
+                .importance(SECONDARY)
+                .jump(),
+        );
+        out.push(
+            f("graph.depth_less", "Show fewer levels", "One level less below the root", G::Depth(-1))
+                .group(Group::View)
+                .importance(MINOR)
+                .jump(),
+        );
+        out.push(
+            f("graph.depth_more", "Show more levels", "One level more below the root", G::Depth(1))
+                .group(Group::View)
+                .importance(MINOR)
+                .jump(),
+        );
         if let Some(card) = self.selected_card()
             && self.nav.root.as_deref() != Some(card.key.as_str())
         {
-            out.push(f("graph.go_in", &format!("Make {} the root", card.label), "The graph starts from it (the path back is kept)", G::GoIn).icon(egui_phosphor::regular::ARROW_SQUARE_IN).group(Group::Navigate).importance(SECONDARY).jump());
+            out.push(
+                f("graph.go_in", &format!("Make {} the root", card.label), "The graph starts from it (the path back is kept)", G::GoIn)
+                    .icon(egui_phosphor::regular::ARROW_SQUARE_IN)
+                    .group(Group::Navigate)
+                    .importance(SECONDARY)
+                    .jump(),
+            );
         }
-        out.push(f("graph.fit", "Fit the whole tree to the screen", "Zooms and pans so all of it shows", G::Fit).group(Group::View).importance(MINOR));
-        let fit_card = f("graph.fit_card", "Fit the selected card to the screen", "Zooms and pans so the card fills the panel", G::FitCard).group(Group::View).importance(MINOR);
+        out.push(
+            f("graph.fit", "Fit the whole tree to the screen", "Zooms and pans so all of it shows", G::Fit)
+                .group(Group::View)
+                .importance(MINOR),
+        );
+        let fit_card = f("graph.fit_card", "Fit the selected card to the screen", "Zooms and pans so the card fills the panel", G::FitCard)
+            .group(Group::View)
+            .importance(MINOR);
         out.push(if self.selection.is_some() { fit_card } else { fit_card.when(crate::actions::When::Unavailable) });
-        out.push(f("graph.zoom_in", "Zoom in", "Closer, around the middle of the panel", G::Zoom(self.ui.zoom_step)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_PLUS).group(Group::View).importance(MINOR));
-        out.push(f("graph.zoom_out", "Zoom out", "Further, around the middle of the panel", G::Zoom(1.0 / self.ui.zoom_step)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS).group(Group::View).importance(MINOR));
+        out.push(
+            f("graph.zoom_in", "Zoom in", "Closer, around the middle of the panel", G::Zoom(self.ui.zoom_step))
+                .icon(egui_phosphor::regular::MAGNIFYING_GLASS_PLUS)
+                .group(Group::View)
+                .importance(MINOR),
+        );
+        out.push(
+            f("graph.zoom_out", "Zoom out", "Further, around the middle of the panel", G::Zoom(1.0 / self.ui.zoom_step))
+                .icon(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS)
+                .group(Group::View)
+                .importance(MINOR),
+        );
         let (found, of) = self.find_choices();
         let find = Param::Search { hint: "a name, a file, or words in a line".into(), found, of };
-        out.push(f("graph.find", "Find in the code (symbols, files, lines)", "As you type; picking one makes it the root", G::Find).param(find).group(Group::Navigate).importance(SECONDARY).jump());
+        out.push(
+            f("graph.find", "Find in the code (symbols, files, lines)", "As you type; picking one makes it the root", G::Find)
+                .param(find)
+                .group(Group::Navigate)
+                .importance(SECONDARY)
+                .jump(),
+        );
         // Too big to show whole: only the levels that fit.
         if let Some(cut) = self.tree.as_ref().and_then(|t| t.cut.as_ref()).filter(|c| c.shown < c.asked && c.shown > 0) {
             let delta = cut.shown as i32 - self.depth() as i32;
-            let fit = f("graph.fit_levels", &format!("Show only the {} levels that fit", cut.shown), "Too big to show whole: as many levels as the server lays out", G::Depth(delta)).group(Group::View).importance(SECONDARY).jump();
+            let fit = f(
+                "graph.fit_levels",
+                &format!("Show only the {} levels that fit", cut.shown),
+                "Too big to show whole: as many levels as the server lays out",
+                G::Depth(delta),
+            )
+            .group(Group::View)
+            .importance(SECONDARY)
+            .jump();
             // Under the size note while you're on it.
             let on_note = crate::hosted::Hosted::here(self).is_some();
             out.push(if on_note { fit.on_item(crate::actions::Style::Button, format!("Show {} levels", cut.shown), None) } else { fit });
         }
         if self.agent.is_some() {
-            out.push(f("graph.agent_return", "Return to where you were before the agent moved the view", "The view as it was before the agent's navigate", G::AgentReturn).on_item(crate::actions::Style::Button, "Return", Some(egui_phosphor::regular::ARROW_U_UP_LEFT)).group(Group::Navigate).importance(PRIMARY).jump());
+            out.push(
+                f(
+                    "graph.agent_return",
+                    "Return to where you were before the agent moved the view",
+                    "The view as it was before the agent's navigate",
+                    G::AgentReturn,
+                )
+                .on_item(crate::actions::Style::Button, "Return", Some(egui_phosphor::regular::ARROW_U_UP_LEFT))
+                .group(Group::Navigate)
+                .importance(PRIMARY)
+                .jump(),
+            );
         }
         // The path to the root: each step back along it.
         if let Some(root) = &self.nav.root {
-            let name = |key: &str| self.card(key).map_or_else(|| key.rsplit([':', '.']).next().unwrap_or(key).to_owned(), |c| c.label.clone());
+            let name =
+                |key: &str| self.card(key).map_or_else(|| key.rsplit([':', '.']).next().unwrap_or(key).to_owned(), |c| c.label.clone());
             let mut steps = vec![Choice::new("top", "start").detail(Some("The view's starting points".into()))];
-            steps.extend(self.trail_roots().iter().enumerate().filter_map(|(i, r)| r.as_ref().map(|r| Choice::new(format!("back:{i}"), name(r)))));
+            steps.extend(
+                self.trail_roots().iter().enumerate().filter_map(|(i, r)| r.as_ref().map(|r| Choice::new(format!("back:{i}"), name(r)))),
+            );
             steps.push(Choice::new(format!("here:{root}"), name(root)).current(true));
             if let Some(tree) = &self.tree {
-                steps.extend(tree.path.iter().map(|c| Choice::new(format!("into:{}", c.key), format!("inside {}", c.label)).detail(Some("Show this box".into()))));
+                steps.extend(
+                    tree.path.iter().map(|c| {
+                        Choice::new(format!("into:{}", c.key), format!("inside {}", c.label)).detail(Some("Show this box".into()))
+                    }),
+                );
             }
-            out.push(f("graph.path", "Go back along the path", "The roots you went in through: pick one to go back to it", G::Path).param(Param::Choice(steps)).setting("Path", None).group(Group::Navigate).importance(MINOR).jump());
+            out.push(
+                f("graph.path", "Go back along the path", "The roots you went in through: pick one to go back to it", G::Path)
+                    .param(Param::Choice(steps))
+                    .setting("Path", None)
+                    .group(Group::Navigate)
+                    .importance(MINOR)
+                    .jump(),
+            );
         }
-        out.push(f("graph.legend", if self.legend_open { "Hide the legend" } else { "Show the legend" }, "What the graph's colours, shapes and badges mean", G::Legend).group(Group::View).importance(MINOR));
+        out.push(
+            f(
+                "graph.legend",
+                if self.legend_open { "Hide the legend" } else { "Show the legend" },
+                "What the graph's colours, shapes and badges mean",
+                G::Legend,
+            )
+            .group(Group::View)
+            .importance(MINOR),
+        );
         out
     }
 
@@ -139,7 +269,6 @@ impl ActionProvider for GraphState {
             self.command(command, value);
         }
     }
-
 
     fn search(&mut self, action: &str, query: &str) {
         if action == "graph.find" {
@@ -252,7 +381,10 @@ impl GraphState {
             if let Some(file) = &hit.file {
                 let line = hit.line.unwrap_or(1);
                 let line = line as usize;
-                self.asks.push(crate::nav::Ask::Show { target: crate::nav::Target::Span { file: file.clone(), start: line, end: line }, in_: Some(crate::kind::BufferKind::Code) });
+                self.asks.push(crate::nav::Ask::Show {
+                    target: crate::nav::Target::Span { file: file.clone(), start: line, end: line },
+                    in_: Some(crate::kind::BufferKind::Code),
+                });
             }
             return;
         };
@@ -284,7 +416,16 @@ mod tests {
     use arch_search::Found;
 
     fn hit(kind: SearchKind, key: Option<&str>, label: &str, callable: bool, data: Option<&str>) -> Hit {
-        Hit { kind, key: key.map(Into::into), label: label.into(), detail: "d".into(), file: Some("src/a.rs".into()), line: Some(3), callable, data: data.map(Into::into) }
+        Hit {
+            kind,
+            key: key.map(Into::into),
+            label: label.into(),
+            detail: "d".into(),
+            file: Some("src/a.rs".into()),
+            line: Some(3),
+            callable,
+            data: data.map(Into::into),
+        }
     }
 
     /// The graph's find, typed and driven as the palette does, answered
@@ -308,7 +449,8 @@ mod tests {
         /// The server's answer for `kind` to the latest round of `query`.
         fn answer(&self, query: &str, kind: SearchKind, found: Found) {
             let asked = format!("GET /api/search?q={}&kind={}&", urlencoding::encode(query), kind.name());
-            let call = self.server.sent.lock().unwrap().iter().rev().find(|c| c.starts_with(&asked)).cloned().unwrap_or_else(|| panic!("{asked}"));
+            let call =
+                self.server.sent.lock().unwrap().iter().rev().find(|c| c.starts_with(&asked)).cloned().unwrap_or_else(|| panic!("{asked}"));
             assert!(self.server.answer(&call, 200, &serde_json::to_value(found).unwrap()), "{call} waits");
         }
 
@@ -320,7 +462,11 @@ mod tests {
     /// "step" searched and answered (a symbol, a file, a line), taken.
     fn search_step(g: &mut GraphState, f: &Finding) {
         f.typed(g, "step");
-        f.answer("step", SearchKind::Text, Found { hits: vec![hit(SearchKind::Text, None, "// step by step", false, None)], total: 40, partial: true, ..Found::default() });
+        f.answer(
+            "step",
+            SearchKind::Text,
+            Found { hits: vec![hit(SearchKind::Text, None, "// step by step", false, None)], total: 40, partial: true, ..Found::default() },
+        );
         f.hits("step", SearchKind::Files, vec![hit(SearchKind::Files, Some("rust:a"), "src/a.rs", false, None)]);
         f.hits("step", SearchKind::Symbols, vec![hit(SearchKind::Symbols, Some("rust:a::step"), "step", true, None)]);
         g.tend_find(&f.server, &f.ctx);
@@ -339,7 +485,11 @@ mod tests {
         search_step(&mut g, &f);
         let (list, of) = g.find_choices();
         assert_eq!(of.as_deref(), Some("step"));
-        assert_eq!(list.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), ["step", "src/a.rs", "// step by step"], "symbols, files, lines");
+        assert_eq!(
+            list.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(),
+            ["step", "src/a.rs", "// step by step"],
+            "symbols, files, lines"
+        );
         // A search cut at its limit or its time says so on its last hit.
         let said = list[2].detail.clone().unwrap_or_default();
         assert!(said.contains("1 of 40 lines") && said.contains("time limit"), "{said}");
@@ -354,7 +504,10 @@ mod tests {
 
         // A line nothing in the graph stands for opens in the code.
         g.command(crate::graph::actions::GraphCommand::Find, Some(value_of(&g, "// step by step")));
-        let shown = crate::nav::Ask::Show { target: crate::nav::Target::Span { file: "src/a.rs".into(), start: 3, end: 3 }, in_: Some(crate::kind::BufferKind::Code) };
+        let shown = crate::nav::Ask::Show {
+            target: crate::nav::Target::Span { file: "src/a.rs".into(), start: 3, end: 3 },
+            in_: Some(crate::kind::BufferKind::Code),
+        };
         assert!(g.take_asks().contains(&shown), "it asks the code to show it");
 
         // A row picked from rows since replaced goes where it stands for.

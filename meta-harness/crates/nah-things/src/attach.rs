@@ -114,14 +114,22 @@ impl Things {
                         continue;
                     }
                     if a.include == Include::Whole {
-                        notes.push(format!("{}: too big to go in whole with the rest (past {} KB): it goes as its start and how to read the rest.", t.what, ATTACHED_MOST / 1000));
+                        notes.push(format!(
+                            "{}: too big to go in whole with the rest (past {} KB): it goes as its start and how to read the rest.",
+                            t.what,
+                            ATTACHED_MOST / 1000
+                        ));
                     }
                 }
                 // Its first lines, each and all cut short to fit.
                 let head: Vec<String> = sample.lines().take(POINTER_LINES).map(|l| some_of(l.to_owned(), POINTER_LINE)).collect();
                 let head = some_of(head.join("\n"), room.saturating_sub(POINTER_LINE).min(POINTER_LINES * POINTER_LINE));
                 let more = if lines as usize > POINTER_LINES { "\n  …" } else { "" };
-                out.push_str(&format!("\n- {what} ({lines} lines; its start only: {} reads the rest):\n{}{more}", t.read_by, indent(&head)));
+                out.push_str(&format!(
+                    "\n- {what} ({lines} lines; its start only: {} reads the rest):\n{}{more}",
+                    t.read_by,
+                    indent(&head)
+                ));
             }
             if its_left_out > 0 {
                 out.push_str(&format!("\n(and {its_left_out} more of it, {})", left_out_past_budget().trim_start_matches('(')));
@@ -160,7 +168,18 @@ mod tests {
     }
 
     fn one(subject: Subject, include: Include) -> Attached {
-        Attached { heading: "@it".into(), include, things: vec![AttachedThing { what: "it".into(), subject, kept: None, read_by: "`thing_read` (\"it\")".into(), whole: "`thing_read`" }], gone: false }
+        Attached {
+            heading: "@it".into(),
+            include,
+            things: vec![AttachedThing {
+                what: "it".into(),
+                subject,
+                kept: None,
+                read_by: "`thing_read` (\"it\")".into(),
+                whole: "`thing_read`",
+            }],
+            gone: false,
+        }
     }
 
     /// All the texts, as the agent reads them.
@@ -185,12 +204,20 @@ mod tests {
         assert_eq!(spent.len(), 2000);
         let handed: usize = spent.iter().filter(|t| !t.contains("left out")).map(String::len).sum();
         assert!(handed < ATTACHED_MOST + 2 * POINTER_LINE * POINTER_LINES, "{handed}");
-        assert!(spent.last().unwrap().contains("(left out: the message's 16 KB are spent") && notes.iter().any(|n| n.contains("left out")), "{notes:?}");
+        assert!(
+            spent.last().unwrap().contains("(left out: the message's 16 KB are spent") && notes.iter().any(|n| n.contains("left out")),
+            "{notes:?}"
+        );
         // Not the reader's to read: named, not handed on, and said.
         let (hidden, notes) = things.attach(&[one(lines(1, 2), Include::Whole)], &|_: &Subject| false);
-        assert!(hidden[0].contains("(not handed on: this reader can't read it)") && !hidden[0].contains("text of lines") && notes.len() == 1, "{}", all(&hidden));
+        assert!(
+            hidden[0].contains("(not handed on: this reader can't read it)") && !hidden[0].contains("text of lines") && notes.len() == 1,
+            "{}",
+            all(&hidden)
+        );
         // A link to what's gone: said.
-        let (gone, notes) = things.attach(&[Attached { heading: "#flaky".into(), include: Include::Auto, things: Vec::new(), gone: true }], &every);
+        let (gone, notes) =
+            things.attach(&[Attached { heading: "#flaky".into(), include: Include::Auto, things: Vec::new(), gone: true }], &every);
         assert!(gone[0].contains("(gone since it was linked") && notes[0].starts_with("#flaky: gone"), "{gone:?}");
         // Text that ends in … isn't taken as cut.
         assert!(!cut("Wait…", 10) && cut(&some_of("a".repeat(20), 10), 10));

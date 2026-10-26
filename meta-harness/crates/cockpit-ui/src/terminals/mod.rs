@@ -209,7 +209,14 @@ pub(crate) mod tests {
     use super::*;
 
     pub(crate) fn terminal(id: &str) -> Terminal {
-        Terminal { id: TerminalId::new(id), title: "bash".into(), status: TerminalStatus::Running, size: TermSize { cols: 80, rows: 24 }, shell: "/bin/bash".into(), folder: "/p".into() }
+        Terminal {
+            id: TerminalId::new(id),
+            title: "bash".into(),
+            status: TerminalStatus::Running,
+            size: TermSize { cols: 80, rows: 24 },
+            shell: "/bin/bash".into(),
+            folder: "/p".into(),
+        }
     }
 
     #[test]

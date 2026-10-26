@@ -2,7 +2,10 @@
 //! (answered in place, the next a key away), and chats seen.
 
 use super::*;
-use harness_contracts::{AdapterEvent, ApprovalDecision, ApprovalOption, ClientEvent, Notification, NotificationId, NotificationKind, NotificationState, RequestId, RequestKind, RequestStatus, RuntimeRequest, SlotId, ThreadId};
+use harness_contracts::{
+    AdapterEvent, ApprovalDecision, ApprovalOption, ClientEvent, Notification, NotificationId, NotificationKind, NotificationState,
+    RequestId, RequestKind, RequestStatus, RuntimeRequest, SlotId, ThreadId,
+};
 
 fn note(id: &str, kind: NotificationKind, slot: &str, request: Option<&str>, at_ms: u64) -> ClientEvent {
     let notification = Notification {
@@ -46,7 +49,11 @@ fn waiting_app() -> (egui::Context, CockpitApp) {
         response: None,
     };
     app.desk.shared.agents.get_mut().apply(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request } });
-    for event in [note("req:r1", NotificationKind::Approval, "lead", Some("r1"), 1), note("req:r2", NotificationKind::Question, "lead", Some("r2"), 2), note("turn:u1", NotificationKind::TurnFinished, "sub-1", None, 3)] {
+    for event in [
+        note("req:r1", NotificationKind::Approval, "lead", Some("r1"), 1),
+        note("req:r2", NotificationKind::Question, "lead", Some("r2"), 2),
+        note("turn:u1", NotificationKind::TurnFinished, "sub-1", None, 3),
+    ] {
         app.desk.shared.agents.get_mut().apply(event);
     }
     focus(&ctx, &mut app, BufferKind::Graph);
@@ -61,7 +68,10 @@ fn looked_at(app: &CockpitApp) -> Option<String> {
 fn the_bell_and_the_tray_say_how_many_and_their_lists_open_one_in_the_quick_look() {
     let (ctx, mut app) = waiting_app();
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains(&format!("{} 2", egui_phosphor::regular::BELL)) && text.contains(&format!("{} 1", egui_phosphor::regular::TRAY)), "one bell (system notifications off: plain), one tray: {text}");
+    assert!(
+        text.contains(&format!("{} 2", egui_phosphor::regular::BELL)) && text.contains(&format!("{} 1", egui_phosphor::regular::TRAY)),
+        "one bell (system notifications off: plain), one tray: {text}"
+    );
     let actions = from_outside(&ctx, &mut app, r#"{"op":"actions"}"#).unwrap();
     let waiting = actions.as_array().unwrap().iter().find(|a| a["id"] == "attention.waiting").expect("the waiting picker");
     assert!(waiting.to_string().contains("req:r1") && !waiting.to_string().contains("turn:u1"), "{waiting}");
@@ -80,7 +90,10 @@ fn in_the_quick_look_shift_j_and_k_go_through_them_and_y_answers_its_request() {
     let (ctx, mut app) = waiting_app();
     from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.next_waiting"}"#).unwrap();
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("Run cargo test") && text.contains("1 of 3") && text.contains("Allow"), "the request to answer, in place: {text}");
+    assert!(
+        text.contains("Run cargo test") && text.contains("1 of 3") && text.contains("Allow"),
+        "the request to answer, in place: {text}"
+    );
     keys(&ctx, &mut app, "J");
     assert_eq!(looked_at(&app).as_deref(), Some("req:r2"), "J: the next");
     let text = texts(&frame(&ctx, &mut app, vec![]));
@@ -97,7 +110,10 @@ fn in_the_quick_look_shift_j_and_k_go_through_them_and_y_answers_its_request() {
     let mut answered = app.desk.shared.agents.get().store().threads[&ThreadId::new("t")].request(&RequestId::new("r1")).unwrap().clone();
     answered.status = RequestStatus::Resolved;
     app.desk.shared.agents.get_mut().apply(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request: answered } });
-    let done = Notification { state: NotificationState::Done, ..app.desk.shared.agents.get().store().notifications[&NotificationId::new("req:r1")].clone() };
+    let done = Notification {
+        state: NotificationState::Done,
+        ..app.desk.shared.agents.get().store().notifications[&NotificationId::new("req:r1")].clone()
+    };
     app.desk.shared.agents.get_mut().apply(ClientEvent::NotificationUpdated { notification: done });
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("Already handled"), "{text}");
@@ -116,7 +132,11 @@ fn the_look_opens_its_chat_and_puts_one_away() {
     from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.updates","value":"here/turn:u1"}"#).unwrap();
     keys(&ctx, &mut app, "o");
     frame(&ctx, &mut app, vec![]);
-    assert_eq!((app.quick_look.is_none(), app.focused_kind(), app.desk.chat().ui.slot.as_str()), (true, BufferKind::Chat, "sub-1"), "the reviewer's chat");
+    assert_eq!(
+        (app.quick_look.is_none(), app.focused_kind(), app.desk.chat().ui.slot.as_str()),
+        (true, BufferKind::Chat, "sub-1"),
+        "the reviewer's chat"
+    );
 }
 
 #[test]
@@ -133,7 +153,10 @@ fn a_chat_on_screen_says_its_updates_were_seen_now_and_then() {
     assert_eq!(seen, ["POST /api/notifications/seen"], "once, not every frame");
     frame_at(&ctx, &mut app, vec![], 23.0);
     assert_eq!(sent(&app).iter().filter(|s| s.contains("seen")).count(), 1, "again after a while, while it has updates");
-    let dismissed = Notification { state: NotificationState::Dismissed, ..app.desk.shared.agents.get().store().notifications[&NotificationId::new("turn:u1")].clone() };
+    let dismissed = Notification {
+        state: NotificationState::Dismissed,
+        ..app.desk.shared.agents.get().store().notifications[&NotificationId::new("turn:u1")].clone()
+    };
     app.desk.shared.agents.get_mut().apply(ClientEvent::NotificationUpdated { notification: dismissed });
     frame_at(&ctx, &mut app, vec![], 30.0);
     assert!(!sent(&app).iter().any(|s| s.contains("seen")), "none left: nothing said");
@@ -154,9 +177,21 @@ fn the_look_has_the_keyboard_its_keys_move_and_label_its_parts_and_nothing_reach
     click_on(&ctx, &mut app, "Deny");
     assert_eq!(sent(&app), ["POST /api/threads/t/requests/r1"], "Deny, under its request");
     keys(&ctx, &mut app, "k");
-    assert_eq!((selected(&app), app.desk.inbox().cursor_key().as_deref()), (before.as_str(), Some("0")), "k moves over its parts, not the graph under it");
-    let under: Vec<String> = crate::actions::ActionProvider::actions(app.desk.inbox()).into_iter().filter(|a| a.at().is_some_and(|at| at == crate::actions::At::Item)).map(|a| a.id).collect();
-    assert_eq!(under, ["inbox.open_chat", "inbox.dismiss"], "off its request, its answers aren't under anything; on what it says, opening it and putting it away are");
+    assert_eq!(
+        (selected(&app), app.desk.inbox().cursor_key().as_deref()),
+        (before.as_str(), Some("0")),
+        "k moves over its parts, not the graph under it"
+    );
+    let under: Vec<String> = crate::actions::ActionProvider::actions(app.desk.inbox())
+        .into_iter()
+        .filter(|a| a.at().is_some_and(|at| at == crate::actions::At::Item))
+        .map(|a| a.id)
+        .collect();
+    assert_eq!(
+        under,
+        ["inbox.open_chat", "inbox.dismiss"],
+        "off its request, its answers aren't under anything; on what it says, opening it and putting it away are"
+    );
     // f labels what's in it; the bar offers its keys.
     keys(&ctx, &mut app, "gg");
     frame(&ctx, &mut app, key("f"));
@@ -164,13 +199,17 @@ fn the_look_has_the_keyboard_its_keys_move_and_label_its_parts_and_nothing_reach
     assert_eq!(hint.labels.len(), app.desk.inbox().spots().len(), "its parts, labelled");
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     let bar = bar_keys(&app);
-    assert!(bar.iter().any(|id| id == "inbox.next") && !bar.iter().any(|id| id.starts_with("request.")), "answered, its answer on its way: nothing to answer; {bar:?}");
+    assert!(
+        bar.iter().any(|id| id == "inbox.next") && !bar.iter().any(|id| id.starts_with("request.")),
+        "answered, its answer on its way: nothing to answer; {bar:?}"
+    );
 }
 
 #[test]
 fn several_answers_of_one_kind_are_numbered_not_all_y() {
     let (ctx, mut app) = waiting_app();
-    let option = |id: &str, label: &str| ApprovalOption { id: id.into(), decision: ApprovalDecision::Accept, label: label.into(), warning: None };
+    let option =
+        |id: &str, label: &str| ApprovalOption { id: id.into(), decision: ApprovalDecision::Accept, label: label.into(), warning: None };
     let mut asked = app.desk.shared.agents.get().store().threads[&ThreadId::new("t")].request(&RequestId::new("r1")).unwrap().clone();
     asked.options = vec![option("yes", "Yes, it worked"), option("no", "Still nothing")];
     app.desk.shared.agents.get_mut().apply(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request: asked } });

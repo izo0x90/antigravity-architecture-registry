@@ -14,17 +14,20 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use egui::RichText;
-use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, ComponentChangeList, Timeline, TurnChanges, Window, DiffLine, FileChanges, FileStatus, Group, Hunk, LineKind, Point};
+use harness_contracts::changes::{
+    ChangeList, ChangedFile, Comparison, ComponentChangeList, DiffLine, FileChanges, FileStatus, Group, Hunk, LineKind, Point, Timeline,
+    TurnChanges, Window,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::actions::{Action, ActionProvider, Choice, Group as ActionGroup, MINOR, Param, RunCx, SECONDARY, Style};
 use crate::config::ChangesUi;
-use crate::nav::{Ask, Fold, GoTo, Item, Motion, Move, Navigable, Place, Refresh, Spot, Step, Target};
-use crate::viewport::{Go, Show, Stop, Viewport};
-use crate::net::{NetClient, NetResult};
-use crate::hosted::{Hosted, Status, Tone};
 use crate::diff::{Numbers, draw_counts, draw_gap, draw_line, paired};
+use crate::hosted::{Hosted, Status, Tone};
+use crate::nav::{Ask, Fold, GoTo, Item, Motion, Move, Navigable, Place, Refresh, Spot, Step, Target};
+use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
+use crate::viewport::{Go, Show, Stop, Viewport};
 
 /// How a file's changes are laid out.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -523,10 +526,13 @@ impl ChangesView {
     /// Puts the cursor on component `id`'s first change (its file opened),
     /// once it's in. False when it changed nothing there.
     fn reveal(&mut self, id: &arch_graph::ComponentId) -> bool {
-        let Some(changed) = self.components.as_ref().and_then(|l| l.components.iter().find(|c| c.component == id.as_str())) else { return false };
+        let Some(changed) = self.components.as_ref().and_then(|l| l.components.iter().find(|c| c.component == id.as_str())) else {
+            return false;
+        };
         let line = changed.runs.first().map_or(1, |(start, _)| (*start).max(1) as usize);
         // The file as it is now: its unstaged changes before its staged ones.
-        let keys: Vec<FileKey> = self.list().map(|l| l.files.iter().filter(|f| f.path == changed.file).map(file_key).collect()).unwrap_or_default();
+        let keys: Vec<FileKey> =
+            self.list().map(|l| l.files.iter().filter(|f| f.path == changed.file).map(file_key).collect()).unwrap_or_default();
         let Some(key) = keys.iter().find(|(g, _)| *g != Group::Staged).or(keys.first()).cloned() else { return false };
         self.revealing = Some((key, line));
         true
@@ -548,7 +554,9 @@ impl ChangesView {
         };
         let at = changes.hunks.iter().position(|h| h.new_range().contains(&(line as u32))).unwrap_or(0);
         let rows = self.rows();
-        if let Some(row) = rows.iter().position(|r| matches!(r, Row::Hunk(_, h) if *h == at) && self.file_of(r).map(file_key).as_ref() == Some(&key)) {
+        if let Some(row) =
+            rows.iter().position(|r| matches!(r, Row::Hunk(_, h) if *h == at) && self.file_of(r).map(file_key).as_ref() == Some(&key))
+        {
             self.put_cursor(row, Show::Middle);
         }
         self.revealing = None;
@@ -630,7 +638,11 @@ impl ChangesView {
         let look = crate::theme::look();
         if self.on_timeline {
             if self.windows().is_empty() {
-                let words = if self.timeline.is_some() { "Nothing yet: a snapshot is taken whenever a turn starts or ends." } else { "Reading the timeline…" };
+                let words = if self.timeline.is_some() {
+                    "Nothing yet: a snapshot is taken whenever a turn starts or ends."
+                } else {
+                    "Reading the timeline…"
+                };
                 ui.label(RichText::new(words).size(look.text_body).color(colors().muted));
                 self.spots.clear();
                 return;
@@ -676,11 +688,14 @@ impl ChangesView {
                 self.viewport.take(&moved, self.clock, false);
             }
         }
-        let tops: Vec<f32> = rows.iter().scan(0.0, |top, row| {
-            let at = *top;
-            *top += self.heights.of(row);
-            Some(at)
-        }).collect();
+        let tops: Vec<f32> = rows
+            .iter()
+            .scan(0.0, |top, row| {
+                let at = *top;
+                *top += self.heights.of(row);
+                Some(at)
+            })
+            .collect();
         let total = tops.last().zip(rows.last()).map_or(0.0, |(t, r)| t + self.heights.of(r));
         let mut area = egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]);
         if let Some(offset) = self.viewport.wanted(self.clock) {
@@ -696,7 +711,12 @@ impl ChangesView {
                 let shown = ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| self.draw_row(ui, row));
                 if at == self.cursor {
                     let look = crate::theme::look();
-                    ui.painter().rect_stroke(rect, look.radius_s, egui::Stroke::new(look.line_thin * 1.5, colors().focus), egui::StrokeKind::Inside);
+                    ui.painter().rect_stroke(
+                        rect,
+                        look.radius_s,
+                        egui::Stroke::new(look.line_thin * 1.5, colors().focus),
+                        egui::StrokeKind::Inside,
+                    );
                 }
                 drawn.push((row.clone(), shown.response.rect.height()));
                 if row.stop() {
@@ -738,7 +758,12 @@ impl ChangesView {
                     let caret = crate::nav::fold_mark(!folded);
                     ui.label(RichText::new(caret).size(look.text_small).color(colors().muted));
                     if !folded {
-                        ui.label(RichText::new(format!("@@ −{},{} +{},{} @@", hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines)).monospace().size(look.text_small).color(colors().faint));
+                        ui.label(
+                            RichText::new(format!("@@ −{},{} +{},{} @@", hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines))
+                                .monospace()
+                                .size(look.text_small)
+                                .color(colors().faint),
+                        );
                         // A new or deleted file's change is the whole of it: nothing around.
                         if !matches!(file.status, FileStatus::Added | FileStatus::Deleted) {
                             ui.label(RichText::new(around_words(hunk)).size(look.text_small).color(colors().muted));
@@ -747,12 +772,16 @@ impl ChangesView {
                     }
                     // Folded: where it is and how much changed.
                     let (added, removed) = crate::diff::counts(&hunk.lines);
-                    ui.label(RichText::new(format!("line {}", hunk.new_start.max(1))).monospace().size(look.text_small).color(colors().text));
+                    ui.label(
+                        RichText::new(format!("line {}", hunk.new_start.max(1))).monospace().size(look.text_small).color(colors().text),
+                    );
                     draw_counts(ui, added, removed);
                 });
             }
             Row::Line(i, h, n) => {
-                let Some(hunk) = self.file_changes(list.files[*i].group, &list.files[*i].path).and_then(|c| c.hunks.get(*h)) else { return };
+                let Some(hunk) = self.file_changes(list.files[*i].group, &list.files[*i].path).and_then(|c| c.hunks.get(*h)) else {
+                    return;
+                };
                 if !self.side {
                     if let Some(line) = hunk.lines.get(*n) {
                         draw_line(ui, line, Numbers::Shown);
@@ -789,7 +818,11 @@ impl ChangesView {
             ui.label(RichText::new(when).size(look.text_body).color(if compared { colors().accent } else { colors().text_strong }));
             let files = if w.files == 1 { "1 file".to_owned() } else { format!("{} files", w.files) };
             ui.label(RichText::new(files).monospace().size(look.text_small).color(if w.files > 0 { colors().ok } else { colors().muted }));
-            let who = if w.working.is_empty() { "no session working".to_owned() } else { w.working.iter().map(|x| if x.slot.is_empty() { x.thread.clone() } else { x.slot.clone() }).collect::<Vec<_>>().join(", ") };
+            let who = if w.working.is_empty() {
+                "no session working".to_owned()
+            } else {
+                w.working.iter().map(|x| if x.slot.is_empty() { x.thread.clone() } else { x.slot.clone() }).collect::<Vec<_>>().join(", ")
+            };
             ui.add(egui::Label::new(RichText::new(who).size(look.text_small).color(colors().muted)).truncate());
         });
     }
@@ -881,7 +914,10 @@ impl ChangesView {
             _ => None,
         })));
         let closed = self.list().is_some_and(|l| l.files.iter().any(|f| !self.opened.contains_key(&file_key(f))));
-        out.extend(crate::nav::fold_all((closed || !self.folded.is_empty(), "Unfold everything"), (!self.opened.is_empty(), "Fold everything")));
+        out.extend(crate::nav::fold_all(
+            (closed || !self.folded.is_empty(), "Unfold everything"),
+            (!self.opened.is_empty(), "Fold everything"),
+        ));
         out
     }
 }
@@ -938,29 +974,77 @@ impl ChangesView {
 impl ActionProvider for ChangesView {
     fn actions(&self) -> Vec<Action> {
         let f = |id: &str, label: &str, detail: &str, c: Command| Action::new(id, label, detail, c).focused();
-        let mut choices: Vec<Choice> = offered().into_iter().map(|(c, label)| Choice::new(c.range(), label).current(c == self.comparison)).collect();
+        let mut choices: Vec<Choice> =
+            offered().into_iter().map(|(c, label)| Choice::new(c.range(), label).current(c == self.comparison)).collect();
         if !offered().iter().any(|(c, _)| *c == self.comparison) {
             choices.push(Choice::new(self.comparison.range(), self.comparison.to_string()).current(true));
         }
         let layouts = DiffLayout::ALL.iter().map(|(l, label)| Choice::new(l.name(), *label).current(*l == self.layout)).collect();
         let mut out = self.moves();
         out.extend([
-            f("changes.compare", "Compare what with what", "Uncommitted, the last commit, staged, any commit or branch: what against what", Command::Compare).param(Param::Choice(choices)).setting("Compare", None).group(ActionGroup::View).importance(SECONDARY),
-            f("changes.layout", "Lay changes out", "One column or side by side (auto: side by side when there's room)", Command::Layout).param(Param::Choice(layouts)).setting("Layout", None).group(ActionGroup::View).importance(MINOR),
-            f("changes.refresh", "Read the changes again", "Asks git again what changed", Command::Refresh).group(ActionGroup::View).importance(MINOR),
+            f(
+                "changes.compare",
+                "Compare what with what",
+                "Uncommitted, the last commit, staged, any commit or branch: what against what",
+                Command::Compare,
+            )
+            .param(Param::Choice(choices))
+            .setting("Compare", None)
+            .group(ActionGroup::View)
+            .importance(SECONDARY),
+            f("changes.layout", "Lay changes out", "One column or side by side (auto: side by side when there's room)", Command::Layout)
+                .param(Param::Choice(layouts))
+                .setting("Layout", None)
+                .group(ActionGroup::View)
+                .importance(MINOR),
+            f("changes.refresh", "Read the changes again", "Asks git again what changed", Command::Refresh)
+                .group(ActionGroup::View)
+                .importance(MINOR),
         ]);
-        out.push(f("changes.timeline", "Show when the files changed and who was working", "The windows between snapshots, newest first, with the sessions at work", Command::Timeline).param(Param::Toggle { on: self.on_timeline }).setting("Timeline", None).group(ActionGroup::View).importance(SECONDARY));
+        out.push(
+            f(
+                "changes.timeline",
+                "Show when the files changed and who was working",
+                "The windows between snapshots, newest first, with the sessions at work",
+                Command::Timeline,
+            )
+            .param(Param::Toggle { on: self.on_timeline })
+            .setting("Timeline", None)
+            .group(ActionGroup::View)
+            .importance(SECONDARY),
+        );
         // Staging: the user's own act, on the uncommitted changes.
         if let Some(row) = self.cursor_row().filter(|_| self.comparison.is_uncommitted())
             && let Some(stage) = self.file_of(&row).and_then(|f| f.group.staging())
         {
-            let (id, label, caption) = if stage { ("changes.stage", "Stage it", "Stage") } else { ("changes.unstage", "Unstage it", "Unstage") };
-            out.push(f(id, label, "Writes the index only: your files and branch stay as they are", Command::Stage(stage)).on_item(Style::Button, caption, None).group(ActionGroup::Act).importance(SECONDARY));
+            let (id, label, caption) =
+                if stage { ("changes.stage", "Stage it", "Stage") } else { ("changes.unstage", "Unstage it", "Unstage") };
+            out.push(
+                f(id, label, "Writes the index only: your files and branch stay as they are", Command::Stage(stage))
+                    .on_item(Style::Button, caption, None)
+                    .group(ActionGroup::Act)
+                    .importance(SECONDARY),
+            );
         }
         if let Some(Row::Window(_)) = self.cursor_row() {
-            out.push(f("changes.since", "Compare from here to the files now", "Everything changed since this snapshot", Command::Since).on_item(Style::Button, "Since here", None).group(ActionGroup::View).importance(MINOR));
+            out.push(
+                f("changes.since", "Compare from here to the files now", "Everything changed since this snapshot", Command::Since)
+                    .on_item(Style::Button, "Since here", None)
+                    .group(ActionGroup::View)
+                    .importance(MINOR),
+            );
         } else if self.more_context_here().is_some() {
-            out.push(f("changes.more_context", &format!("Show {} more lines around its changes", self.ui.more_context), "More of the unchanged lines on each side", Command::MoreContext).on_item(Style::Button, "More context", None).group(ActionGroup::View).importance(MINOR));
+            out.push(
+                f(
+                    "changes.more_context",
+                    &format!("Show {} more lines around its changes", self.ui.more_context),
+                    "More of the unchanged lines on each side",
+                    Command::MoreContext,
+                )
+                .on_item(Style::Button, "More context", None)
+                .group(ActionGroup::View)
+                .importance(MINOR),
+            );
         }
         out
     }
@@ -987,10 +1071,20 @@ impl ActionProvider for ChangesView {
             Some(Command::Stage(stage)) => {
                 let Some(row) = self.cursor_row() else { return };
                 let Some(file) = self.file_of(&row).cloned() else { return };
-                let hunk = Self::hunk_of(&row).and_then(|(_, h)| self.opened.get(&file_key(&file)).and_then(|o| Some((o.changes.as_ref()?.hunks.get(h)?.clone(), o.context)))).map(|(h, context)| (h.old_start, h.new_start, context));
+                let hunk = Self::hunk_of(&row)
+                    .and_then(|(_, h)| {
+                        self.opened.get(&file_key(&file)).and_then(|o| Some((o.changes.as_ref()?.hunks.get(h)?.clone(), o.context)))
+                    })
+                    .map(|(h, context)| (h.old_start, h.new_start, context));
                 // A whole file: the cursor follows it to its new group.
                 if hunk.is_none() {
-                    let to = if *stage { Group::Staged } else if file.status == FileStatus::Added && file.old_path.is_none() { Group::Untracked } else { Group::Unstaged };
+                    let to = if *stage {
+                        Group::Staged
+                    } else if file.status == FileStatus::Added && file.old_path.is_none() {
+                        Group::Untracked
+                    } else {
+                        Group::Unstaged
+                    };
                     self.restore = Some(Restore::Row(format!("f:{to:?}:{}", file.path)));
                 }
                 let inbox = self.inbox.clone();
@@ -1059,7 +1153,6 @@ impl crate::buffer::Buffer for ChangesView {
         }
     }
 
-
     /// How its changes are laid out.
     fn keep(&self) -> Option<serde_json::Value> {
         serde_json::to_value(self.layout).ok()
@@ -1127,7 +1220,11 @@ impl Navigable for ChangesView {
     /// when it does). A component: its first change.
     fn show_target(&mut self, target: &Target) -> Result<(), String> {
         if let Target::Message { turn, link, .. } = target {
-            let comparison = turn.as_deref().and_then(|t| self.turn(t)).map(|t| t.comparison.clone()).ok_or("The timeline didn't see this turn's start.")?;
+            let comparison = turn
+                .as_deref()
+                .and_then(|t| self.turn(t))
+                .map(|t| t.comparison.clone())
+                .ok_or("The timeline didn't see this turn's start.")?;
             self.compare(comparison);
             self.show_timeline(false);
             if let Some((path, _)) = link {
@@ -1170,7 +1267,9 @@ impl Navigable for ChangesView {
             Row::Hunk(_, h) => hunks.get(h),
             _ => hunks.first(),
         };
-        let line = hunk.map_or(1, |h| h.lines.iter().find(|l| l.kind != LineKind::Context).and_then(|l| l.new.or(l.old)).unwrap_or(h.new_start.max(1)));
+        let line = hunk.map_or(1, |h| {
+            h.lines.iter().find(|l| l.kind != LineKind::Context).and_then(|l| l.new.or(l.old)).unwrap_or(h.new_start.max(1))
+        });
         Some(Target::Change { file: file.path.clone(), line: line as usize })
     }
 
@@ -1189,7 +1288,15 @@ impl Navigable for ChangesView {
                 let forward = motion == Motion::NextSibling;
                 let mut at = Some(self.cursor);
                 for _ in 0..count {
-                    at = at.and_then(|from| if forward { rows.iter().enumerate().skip(from + 1).find(|(_, r)| change(r)).map(|(i, _)| i) } else { rows.iter().enumerate().take(from).rev().find(|(_, r)| change(r)).map(|(i, _)| i) }).or(at);
+                    at = at
+                        .and_then(|from| {
+                            if forward {
+                                rows.iter().enumerate().skip(from + 1).find(|(_, r)| change(r)).map(|(i, _)| i)
+                            } else {
+                                rows.iter().enumerate().take(from).rev().find(|(_, r)| change(r)).map(|(i, _)| i)
+                            }
+                        })
+                        .or(at);
                 }
                 if let Some(at) = at.filter(|a| *a != self.cursor) {
                     let (_, stops) = self.stops(&rows);
@@ -1251,7 +1358,13 @@ impl Navigable for ChangesView {
             .filter_map(|row| {
                 let (name, text) = match row {
                     Row::Group(_) => return None,
-                    Row::Window(w) => (String::new(), windows.get(*w).map(|w| w.working.iter().map(|x| format!("{} {}", x.slot, x.thread)).collect::<Vec<_>>().join(" ")).unwrap_or_default()),
+                    Row::Window(w) => (
+                        String::new(),
+                        windows
+                            .get(*w)
+                            .map(|w| w.working.iter().map(|x| format!("{} {}", x.slot, x.thread)).collect::<Vec<_>>().join(" "))
+                            .unwrap_or_default(),
+                    ),
                     Row::File(i) => (list?.files[*i].path.clone(), list?.files[*i].path.clone()),
                     Row::Hunk(..) => (String::new(), String::new()),
                     // Each line found where it is, removed ones too.

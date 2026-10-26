@@ -14,9 +14,9 @@ use harness_contracts::{InstanceId, NativeId, RequestId, RequestResponse, SteerI
 use harness_core::HarnessError;
 use serde::Deserialize;
 
-use crate::server::ApiResult;
-use crate::modules::HarnessState;
 use crate::cockpit::{Needs, can};
+use crate::modules::HarnessState;
+use crate::server::ApiResult;
 
 pub(crate) fn routes() -> Router<HarnessState> {
     Router::new()
@@ -42,7 +42,11 @@ async fn list_instances(_: Needs<can::ViewRead>, State(state): State<HarnessStat
 
 /// Re-probes an instance, first looking its harness's launch up again: a
 /// pack installed or fixed since makes the instance anew with it.
-async fn refresh_instance(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
+async fn refresh_instance(
+    _: Needs<can::SessionsControl>,
+    State(state): State<HarnessState>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
     let id = InstanceId::new(id);
     let root = state.root.clone();
     let launches = tokio::task::spawn_blocking(move || crate::packs::catalog(&root).map(|c| crate::packs::harness_launches(&c))).await;
@@ -104,7 +108,11 @@ fn auth_controller(state: &HarnessState, id: String) -> ApiResult<Arc<dyn harnes
 
 /// What's to be done to sign in (also in the instance's snapshot), or
 /// nothing: it's signed in.
-async fn begin_auth(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path((id, method)): Path<(String, String)>) -> ApiResult<Json<Option<harness_contracts::SignInWaiting>>> {
+async fn begin_auth(
+    _: Needs<can::SessionsControl>,
+    State(state): State<HarnessState>,
+    Path((id, method)): Path<(String, String)>,
+) -> ApiResult<Json<Option<harness_contracts::SignInWaiting>>> {
     Ok(Json(auth_controller(&state, id)?.begin(&method).await?))
 }
 
@@ -118,7 +126,12 @@ async fn complete_auth(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn cancel_auth(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(id): Path<String>, Json(body): Json<CancelAuthRequest>) -> ApiResult<StatusCode> {
+async fn cancel_auth(
+    _: Needs<can::SessionsControl>,
+    State(state): State<HarnessState>,
+    Path(id): Path<String>,
+    Json(body): Json<CancelAuthRequest>,
+) -> ApiResult<StatusCode> {
     auth_controller(&state, id)?.cancel(body.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -130,13 +143,22 @@ async fn logout(_: Needs<can::SessionsControl>, State(state): State<HarnessState
 
 // ---- threads (sessions open, close and take prompts by slot: see `slots`) ----
 
-async fn steer(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(thread): Path<String>, Json(input): Json<SteerInput>) -> ApiResult<StatusCode> {
+async fn steer(
+    _: Needs<can::SessionsControl>,
+    State(state): State<HarnessState>,
+    Path(thread): Path<String>,
+    Json(input): Json<SteerInput>,
+) -> ApiResult<StatusCode> {
     state.sessions.get(&ThreadId::new(thread))?.steer(input).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Stops one sub-agent's work, the turn going on (when its harness lets it).
-async fn cancel_subagent(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path((thread, subagent)): Path<(String, String)>) -> ApiResult<StatusCode> {
+async fn cancel_subagent(
+    _: Needs<can::SessionsControl>,
+    State(state): State<HarnessState>,
+    Path((thread, subagent)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
     state.sessions.get(&ThreadId::new(thread))?.cancel_subagent(&harness_contracts::SubagentId::new(subagent)).await?;
     Ok(StatusCode::NO_CONTENT)
 }

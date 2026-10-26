@@ -72,7 +72,12 @@ impl Message {
         let lead = self.text.chars().take_while(|c| c.is_whitespace()).count();
         let text = self.text.trim().to_owned();
         let len = text.chars().count();
-        let links = self.links.into_iter().filter(|l| l.start < l.end && l.start >= lead && l.end - lead <= len).map(|l| Link { start: l.start - lead, end: l.end - lead, ..l }).collect();
+        let links = self
+            .links
+            .into_iter()
+            .filter(|l| l.start < l.end && l.start >= lead && l.end - lead <= len)
+            .map(|l| Link { start: l.start - lead, end: l.end - lead, ..l })
+            .collect();
         Self { text, links }
     }
 
@@ -139,7 +144,9 @@ impl Piece {
         let len = self.text.len();
         match self.links.first().map(|l| &l.to) {
             Some(Linked::Tag { tag }) => format!("{LABEL_START}tag/{}?at={at}&len={len}", escaped(tag.as_str())),
-            Some(Linked::Thing { subject }) => format!("{LABEL_START}thing?subject={}&at={at}&len={len}", escaped(&serde_json::to_string(subject).unwrap_or_default())),
+            Some(Linked::Thing { subject }) => {
+                format!("{LABEL_START}thing?subject={}&at={at}&len={len}", escaped(&serde_json::to_string(subject).unwrap_or_default()))
+            }
             None => format!("{LABEL_START}none?len={len}"),
         }
     }
@@ -205,7 +212,8 @@ fn escaped(text: &str) -> String {
 /// digits, so it wasn't).
 fn unescaped(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
-    let well_formed = text.match_indices('%').all(|(at, _)| bytes.get(at + 1..at + 3).is_some_and(|hex| hex.iter().all(u8::is_ascii_hexdigit)));
+    let well_formed =
+        text.match_indices('%').all(|(at, _)| bytes.get(at + 1..at + 3).is_some_and(|hex| hex.iter().all(u8::is_ascii_hexdigit)));
     well_formed.then(|| urlencoding::decode(text).ok()).flatten().map(std::borrow::Cow::into_owned)
 }
 
@@ -213,7 +221,10 @@ impl Message {
     /// `head`, then this message (its links moved along).
     pub fn after(self, head: &str) -> Self {
         let by = head.chars().count();
-        Self { text: format!("{head}{}", self.text), links: self.links.into_iter().map(|l| Link { start: l.start + by, end: l.end + by, ..l }).collect() }
+        Self {
+            text: format!("{head}{}", self.text),
+            links: self.links.into_iter().map(|l| Link { start: l.start + by, end: l.end + by, ..l }).collect(),
+        }
     }
 
     /// Messages one after the other, `between` each, their links moved along.
@@ -264,7 +275,10 @@ mod tests {
         assert_eq!(pieces[0].label(), format!("nah://tag/x?at=4-10-auto,21-27-pointer&len={}", pieces[0].text.len()));
         for p in &pieces {
             let label = p.label();
-            assert!(!label.contains(|c: char| c.is_whitespace() || "()\"<>".contains(c)), "{label}: nothing an agent's own writing ends a label at");
+            assert!(
+                !label.contains(|c: char| c.is_whitespace() || "()\"<>".contains(c)),
+                "{label}: nothing an agent's own writing ends a label at"
+            );
             // Read back where it's written, followed by anything.
             let written = format!("{label}nah://more");
             assert_eq!(Piece::read_label(&written), Some((p.links.clone(), p.text.len(), label.len())), "{label}");

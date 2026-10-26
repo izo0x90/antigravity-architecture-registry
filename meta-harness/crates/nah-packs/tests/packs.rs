@@ -12,7 +12,10 @@ fn shipped(name: &str) -> String {
 
 /// The shipped index and platforms, plus `packs` (path, text).
 fn distribution(packs: &[(&str, &str)]) -> Distribution {
-    let mut files = vec![("index.toml".to_owned(), shipped("index.toml").into_bytes()), ("platforms.toml".to_owned(), shipped("platforms.toml").into_bytes())];
+    let mut files = vec![
+        ("index.toml".to_owned(), shipped("index.toml").into_bytes()),
+        ("platforms.toml".to_owned(), shipped("platforms.toml").into_bytes()),
+    ];
     files.extend(packs.iter().map(|(p, t)| ((*p).to_owned(), t.as_bytes().to_vec())));
     Distribution::new(files)
 }
@@ -85,10 +88,16 @@ fn manifests_are_checked_strictly_when_loaded() {
 
     let with = |from: &str, to: &str| good.replacen(from, to, 1);
     assert!(bad(&w, &with("[provides]", "[provides]\nextra = 1")).contains("unknown field"));
-    assert!(bad(&w, &with("[provides]\nlaunch = { program = \"{dest}/server.bin\" }\ndriver = \"fake\"\n", "")).contains("harness packs need [provides]"));
+    assert!(
+        bad(&w, &with("[provides]\nlaunch = { program = \"{dest}/server.bin\" }\ndriver = \"fake\"\n", ""))
+            .contains("harness packs need [provides]")
+    );
     assert!(bad(&w, &with("{dest}/server.bin", "{dest}/{nope}")).contains("provides.launch: unknown placeholder {nope}"));
     assert!(bad(&w, &with(&"a".repeat(64), "abc")).contains("64 lowercase hex"));
-    assert!(bad(&w, &with(&format!(", sha256 = \"{}\"", "a".repeat(64)), "")).contains("missing field `sha256`"), "a download needs a checksum");
+    assert!(
+        bad(&w, &with(&format!(", sha256 = \"{}\"", "a".repeat(64)), "")).contains("missing field `sha256`"),
+        "a download needs a checksum"
+    );
     assert!(bad(&w, &with("file:///x.zip", "file:///{nope}.zip")).contains("unknown placeholder {nope}"));
     assert!(bad(&w, &with("\"linux-arm64\"", "\"plan9-mips\"")).contains("no platform 'plan9-mips'"));
     assert!(bad(&w, &with("version = \"1.1.1\"", "version = \"3.0.0\"")).contains("isn't in tool.supports"));
@@ -117,7 +126,9 @@ ready_timeout_s = 60
 request_timeout_s = 10
 "#;
     assert!(load(&w, &[("s/pack.toml", server)]).is_ok());
-    assert!(bad(&w, &server.replace("[tool.check]\ncommand = \"fake\"\nversion = '(\\d+\\.\\d+\\.\\d+)'\n", "")).contains("needs [tool.check]"));
+    assert!(
+        bad(&w, &server.replace("[tool.check]\ncommand = \"fake\"\nversion = '(\\d+\\.\\d+\\.\\d+)'\n", "")).contains("needs [tool.check]")
+    );
     let language = "[pack]\nname = \"fake-lang\"\nkind = \"language\"\nversion = \"1.0.0\"\ndescription = \"A language.\"\n[language]\nsyntax = \"syntax.toml\"\nserver = \"fake-server\"\n";
     assert!(bad(&w, language).contains("no file 'syntax.toml'"));
     assert!(load(&w, &[("l/pack.toml", language), ("l/syntax.toml", ""), ("s/pack.toml", server)]).is_ok());
@@ -185,12 +196,18 @@ fn installs_run_the_steps_verify_and_record_and_a_failure_keeps_what_was_there()
     let tampered = downloads.join("server2.zip");
     zip(&tampered, &[("server.bin", "v2")]);
     let newer = load(&w, &[("harness/fake/pack.toml", &harness("2.0.0", &tampered, &sum))]).unwrap();
-    assert_eq!(nah_packs::state(&newer, &lock(), "fake-harness").unwrap(), State::Outdated { installed: "1.0.0".into(), available: "2.0.0".into() });
+    assert_eq!(
+        nah_packs::state(&newer, &lock(), "fake-harness").unwrap(),
+        State::Outdated { installed: "1.0.0".into(), available: "2.0.0".into() }
+    );
     let err = nah_packs::install(&newer, "fake-harness", &platform).unwrap_err().to_string();
     assert!(err.contains("checksum"), "{err}");
     assert_eq!(lock().packs["fake-harness"], installed, "the lock still says the old install");
     assert_eq!(std::fs::read_to_string(&program).unwrap(), "v1", "and it's still there");
-    assert!(std::fs::read_dir(&catalog.root).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with('.')), "no staging left behind");
+    assert!(
+        std::fs::read_dir(&catalog.root).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with('.')),
+        "no staging left behind"
+    );
 
     // The right archive: the new version replaces the old one.
     let good = zip(&tampered, &[("server.bin", "v2")]);
@@ -226,9 +243,16 @@ fn a_check_compares_the_tools_version_with_the_packs_range() {
     };
     let lock = Lock::default();
     let ready = load(&w, &[("s/pack.toml", &server(">=1.0.0, <2.0.0"))]).unwrap();
-    assert_eq!(nah_packs::state(&ready, &lock, "fake-server").unwrap(), State::Ready { tool_version: Some("1.4.2".into()) }, "found on its own, already installed");
+    assert_eq!(
+        nah_packs::state(&ready, &lock, "fake-server").unwrap(),
+        State::Ready { tool_version: Some("1.4.2".into()) },
+        "found on its own, already installed"
+    );
     let old = load(&w, &[("s/pack.toml", &server(">=2.0.0"))]).unwrap();
-    assert_eq!(nah_packs::state(&old, &lock, "fake-server").unwrap(), State::OutOfRange { found: "1.4.2".into(), supports: ">=2.0.0".into() });
+    assert_eq!(
+        nah_packs::state(&old, &lock, "fake-server").unwrap(),
+        State::OutOfRange { found: "1.4.2".into(), supports: ">=2.0.0".into() }
+    );
     std::fs::remove_file(&tool).unwrap();
     assert_eq!(nah_packs::state(&ready, &lock, "fake-server").unwrap(), State::Missing);
 }
@@ -273,7 +297,9 @@ fn a_font_packs_face_is_its_installs_file_once_it_is_ready() {
 
     let with = |from: &str, to: &str| good.replacen(from, to, 1);
     assert!(bad(&w, &with("[font]\nface = \"ttf/Fake-Regular.ttf\"\n", "")).contains("font packs need [font]"));
-    assert!(bad(&w, &with("holds = [\"ttf/Fake-Regular.ttf\"]", "holds = []")).contains("holds doesn't keep the face ttf/Fake-Regular.ttf"));
+    assert!(
+        bad(&w, &with("holds = [\"ttf/Fake-Regular.ttf\"]", "holds = []")).contains("holds doesn't keep the face ttf/Fake-Regular.ttf")
+    );
     assert!(bad(&w, &with("face = ", "family = \"Fake\"\nface = ")).contains("unknown field"));
     let e = bad(&w, &harness("1.0.0", &archive, &sum).replace("[provides]", "[font]\nface = \"x\"\n\n[provides]"));
     assert!(e.contains("harness packs have no [font]"), "{e}");

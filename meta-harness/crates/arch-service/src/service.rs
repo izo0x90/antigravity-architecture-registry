@@ -11,20 +11,19 @@ use arch_store::{SqliteStore, Stamp};
 
 use arch_graph::tree::{Tree, TreeRequest};
 use arch_graph::{
-    Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, PlanKind, Report, Requester,
-    RepoPath, Severity, Source, Stage, Target, TypeSystem, ViewRequest, can_transition, ComponentDetail, schema::Dsl,
-    IndexStatus,
+    Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentDetail, ComponentId, Finding, FindingCode, Graph, IndexStatus, Plan,
+    PlanId, PlanKind, RepoPath, Report, Requester, Severity, Source, Stage, Target, TypeSystem, ViewRequest, can_transition, schema::Dsl,
 };
 use code_analyzer::{AmbiguousCall, CodeRules, Occurrence, PackSet, content_hash};
 use serde::{Deserialize, Serialize};
 
-use crate::progress::{Downgrade, cascade};
-use crate::import::ImportReport;
 use crate::contract::{ContractSlice, slice};
+use crate::import::ImportReport;
 use crate::ops::{PlanOp, apply};
-use crate::review::{ReviewProvider, ReviewerCatalog, ReviewsReport, Subject};
 use crate::perf::{GraphSize, PerfReport, StoreSize, Timing};
 use crate::pipeline::{Core, Pipeline, Snapshot};
+use crate::progress::{Downgrade, cascade};
+use crate::review::{ReviewProvider, ReviewerCatalog, ReviewsReport, Subject};
 use crate::store::PlanRepository;
 use crate::tools::{ProcessRunner, ToolCatalog, ToolRunner, ToolsReport};
 use crate::{ServiceError, chain, checks, review, tools, verify};
@@ -199,7 +198,14 @@ fn kept<T>(list: &Mutex<Vec<Kept<T>>>, graph: &Arc<Graph>, build: impl FnOnce() 
 
 /// A tree request in words (for timings and the slow log).
 fn asked(request: &TreeRequest, card: Option<&str>) -> String {
-    let mut out = format!("{} {:?} from {} depth {:?} ({})", request.view.name(), request.way, request.root.as_deref().unwrap_or("the start"), request.depth, request.source);
+    let mut out = format!(
+        "{} {:?} from {} depth {:?} ({})",
+        request.view.name(),
+        request.way,
+        request.root.as_deref().unwrap_or("the start"),
+        request.depth,
+        request.source
+    );
     if let Some(card) = card {
         out.push_str(&format!(", card {card}"));
     }
@@ -217,8 +223,12 @@ fn asked(request: &TreeRequest, card: Option<&str>) -> String {
 pub fn only_changes(plan: &Plan, what: &str) -> Result<(), ServiceError> {
     match plan.kind {
         PlanKind::Change => Ok(()),
-        PlanKind::Walkthrough => Err(ServiceError::InvalidOp(format!("{} is a walkthrough: it explains the code, so nothing in it is {what}", plan.id))),
-        PlanKind::Review => Err(ServiceError::InvalidOp(format!("{} is a review: a list of items, with nothing in it to be {what}", plan.id))),
+        PlanKind::Walkthrough => {
+            Err(ServiceError::InvalidOp(format!("{} is a walkthrough: it explains the code, so nothing in it is {what}", plan.id)))
+        }
+        PlanKind::Review => {
+            Err(ServiceError::InvalidOp(format!("{} is a review: a list of items, with nothing in it to be {what}", plan.id)))
+        }
     }
 }
 
@@ -231,7 +241,13 @@ impl ArchitectureService {
     /// Opens the service over `root`, building the graph from the rows kept
     /// from the last run (no file is read). Code rules start as the
     /// defaults; see `with_rules`.
-    pub fn open(root: &Path, packs: PackSet, types: TypeSystem, plans: Box<dyn PlanRepository>, store: SqliteStore) -> Result<Self, ServiceError> {
+    pub fn open(
+        root: &Path,
+        packs: PackSet,
+        types: TypeSystem,
+        plans: Box<dyn PlanRepository>,
+        store: SqliteStore,
+    ) -> Result<Self, ServiceError> {
         // Packs map onto types: every one they name must exist.
         packs.check_types(&types).map_err(|e| ServiceError::Index(e.to_string()))?;
         let rules = CodeRules::defaults(&packs, &types).map_err(|e| ServiceError::Index(e.to_string()))?;
@@ -359,7 +375,6 @@ impl ArchitectureService {
         &self.core.types
     }
 
-
     pub fn subscribe(&self, listener: impl Fn(&ArchEvent) + Send + Sync + 'static) {
         if let Ok(mut l) = self.core.listeners.write() {
             l.push(Arc::new(listener));
@@ -415,7 +430,8 @@ impl ArchitectureService {
             }
             let text = t.stage("read", || std::fs::read_to_string(&real)).map_err(|e| ServiceError::NotFound(format!("{file}: {e}")))?;
             let hash = content_hash(&text);
-            let mut out = arch_graph::code::CodeAnalysis { file: path.as_str().to_owned(), text, content_hash: hash.clone(), ..Default::default() };
+            let mut out =
+                arch_graph::code::CodeAnalysis { file: path.as_str().to_owned(), text, content_hash: hash.clone(), ..Default::default() };
             let kept = self.snapshot()?.files.get(&path).map(|rows| rows.file.content_hash.clone());
             out.stale = kept.as_deref() != Some(hash.as_str());
             let graph = self.observed()?;
@@ -462,7 +478,14 @@ impl ArchitectureService {
     /// Starts each language's server whose pack is installed, in the
     /// background (see `servers`).
     pub fn with_servers(mut self, catalog: &nah_packs::Catalog) -> Self {
-        self.servers = crate::servers::Servers::start(catalog, &self.core.packs, &self.core.root, &self.core.limits.servers, self.core.snapshot.clone(), self.pipeline.jobs.clone());
+        self.servers = crate::servers::Servers::start(
+            catalog,
+            &self.core.packs,
+            &self.core.root,
+            &self.core.limits.servers,
+            self.core.snapshot.clone(),
+            self.pipeline.jobs.clone(),
+        );
         self
     }
 
@@ -549,9 +572,10 @@ impl ArchitectureService {
             }
             let prefix = self.scope_prefix(path);
             // A file whose content is what was read (touched) isn't out of date.
-            let same = RepoPath::new(&prefix).ok().and_then(|p| snapshot.files.get(&p).map(|rows| rows.file.content_hash.clone())).is_some_and(|kept| {
-                path.is_file() && std::fs::read_to_string(path).is_ok_and(|text| content_hash(&text) == kept)
-            });
+            let same = RepoPath::new(&prefix)
+                .ok()
+                .and_then(|p| snapshot.files.get(&p).map(|rows| rows.file.content_hash.clone()))
+                .is_some_and(|kept| path.is_file() && std::fs::read_to_string(path).is_ok_and(|text| content_hash(&text) == kept));
             // Gone and never read (nor anything read under it): nothing to redo.
             let gone_unknown = !path.exists() && !snapshot.files.keys().any(|f| f.as_str() == prefix || Core::under(f, &prefix));
             if !prefix.is_empty() && !same && !gone_unknown {
@@ -612,7 +636,8 @@ impl ArchitectureService {
         self.ignore_rules_changed(paths);
         self.files_changed(paths);
         // Files no language reads that a server watches (its project's manifest).
-        let not_ignored: Vec<PathBuf> = paths.iter().filter(|p| p.starts_with(&self.core.root) && !self.ignores().is_ignored_as(p, p.is_dir())).cloned().collect();
+        let not_ignored: Vec<PathBuf> =
+            paths.iter().filter(|p| p.starts_with(&self.core.root) && !self.ignores().is_ignored_as(p, p.is_dir())).cloned().collect();
         self.servers.others_changed(&self.core.packs, &not_ignored);
         let mut scopes: Vec<PathBuf> = Vec::new();
         for p in paths {
@@ -753,7 +778,10 @@ impl ArchitectureService {
             return Ok(graph);
         }
         let graph = Arc::new(observed.graph.laid_over(plan, earlier.as_ref().map(|m| (&*m.plan, &*m.graph))));
-        merged.insert(id.clone(), Merged { generation: observed.generation, plan: Arc::new(plan.clone()), graph: graph.clone(), used: Instant::now() });
+        merged.insert(
+            id.clone(),
+            Merged { generation: observed.generation, plan: Arc::new(plan.clone()), graph: graph.clone(), used: Instant::now() },
+        );
         while merged.len() > self.core.limits.plans_kept_laid_over.max(1) {
             let Some(oldest) = merged.iter().min_by_key(|(_, m)| m.used).map(|(id, _)| id.clone()) else { break };
             merged.remove(&oldest);
@@ -800,18 +828,30 @@ impl ArchitectureService {
         if self.plans.get(&plan_id)?.is_some() {
             return Err(ServiceError::InvalidOp(format!("plan {id} already exists")));
         }
-        let input = crate::import::ImportInput { plan: plan_id.clone(), title: title.to_owned(), json, language: language.map(str::to_owned) };
+        let input =
+            crate::import::ImportInput { plan: plan_id.clone(), title: title.to_owned(), json, language: language.map(str::to_owned) };
         let (plan, report) = crate::import::import(input, &*self.observed()?, &self.core.root, &self.core.packs, &self.core.types)?;
         self.plans.save(&plan)?;
         drop(held);
-        self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan_id], components: plan.components.iter().map(|c| c.id.clone()).collect() });
+        self.emit(ArchEvent::Changed {
+            reason: ChangeReason::PlanEdited,
+            plans: vec![plan_id],
+            components: plan.components.iter().map(|c| c.id.clone()).collect(),
+        });
         Ok((plan, report))
     }
 
     /// `import_registry` from a repo file (relative to the root).
-    pub fn import_registry_file(&self, id: &str, title: &str, file: &str, language: Option<&str>) -> Result<(Plan, ImportReport), ServiceError> {
+    pub fn import_registry_file(
+        &self,
+        id: &str,
+        title: &str,
+        file: &str,
+        language: Option<&str>,
+    ) -> Result<(Plan, ImportReport), ServiceError> {
         let path = arch_graph::RepoPath::new(file).map_err(|e| ServiceError::InvalidOp(e.to_string()))?;
-        let json = std::fs::read_to_string(self.core.root.join(path.as_str())).map_err(|e| ServiceError::NotFound(format!("{file}: {e}")))?;
+        let json =
+            std::fs::read_to_string(self.core.root.join(path.as_str())).map_err(|e| ServiceError::NotFound(format!("{file}: {e}")))?;
         self.import_registry(id, title, &json, language)
     }
 
@@ -854,7 +894,7 @@ impl ArchitectureService {
         for reference in &plan.references {
             ids.insert(reference.id.clone());
             if reference.depth > 0 && !reference.kinds.is_empty() {
-ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
+                ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
             }
         }
         Ok(ids.into_iter().collect())
@@ -878,7 +918,12 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
 
     fn emit_validated(&self, plan: &PlanId, component: Option<&ComponentId>, report: &Report) {
         let count = |s: Severity| report.findings.iter().filter(|f| f.severity == s).count();
-        self.emit(ArchEvent::Validated { plan: plan.clone(), component: component.cloned(), errors: count(Severity::Error), warnings: count(Severity::Warning) });
+        self.emit(ArchEvent::Validated {
+            plan: plan.clone(),
+            component: component.cloned(),
+            errors: count(Severity::Error),
+            warnings: count(Severity::Warning),
+        });
     }
 
     /// Design approvals (ArchApproved, PlanApproved). Only a user can approve,
@@ -995,7 +1040,11 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
                 Ok(changed) => {
                     advanced_to = Some(goal);
                     if changed {
-                        self.emit(ArchEvent::Changed { reason: ChangeReason::StageChanged, plans: vec![plan_id.clone()], components: vec![id.clone()] });
+                        self.emit(ArchEvent::Changed {
+                            reason: ChangeReason::StageChanged,
+                            plans: vec![plan_id.clone()],
+                            components: vec![id.clone()],
+                        });
                     }
                 }
                 Err(why) => report.push(Finding::error(FindingCode::IllegalTransition, Target::Component { id: id.clone() }, why)),
@@ -1014,7 +1063,11 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
                 Ok(Some(to))
             })?;
             if demoted.is_some() {
-                self.emit(ArchEvent::Changed { reason: ChangeReason::StageChanged, plans: vec![plan_id.clone()], components: vec![id.clone()] });
+                self.emit(ArchEvent::Changed {
+                    reason: ChangeReason::StageChanged,
+                    plans: vec![plan_id.clone()],
+                    components: vec![id.clone()],
+                });
             }
         }
         self.emit_validated(plan_id, Some(id), &report);
@@ -1047,7 +1100,10 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
     }
 
     fn review_with(&self, plan: &Plan, component: &Component, merged: &Graph) -> Result<ReviewsReport, ServiceError> {
-        let contract = plan.component(&component.id).map(|p| slice(plan, p, merged, &checks::schema_set(merged, &self.core.types)).to_markdown()).unwrap_or_default();
+        let contract = plan
+            .component(&component.id)
+            .map(|p| slice(plan, p, merged, &checks::schema_set(merged, &self.core.types)).to_markdown())
+            .unwrap_or_default();
         let code = self.component(&component.id, &Source::Plan(plan.id.clone()))?.code;
         let subject = Subject { plan, component, observed: merged, contract, code };
         Ok(review::review(&self.reviewers, &self.core.types, self.review_provider.as_deref(), &subject))
@@ -1137,7 +1193,16 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
             }
             let starts = lines.as_ref().and_then(|(_, s)| s.as_ref());
             let line = starts.map_or(0, |starts| starts.partition_point(|s| *s <= start as usize)) as u32;
-            out.push(arch_graph::code::Reference { file, line, start, end, kind, within: within.map(ComponentId::new), evidence, stale: starts.is_none() });
+            out.push(arch_graph::code::Reference {
+                file,
+                line,
+                start,
+                end,
+                kind,
+                within: within.map(ComponentId::new),
+                evidence,
+                stale: starts.is_none(),
+            });
         }
         Ok(out)
     }
@@ -1220,7 +1285,13 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
         })
     }
 
-    fn expand_in(&self, t: &mut Timing, request: &TreeRequest, card: &str, levels: u32) -> Result<arch_graph::tree::Expanded, ServiceError> {
+    fn expand_in(
+        &self,
+        t: &mut Timing,
+        request: &TreeRequest,
+        card: &str,
+        levels: u32,
+    ) -> Result<arch_graph::tree::Expanded, ServiceError> {
         let kept = self.held_tree(request)?;
         let cap = self.core.limits.cards_held;
         let (now, mut change) = self.with_tree_input(t, request, |t, input| {
@@ -1275,7 +1346,12 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
     }
 
     /// Runs `answer` timed, and keeps (and, when slow, logs) its timing.
-    pub(crate) fn timed<T>(&self, what: &'static str, asked: String, answer: impl FnOnce(&mut Timing) -> Result<T, ServiceError>) -> Result<T, ServiceError> {
+    pub(crate) fn timed<T>(
+        &self,
+        what: &'static str,
+        asked: String,
+        answer: impl FnOnce(&mut Timing) -> Result<T, ServiceError>,
+    ) -> Result<T, ServiceError> {
         self.core.timed(what, asked, answer)
     }
 
@@ -1340,12 +1416,18 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
     }
 
     /// Runs `f` with what building a tree for `request` needs.
-    fn with_tree_input<T>(&self, t: &mut Timing, request: &TreeRequest, f: impl FnOnce(&mut Timing, &arch_graph::tree::Input<'_, Graph>) -> Result<T, ServiceError>) -> Result<T, ServiceError> {
+    fn with_tree_input<T>(
+        &self,
+        t: &mut Timing,
+        request: &TreeRequest,
+        f: impl FnOnce(&mut Timing, &arch_graph::tree::Input<'_, Graph>) -> Result<T, ServiceError>,
+    ) -> Result<T, ServiceError> {
         // The graph shown, and where the code is entered (found once per
         // snapshot of the code).
         let (graph, entries) = t.stage("source", || -> Result<_, ServiceError> {
             let code = self.snapshot()?;
-            let entries = kept(&self.entry_points, &code.graph, || code_analyzer::entry_points(code.files.values().map(|f| &**f), &self.core.packs));
+            let entries =
+                kept(&self.entry_points, &code.graph, || code_analyzer::entry_points(code.files.values().map(|f| &**f), &self.core.packs));
             Ok((self.graph(&request.source)?, entries))
         })?;
         let plan = match &request.source {
@@ -1427,7 +1509,10 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
                 ids: components.iter().map(|c| c.id.clone()).collect(),
                 symbols: arch_search::Symbols {
                     names: components.iter().map(|c| c.name.clone()).collect(),
-                    qualified: components.iter().map(|c| format!("{} {}", search::symbol(c), c.file().map(|f| f.as_str()).unwrap_or_default())).collect(),
+                    qualified: components
+                        .iter()
+                        .map(|c| format!("{} {}", search::symbol(c), c.file().map(|f| f.as_str()).unwrap_or_default()))
+                        .collect(),
                 },
             }
         })
@@ -1439,7 +1524,13 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
         // the card to select anywhere in the graph.
         let source = request.source.clone().unwrap_or_default();
         if let Some(root) = &request.root {
-            let tree = TreeRequest { view: request.view.unwrap_or_default(), source: source.clone(), root: Some(root.clone()), depth: Some(0), ..TreeRequest::default() };
+            let tree = TreeRequest {
+                view: request.view.unwrap_or_default(),
+                source: source.clone(),
+                root: Some(root.clone()),
+                depth: Some(0),
+                ..TreeRequest::default()
+            };
             self.timed("navigate", asked(&tree, None), |t| self.with_tree_input(t, &tree, |_, _| Ok(())))?;
         }
         if let Some(select) = &request.select
@@ -1461,7 +1552,11 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
 /// they lean on does.
 pub fn affected(plan: &Plan, before: &Graph, after: &Graph, changed: &BTreeSet<&str>) -> Vec<ComponentId> {
     let touches = |id: &ComponentId| {
-        let files = [before.component(id).and_then(|c| c.file()), after.component(id).and_then(|c| c.file()), plan.component(id).and_then(|c| c.file())];
+        let files = [
+            before.component(id).and_then(|c| c.file()),
+            after.component(id).and_then(|c| c.file()),
+            plan.component(id).and_then(|c| c.file()),
+        ];
         files.into_iter().flatten().any(|f| changed.contains(f.as_str()))
     };
     plan.components
@@ -1485,8 +1580,10 @@ pub fn affected(plan: &Plan, before: &Graph, after: &Graph, changed: &BTreeSet<&
 /// The components in `file` and the relations leaving them, with how plan
 /// and code line up.
 fn file_view_of(graph: &Graph, file: &str, stale: bool) -> arch_graph::FileView {
-    let components: Vec<(Component, Alignment)> = graph.in_file(file).map(|c| (c.clone(), graph.alignment(&c.id).unwrap_or(Alignment::Observed))).collect();
-    let relations = components.iter().flat_map(|(c, _)| graph.outgoing(&c.id, None)).map(|r| (r.clone(), graph.relation_alignment(r))).collect();
+    let components: Vec<(Component, Alignment)> =
+        graph.in_file(file).map(|c| (c.clone(), graph.alignment(&c.id).unwrap_or(Alignment::Observed))).collect();
+    let relations =
+        components.iter().flat_map(|(c, _)| graph.outgoing(&c.id, None)).map(|r| (r.clone(), graph.relation_alignment(r))).collect();
     arch_graph::FileView { file: file.to_owned(), components, relations, stale }
 }
 
@@ -1506,7 +1603,11 @@ fn verification_files(plan: &Plan, id: &ComponentId, merged: &Graph) -> Option<B
     }
     let mut files: BTreeSet<String> = chain::caller_files(plan, id, merged);
     // The unplanned helpers it leans on (their placeholders count against it).
-    files.extend(verify::hidden_reach(plan, id, merged).iter().filter_map(|(h, _)| merged.component(h).and_then(|c| c.file()).map(|f| f.as_str().to_owned())));
+    files.extend(
+        verify::hidden_reach(plan, id, merged)
+            .iter()
+            .filter_map(|(h, _)| merged.component(h).and_then(|c| c.file()).map(|f| f.as_str().to_owned())),
+    );
     for c in ids {
         let found = merged.component(c).and_then(|c| c.file()).map(|f| f.as_str().to_owned());
         let planned = plan.component(c).and_then(|c| c.file()).map(|f| f.as_str().to_owned());

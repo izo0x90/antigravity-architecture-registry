@@ -49,29 +49,69 @@ impl ReviewSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "change", rename_all = "snake_case")]
 pub enum Change {
-    PlanChanged { fields: Vec<String> },
-    ComponentAdded { id: ComponentId },
-    ComponentRemoved { id: ComponentId },
+    PlanChanged {
+        fields: Vec<String>,
+    },
+    ComponentAdded {
+        id: ComponentId,
+    },
+    ComponentRemoved {
+        id: ComponentId,
+    },
     /// `fields` are dotted paths, one level into `spec` and `schemas`
     /// (e.g. `description`, `spec.logic_steps`, `schemas.inputs`).
-    ComponentChanged { id: ComponentId, fields: Vec<String> },
-    RelationAdded { kind: RelationKind, source: ComponentId, target: ComponentId },
-    RelationRemoved { kind: RelationKind, source: ComponentId, target: ComponentId },
-    RelationChanged { kind: RelationKind, source: ComponentId, target: ComponentId, fields: Vec<String> },
-    ReferenceAdded { id: ComponentId },
-    ReferenceRemoved { id: ComponentId },
-    WorkflowAdded { name: String },
-    WorkflowRemoved { name: String },
-    WorkflowChanged { name: String },
+    ComponentChanged {
+        id: ComponentId,
+        fields: Vec<String>,
+    },
+    RelationAdded {
+        kind: RelationKind,
+        source: ComponentId,
+        target: ComponentId,
+    },
+    RelationRemoved {
+        kind: RelationKind,
+        source: ComponentId,
+        target: ComponentId,
+    },
+    RelationChanged {
+        kind: RelationKind,
+        source: ComponentId,
+        target: ComponentId,
+        fields: Vec<String>,
+    },
+    ReferenceAdded {
+        id: ComponentId,
+    },
+    ReferenceRemoved {
+        id: ComponentId,
+    },
+    WorkflowAdded {
+        name: String,
+    },
+    WorkflowRemoved {
+        name: String,
+    },
+    WorkflowChanged {
+        name: String,
+    },
 }
 
 impl Change {
     /// The components this change is about.
     pub fn components(&self) -> Vec<&ComponentId> {
         match self {
-            Self::ComponentAdded { id } | Self::ComponentRemoved { id } | Self::ComponentChanged { id, .. } | Self::ReferenceAdded { id } | Self::ReferenceRemoved { id } => vec![id],
-            Self::RelationAdded { source, target, .. } | Self::RelationRemoved { source, target, .. } | Self::RelationChanged { source, target, .. } => vec![source, target],
-            Self::PlanChanged { .. } | Self::WorkflowAdded { .. } | Self::WorkflowRemoved { .. } | Self::WorkflowChanged { .. } => Vec::new(),
+            Self::ComponentAdded { id }
+            | Self::ComponentRemoved { id }
+            | Self::ComponentChanged { id, .. }
+            | Self::ReferenceAdded { id }
+            | Self::ReferenceRemoved { id } => vec![id],
+            Self::RelationAdded { source, target, .. }
+            | Self::RelationRemoved { source, target, .. }
+            | Self::RelationChanged { source, target, .. } => vec![source, target],
+            Self::PlanChanged { .. } | Self::WorkflowAdded { .. } | Self::WorkflowRemoved { .. } | Self::WorkflowChanged { .. } => {
+                Vec::new()
+            }
         }
     }
 
@@ -84,7 +124,9 @@ impl Change {
             Self::ComponentChanged { id, fields } => format!("changed {id}: {}", fields.join(", ")),
             Self::RelationAdded { kind, source, target } => format!("related {}", rel(kind, source, target)),
             Self::RelationRemoved { kind, source, target } => format!("unrelated {}", rel(kind, source, target)),
-            Self::RelationChanged { kind, source, target, fields } => format!("changed {}: {}", rel(kind, source, target), fields.join(", ")),
+            Self::RelationChanged { kind, source, target, fields } => {
+                format!("changed {}: {}", rel(kind, source, target), fields.join(", "))
+            }
             Self::ReferenceAdded { id } => format!("now references {id}"),
             Self::ReferenceRemoved { id } => format!("no longer references {id}"),
             Self::WorkflowAdded { name } => format!("added workflow {name}"),
@@ -243,7 +285,8 @@ pub fn diff(reviewed: Option<&ReviewSnapshot>, plan: &Plan) -> PlanDiff {
         match rel_before.get(rid) {
             None => changes.push(Change::RelationAdded { kind, source, target }),
             Some(was) => {
-                let fields: Vec<String> = field_changes(&to_value(was), &to_value(now)).into_iter().filter(|f| f != "sites" && f != "provenance").collect();
+                let fields: Vec<String> =
+                    field_changes(&to_value(was), &to_value(now)).into_iter().filter(|f| f != "sites" && f != "provenance").collect();
                 if !fields.is_empty() {
                     changes.push(Change::RelationChanged { kind, source, target, fields });
                 }
@@ -330,21 +373,36 @@ mod tests {
             vec![
                 Change::PlanChanged { fields: vec!["title".into()] },
                 Change::ComponentAdded { id: id("app::new") },
-                Change::ComponentChanged { id: id("app::validate"), fields: vec!["description".into(), "schemas.inputs".into(), "spec.invariants".into(), "spec.invariants.0".into()] },
+                Change::ComponentChanged {
+                    id: id("app::validate"),
+                    fields: vec!["description".into(), "schemas.inputs".into(), "spec.invariants".into(), "spec.invariants.0".into()]
+                },
                 Change::ComponentRemoved { id: id("app::old") },
-                Change::RelationChanged { kind: RelationKind::Calls, source: id("app::run"), target: id("app::validate"), fields: vec!["order".into()] },
+                Change::RelationChanged {
+                    kind: RelationKind::Calls,
+                    source: id("app::run"),
+                    target: id("app::validate"),
+                    fields: vec!["order".into()]
+                },
                 Change::RelationAdded { kind: RelationKind::Calls, source: id("app::validate"), target: id("app::new") },
                 Change::ReferenceRemoved { id: id("app::run") },
                 Change::WorkflowChanged { name: "checkout".into() },
             ]
         );
-        assert_eq!(d.fields(&id("app::validate")), ["description", "relations", "schemas.inputs", "spec.invariants", "spec.invariants.0"].into_iter().map(String::from).collect(), "the changed invariant itself is named");
+        assert_eq!(
+            d.fields(&id("app::validate")),
+            ["description", "relations", "schemas.inputs", "spec.invariants", "spec.invariants.0"].into_iter().map(String::from).collect(),
+            "the changed invariant itself is named"
+        );
         assert!(d.components().contains(&id("app::run")), "relation ends count as changed");
 
         // A spec that existed before reports which part changed.
         let snapshot2 = ReviewSnapshot::of(&plan, "ana", "2026-10-03T11:00:00Z");
         plan.component_mut(&id("app::validate")).unwrap().spec.as_mut().unwrap().invariants.clear();
-        assert_eq!(diff(Some(&snapshot2), &plan).changes, vec![Change::ComponentChanged { id: id("app::validate"), fields: vec!["spec.invariants".into()] }]);
+        assert_eq!(
+            diff(Some(&snapshot2), &plan).changes,
+            vec![Change::ComponentChanged { id: id("app::validate"), fields: vec!["spec.invariants".into()] }]
+        );
         // Round-trips as data (it goes over REST and MCP).
         let json = serde_json::to_string(&d).unwrap();
         assert_eq!(serde_json::from_str::<PlanDiff>(&json).unwrap(), d);

@@ -88,11 +88,19 @@ fn by(author: &Author) -> String {
 fn changed(plan: &PlanId, change: &Change) -> Subject {
     let component = |id: &ComponentId| Subject::PlanComponent { plan: plan.clone(), id: id.clone() };
     match change {
-        Change::ComponentAdded { id } | Change::ComponentRemoved { id } | Change::ComponentChanged { id, .. } | Change::ReferenceAdded { id } | Change::ReferenceRemoved { id } => component(id),
-        Change::RelationAdded { kind, source, target } | Change::RelationRemoved { kind, source, target } | Change::RelationChanged { kind, source, target, .. } => {
+        Change::ComponentAdded { id }
+        | Change::ComponentRemoved { id }
+        | Change::ComponentChanged { id, .. }
+        | Change::ReferenceAdded { id }
+        | Change::ReferenceRemoved { id } => component(id),
+        Change::RelationAdded { kind, source, target }
+        | Change::RelationRemoved { kind, source, target }
+        | Change::RelationChanged { kind, source, target, .. } => {
             Subject::PlanRelation { plan: plan.clone(), relation: *kind, source: source.clone(), target: target.clone() }
         }
-        Change::PlanChanged { .. } | Change::WorkflowAdded { .. } | Change::WorkflowRemoved { .. } | Change::WorkflowChanged { .. } => Subject::Plan { plan: plan.clone() },
+        Change::PlanChanged { .. } | Change::WorkflowAdded { .. } | Change::WorkflowRemoved { .. } | Change::WorkflowChanged { .. } => {
+            Subject::Plan { plan: plan.clone() }
+        }
     }
 }
 
@@ -108,11 +116,35 @@ fn brought(plan: &PlanId, c: Comment) -> Brought {
         Anchor::Relation { kind, source, target } => Subject::PlanRelation { plan: plan.clone(), relation: kind, source, target },
     };
     let first = arch_graph::when::read(&c.at).unwrap_or(0);
-    let mut said = vec![Said { by: by(&c.author), at_ms: first, kind: SaidKind::Message, text: c.text, links: Vec::new(), changed: Vec::new() }];
-    let mut later: Vec<Said> = c.replies.into_iter().map(|r| Said { by: by(&r.author), at_ms: arch_graph::when::read(&r.at).unwrap_or(first), kind: SaidKind::Message, text: r.text, links: Vec::new(), changed: Vec::new() }).collect();
+    let mut said =
+        vec![Said { by: by(&c.author), at_ms: first, kind: SaidKind::Message, text: c.text, links: Vec::new(), changed: Vec::new() }];
+    let mut later: Vec<Said> = c
+        .replies
+        .into_iter()
+        .map(|r| Said {
+            by: by(&r.author),
+            at_ms: arch_graph::when::read(&r.at).unwrap_or(first),
+            kind: SaidKind::Message,
+            text: r.text,
+            links: Vec::new(),
+            changed: Vec::new(),
+        })
+        .collect();
     if let Some(a) = c.answer {
-        let changed = a.changes.iter().map(|ch| changed(plan, ch)).map(|subject| Named { what: subject.name(&harness_contracts::Known::default()), subject }).collect();
-        later.push(Said { by: by(&a.author), at_ms: arch_graph::when::read(&a.at).unwrap_or(first), kind: SaidKind::Answer, text: a.text, links: Vec::new(), changed });
+        let changed = a
+            .changes
+            .iter()
+            .map(|ch| changed(plan, ch))
+            .map(|subject| Named { what: subject.name(&harness_contracts::Known::default()), subject })
+            .collect();
+        later.push(Said {
+            by: by(&a.author),
+            at_ms: arch_graph::when::read(&a.at).unwrap_or(first),
+            kind: SaidKind::Answer,
+            text: a.text,
+            links: Vec::new(),
+            changed,
+        });
     }
     later.sort_by_key(|s| s.at_ms);
     said.extend(later);
@@ -128,7 +160,11 @@ fn brought(plan: &PlanId, c: Comment) -> Brought {
 /// Plan `plan`'s comments, as its file held them, moved into `discussions`:
 /// all of them, or none.
 pub fn move_into(discussions: &Discussions, plan: &PlanId, comments: &[serde_json::Value]) -> Result<(), String> {
-    let read: Vec<Comment> = comments.iter().map(|c| serde_json::from_value(c.clone())).collect::<Result<_, _>>().map_err(|e| format!("a comment in plan {plan} couldn't be read: {e}"))?;
+    let read: Vec<Comment> = comments
+        .iter()
+        .map(|c| serde_json::from_value(c.clone()))
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("a comment in plan {plan} couldn't be read: {e}"))?;
     let brought = read.into_iter().map(|c| brought(plan, c)).collect();
     discussions.bring(brought, &format!("plan {plan}'s comments")).map(|_| ()).map_err(|e| e.to_string())
 }

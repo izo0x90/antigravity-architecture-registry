@@ -69,7 +69,8 @@ fn map_lines(hunks: &[Hunk], first: u32, last: u32) -> Now {
     let mut shift: i64 = 0;
     for hunk in hunks {
         // Lines it takes away (none: it adds after `old_start`).
-        let (from, to) = if hunk.old_lines == 0 { (hunk.old_start + 1, hunk.old_start) } else { (hunk.old_start, hunk.old_start + hunk.old_lines - 1) };
+        let (from, to) =
+            if hunk.old_lines == 0 { (hunk.old_start + 1, hunk.old_start) } else { (hunk.old_start, hunk.old_start + hunk.old_lines - 1) };
         if to < first && (hunk.old_lines > 0 || hunk.old_start < first) {
             shift += i64::from(hunk.new_lines) - i64::from(hunk.old_lines);
         } else if from <= last {
@@ -126,7 +127,8 @@ impl Code {
     /// Lines `first..=last` of `path` as snapshot `snapshot` has them.
     fn as_tagged(&self, path: &str, first: u32, last: u32, snapshot: &str) -> Option<String> {
         let text = self.changes.as_ref()?.text_at(snapshot, path).ok()??;
-        let lines: Vec<&str> = text.lines().skip(first.saturating_sub(1) as usize).take((last + 1).saturating_sub(first) as usize).collect();
+        let lines: Vec<&str> =
+            text.lines().skip(first.saturating_sub(1) as usize).take((last + 1).saturating_sub(first) as usize).collect();
         (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
@@ -179,11 +181,19 @@ impl nah_things::Resolve for Code {
         let words = words.trim();
         if let Some(path) = words.strip_prefix("file ") {
             let path = path.trim();
-            return Some(if self.file(path).is_some() { Ok(Subject::CodeFile { path: path.to_owned() }) } else { Err(format!("{path} isn't a file of the project")) });
+            return Some(if self.file(path).is_some() {
+                Ok(Subject::CodeFile { path: path.to_owned() })
+            } else {
+                Err(format!("{path} isn't a file of the project"))
+            });
         }
         if let Some(id) = words.strip_prefix("component ") {
             let id = ComponentId::new(id.split(" (").next().unwrap_or(id).trim());
-            return Some(if self.component(&id).is_some() { Ok(Subject::Component { id, was: None }) } else { Err(format!("there's no component {id} in the code")) });
+            return Some(if self.component(&id).is_some() {
+                Ok(Subject::Component { id, was: None })
+            } else {
+                Err(format!("there's no component {id} in the code"))
+            });
         }
         // The last ` lines `/` line ` (a path may have the words in it).
         let (path, lines) = words.rsplit_once(" lines ").or_else(|| words.rsplit_once(" line "))?;
@@ -218,7 +228,9 @@ impl nah_things::Resolve for Code {
     /// component, with where it is in them.
     fn settle(&self, subject: &Subject) -> Result<Subject, String> {
         match subject {
-            Subject::CodeLines { path, first, last, snapshot } if snapshot.is_empty() => Ok(Subject::CodeLines { path: path.clone(), first: *first, last: *last, snapshot: self.snapshot()? }),
+            Subject::CodeLines { path, first, last, snapshot } if snapshot.is_empty() => {
+                Ok(Subject::CodeLines { path: path.clone(), first: *first, last: *last, snapshot: self.snapshot()? })
+            }
             Subject::Component { id, was: None } => {
                 let was = match self.component(id) {
                     Some((path, first, last)) => Some(CodeAt { path, first, last, snapshot: self.snapshot()? }),
@@ -235,7 +247,9 @@ impl nah_things::Resolve for Code {
     fn moved(&self, subject: &Subject) -> Option<Subject> {
         let Subject::CodeLines { path, first, last, snapshot } = subject else { return None };
         match self.now_at(path, *first, *last, snapshot) {
-            Now::At(f, l) if (f, l) != (*first, *last) => Some(Subject::CodeLines { path: path.clone(), first: f, last: l, snapshot: self.snapshot().ok()? }),
+            Now::At(f, l) if (f, l) != (*first, *last) => {
+                Some(Subject::CodeLines { path: path.clone(), first: f, last: l, snapshot: self.snapshot().ok()? })
+            }
             _ => None,
         }
     }

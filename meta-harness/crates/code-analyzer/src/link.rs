@@ -17,7 +17,10 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::pack::LanguageSpec;
-use crate::rows::{Access, ComponentDetail, ComponentRow, DefPlace, Evidence, FileRow, FileRows, FlowRow, ModuleReading, RefDetail, RefKind, RefRow, RelationDetail, RelationRow, call_name, flow_refs, read_rows};
+use crate::rows::{
+    Access, ComponentDetail, ComponentRow, DefPlace, Evidence, FileRow, FileRows, FlowRow, ModuleReading, RefDetail, RefKind, RefRow,
+    RelationDetail, RelationRow, call_name, flow_refs, read_rows,
+};
 use crate::{Expr, FileExtract, FlowKind, PackSet, RawCall};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,7 +151,9 @@ impl Entry {
 
 /// The types a component's refs name, and whether each is settled.
 fn named_types<'a>(refs: impl Iterator<Item = &'a RefRow>, within: &ComponentId) -> Vec<(String, bool)> {
-    refs.filter(|r| r.kind == RefKind::Type && r.within.as_ref() == Some(within)).map(|r| (r.name.clone(), r.evidence == Evidence::Server || r.target.is_none())).collect()
+    refs.filter(|r| r.kind == RefKind::Type && r.within.as_ref() == Some(within))
+        .map(|r| (r.name.clone(), r.evidence == Evidence::Server || r.target.is_none()))
+        .collect()
 }
 
 /// What a file brings into scope.
@@ -174,7 +179,10 @@ struct Imports {
 
 impl Imports {
     fn new(texts: Vec<String>, lang: Option<&LanguageSpec>) -> Self {
-        let words = texts.iter().flat_map(|t| t.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).map(str::to_owned)).collect();
+        let words = texts
+            .iter()
+            .flat_map(|t| t.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).map(str::to_owned))
+            .collect();
         let glob = lang.and_then(|l| l.glob_import.as_deref()).is_some_and(|g| texts.iter().any(|t| t.contains(g)));
         Self { texts, words, glob }
     }
@@ -224,7 +232,13 @@ impl Linker {
             let module = file.module().map(|m| m.detail.symbol.clone()).unwrap_or_default();
             let reading = file.module().and_then(|m| m.detail.module.clone()).unwrap_or_default();
             let lang = packs.by_name(&file.file.language).map(|p| &p.spec.language);
-            let mut scope = FileScope { module: module.clone(), imports: Imports::new(reading.imports.into_iter().map(|i| i.text).collect(), lang), aliases: reading.aliases, items: reading.items, entries: Vec::new() };
+            let mut scope = FileScope {
+                module: module.clone(),
+                imports: Imports::new(reading.imports.into_iter().map(|i| i.text).collect(), lang),
+                aliases: reading.aliases,
+                items: reading.items,
+                entries: Vec::new(),
+            };
             let module_id = file.module().map(|m| m.id.clone());
             for c in &file.components {
                 let owner = c.parent.clone().filter(|p| Some(p) != module_id.as_ref());
@@ -240,7 +254,15 @@ impl Linker {
         linker
     }
 
-    fn entry_for(&self, packs: &PackSet, types: &TypeSystem, file: &FileRow, module: &str, c: &ComponentRow, owner: Option<ComponentId>) -> Entry {
+    fn entry_for(
+        &self,
+        packs: &PackSet,
+        types: &TypeSystem,
+        file: &FileRow,
+        module: &str,
+        c: &ComponentRow,
+        owner: Option<ComponentId>,
+    ) -> Entry {
         let module_types: BTreeSet<&str> = packs.packs.iter().map(|p| p.spec.language.module_type.as_str()).collect();
         let resolved = types.resolve(&c.type_name).ok();
         let resolved = resolved.as_ref();
@@ -406,7 +428,15 @@ impl Linker {
         let path: Vec<&str> = written.iter().copied().filter(|w| !lang.relative_prefixes.iter().any(|r| r == w)).collect();
         let path = path.as_slice();
         let Some(last) = path.last() else { return Err(Evidence::External) };
-        let modules: Vec<usize> = self.module_named.get(&lang.name).and_then(|n| n.get(*last)).map_or(&[][..], Vec::as_slice).iter().copied().filter(|&m| lang.words(&self[m].symbol).ends_with(path)).collect();
+        let modules: Vec<usize> = self
+            .module_named
+            .get(&lang.name)
+            .and_then(|n| n.get(*last))
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .copied()
+            .filter(|&m| lang.words(&self[m].symbol).ends_with(path))
+            .collect();
         let mut ids: Vec<&ComponentId> = modules.iter().map(|&m| &self[m].id).collect();
         ids.sort();
         ids.dedup();
@@ -433,7 +463,11 @@ impl Linker {
         let named_modules = |words: &[&str], whole: bool| -> Vec<usize> {
             let Some(last) = words.last() else { return Vec::new() };
             let modules = self.module_named.get(&lang.name).and_then(|n| n.get(*last)).map_or(&[][..], Vec::as_slice);
-            modules.iter().copied().filter(|&m| if whole { lang.words(&self[m].symbol) == words } else { lang.words(&self[m].symbol).ends_with(words) }).collect()
+            modules
+                .iter()
+                .copied()
+                .filter(|&m| if whole { lang.words(&self[m].symbol) == words } else { lang.words(&self[m].symbol).ends_with(words) })
+                .collect()
         };
         let has = |list: &[String], w: &str| list.iter().any(|p| p == w);
         let mut from: Option<Vec<&str>> = None;
@@ -460,7 +494,11 @@ impl Linker {
                 })
                 .find(|m| !m.is_empty())
                 .unwrap_or_default(),
-            None => (1..=rest.len()).rev().map(|n| named_modules(&rest[..n], false)).find(|m| !m.is_empty()).unwrap_or_else(|| named_modules(&[package], false)),
+            None => (1..=rest.len())
+                .rev()
+                .map(|n| named_modules(&rest[..n], false))
+                .find(|m| !m.is_empty())
+                .unwrap_or_else(|| named_modules(&[package], false)),
         }
     }
 
@@ -471,7 +509,12 @@ impl Linker {
         let mut out = Vec::new();
         for m in modules {
             let Some(there) = self.files.get(&self[m].file) else { continue };
-            out.extend(self.named(&lang.name, name).iter().copied().filter(|&c| self[c].owner.is_none() && imports_from(&there.imports, lang, &there.module, name, &self[c].module)));
+            out.extend(
+                self.named(&lang.name, name)
+                    .iter()
+                    .copied()
+                    .filter(|&c| self[c].owner.is_none() && imports_from(&there.imports, lang, &there.module, name, &self[c].module)),
+            );
         }
         out
     }
@@ -486,13 +529,17 @@ impl Linker {
     /// Whether a callee is written as a member of the enclosing repo type
     /// (`Self::name` inside its impl).
     fn of_self_type(&self, caller: usize, lang: &LanguageSpec, callee: &Expr) -> bool {
-        matches!(callee, Expr::Path(parts, _) if parts.len() == 2 && lang.self_type_names.contains(&parts[0])) && self_type(self, caller).is_some()
+        matches!(callee, Expr::Path(parts, _) if parts.len() == 2 && lang.self_type_names.contains(&parts[0]))
+            && self_type(self, caller).is_some()
     }
 
     /// Whether `path` names a repo module (the module's symbol ends with it).
     fn names_module(&self, lang: &LanguageSpec, path: &[&str]) -> bool {
         let Some(last) = path.last() else { return false };
-        self.module_named.get(&lang.name).and_then(|n| n.get(*last)).is_some_and(|ms| ms.iter().any(|&m| lang.words(&self[m].symbol).ends_with(path)))
+        self.module_named
+            .get(&lang.name)
+            .and_then(|n| n.get(*last))
+            .is_some_and(|ms| ms.iter().any(|&m| lang.words(&self[m].symbol).ends_with(path)))
     }
 
     /// What `name` is when one of a file's imports brings it from a repo
@@ -525,7 +572,9 @@ impl Linker {
         if let Some((_, original)) = scope.aliases.iter().find(|(alias, _)| alias == name) {
             return self.import_from_repo(scope, lang, original);
         }
-        scope.imports.words.contains(name) && scope.imports.texts.iter().any(|imp| lang.words(imp).contains(&name) && self.import_from_repo(scope, lang, imp)) && !self.reexported_from_outside(scope, lang, name)
+        scope.imports.words.contains(name)
+            && scope.imports.texts.iter().any(|imp| lang.words(imp).contains(&name) && self.import_from_repo(scope, lang, imp))
+            && !self.reexported_from_outside(scope, lang, name)
     }
 
     /// Whether the repo module an import brings `name` from only passes it
@@ -561,7 +610,11 @@ impl Linker {
 
     /// The named items (not components) the files have, by language.
     fn items(&self) -> HashSet<(&str, &str)> {
-        self.files.values().filter_map(|f| Some((self[*f.entries.first()?].language.as_str(), &f.items))).flat_map(|(lang, items)| items.iter().map(move |i| (lang, i.as_str()))).collect()
+        self.files
+            .values()
+            .filter_map(|f| Some((self[*f.entries.first()?].language.as_str(), &f.items)))
+            .flat_map(|(lang, items)| items.iter().map(move |i| (lang, i.as_str())))
+            .collect()
     }
 
     fn scope_of(&self, i: usize) -> &FileScope {
@@ -577,7 +630,8 @@ impl Linker {
             self.forget(&file.path);
         }
         let module_types: BTreeSet<&str> = packs.packs.iter().map(|p| p.spec.language.module_type.as_str()).collect();
-        let is_type = |type_name: &str| types.resolve(type_name).map(|t| !t.executable && !module_types.iter().any(|m| t.is_a(m))).unwrap_or(false);
+        let is_type =
+            |type_name: &str| types.resolve(type_name).map(|t| !t.executable && !module_types.iter().any(|m| t.is_a(m))).unwrap_or(false);
         // Modules first.
         let mut def_entry: HashMap<(usize, usize), usize> = HashMap::new();
         let mut module_entry: Vec<usize> = Vec::new();
@@ -604,7 +658,16 @@ impl Linker {
             let i = self.add(entry);
             module_entry.push(i);
             let lang = packs.by_name(&ex.language).map(|p| &p.spec.language);
-            self.files.insert(file.path.clone(), FileScope { module: ex.module.clone(), imports: Imports::new(ex.imports.iter().map(|i| i.text.clone()).collect(), lang), aliases: ex.aliases.clone(), items: ex.items.clone(), entries: vec![i] });
+            self.files.insert(
+                file.path.clone(),
+                FileScope {
+                    module: ex.module.clone(),
+                    imports: Imports::new(ex.imports.iter().map(|i| i.text.clone()).collect(), lang),
+                    aliases: ex.aliases.clone(),
+                    items: ex.items.clone(),
+                    entries: vec![i],
+                },
+            );
         }
         // Symbols: definitions outside scopes first (types), then scoped ones
         // and everything nested in them, since a scope needs its owner type known.
@@ -619,7 +682,8 @@ impl Linker {
             }
             false
         };
-        let mut pending: Vec<(usize, usize)> = files.iter().enumerate().flat_map(|(fi, (_, ex))| (0..ex.definitions.len()).map(move |di| (fi, di))).collect();
+        let mut pending: Vec<(usize, usize)> =
+            files.iter().enumerate().flat_map(|(fi, (_, ex))| (0..ex.definitions.len()).map(move |di| (fi, di))).collect();
         for allow_scoped in [false, true] {
             loop {
                 let before = pending.len();
@@ -715,7 +779,12 @@ impl Linker {
         // Each file's type refs first: which type each signature names, as
         // the server says, is part of what a data flow through it carries.
         let this = &*self;
-        let type_refs: Vec<Vec<RefRow>> = files.par_iter().zip(&saids).enumerate().map(|(fi, ((file, ex), said))| this.type_and_import_refs(packs, file, ex, fi, module_entry[fi], &def_entry, said)).collect();
+        let type_refs: Vec<Vec<RefRow>> = files
+            .par_iter()
+            .zip(&saids)
+            .enumerate()
+            .map(|(fi, ((file, ex), said))| this.type_and_import_refs(packs, file, ex, fi, module_entry[fi], &def_entry, said))
+            .collect();
         for (&(fi, _), &ei) in &def_entry {
             let id = self[ei].id.clone();
             if let Some(entry) = self.entries[ei].as_mut() {
@@ -743,7 +812,14 @@ impl Linker {
                     add_relation(&mut relations, RelationKind::Contains, container, this[ei].id.clone(), RelationDetail::default(), None);
                 }
                 for (source, target, prover) in implements {
-                    add_relation(&mut relations, RelationKind::Implements, source.clone(), target.clone(), RelationDetail::default(), prover.clone());
+                    add_relation(
+                        &mut relations,
+                        RelationKind::Implements,
+                        source.clone(),
+                        target.clone(),
+                        RelationDetail::default(),
+                        prover.clone(),
+                    );
                 }
                 this.link_calls(packs, ex, fi, module_entry[fi], &def_entry, said, &mut refs, &mut relations, &mut rows.flows);
                 // Missing names the repo has as items no card shows (a
@@ -764,7 +840,16 @@ impl Linker {
     /// A file's type refs (scope targets, bases, the types its signatures
     /// and locals name) and import refs.
     #[allow(clippy::too_many_arguments)]
-    fn type_and_import_refs(&self, packs: &PackSet, file: &FileRow, ex: &FileExtract, fi: usize, module: usize, def_entry: &HashMap<(usize, usize), usize>, said: &Saids) -> Vec<RefRow> {
+    fn type_and_import_refs(
+        &self,
+        packs: &PackSet,
+        file: &FileRow,
+        ex: &FileExtract,
+        fi: usize,
+        module: usize,
+        def_entry: &HashMap<(usize, usize), usize>,
+        said: &Saids,
+    ) -> Vec<RefRow> {
         let mut out = Vec::new();
         let Some(pack) = packs.by_name(&ex.language) else { return out };
         let lang = &pack.spec.language;
@@ -816,7 +901,14 @@ impl Linker {
         out
     }
 
-    fn component_rows(&self, packs: &PackSet, ex: &FileExtract, module: usize, def_entry: &HashMap<(usize, usize), usize>, fi: usize) -> Vec<ComponentRow> {
+    fn component_rows(
+        &self,
+        packs: &PackSet,
+        ex: &FileExtract,
+        module: usize,
+        def_entry: &HashMap<(usize, usize), usize>,
+        fi: usize,
+    ) -> Vec<ComponentRow> {
         let module_type = packs.by_name(&ex.language).map(|p| p.spec.language.module_type.clone()).unwrap_or_default();
         let mut out = vec![ComponentRow {
             id: self[module].id.clone(),
@@ -835,7 +927,13 @@ impl Linker {
                     aliases: ex.aliases.clone(),
                     macro_defs: ex.macro_defs.clone(),
                     items: ex.items.clone(),
-                    unnamed_calls: ex.calls.iter().enumerate().filter(|(_, c)| c.name_span.is_none()).map(|(i, c)| (i, c.clone())).collect(),
+                    unnamed_calls: ex
+                        .calls
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| c.name_span.is_none())
+                        .map(|(i, c)| (i, c.clone()))
+                        .collect(),
                 }),
             },
         }];
@@ -853,7 +951,14 @@ impl Linker {
                 detail: ComponentDetail {
                     symbol: e.symbol.clone(),
                     syntax_kind: def.syntax_kind.clone(),
-                    def: Some(DefPlace { index: di, parent: def.parent, scope: def.scope.clone(), bases: def.bases.clone(), self_name: def.self_name.clone(), type_names: def.type_names.clone() }),
+                    def: Some(DefPlace {
+                        index: di,
+                        parent: def.parent,
+                        scope: def.scope.clone(),
+                        bases: def.bases.clone(),
+                        self_name: def.self_name.clone(),
+                        type_names: def.type_names.clone(),
+                    }),
                     module: None,
                 },
             });
@@ -922,13 +1027,15 @@ impl Linker {
         let proven = |ci: usize| said.calls.get(&ci).filter(|s| s.confirmed).map(|s| s.prover.clone());
         // (call span) -> its target and the call's place, for flows that
         // start at a call.
-        let call_targets: HashMap<(u32, u32), (usize, Option<usize>)> = ex
-            .calls
-            .iter()
-            .zip(&targets)
-            .enumerate()
-            .filter_map(|(ci, (call, t))| if let CallTarget::One(t) = t { Some(((call.span.start_byte, call.span.end_byte), (*t, Some(ci)))) } else { None })
-            .collect();
+        let call_targets: HashMap<(u32, u32), (usize, Option<usize>)> =
+            ex.calls
+                .iter()
+                .zip(&targets)
+                .enumerate()
+                .filter_map(|(ci, (call, t))| {
+                    if let CallTarget::One(t) = t { Some(((call.span.start_byte, call.span.end_byte), (*t, Some(ci)))) } else { None }
+                })
+                .collect();
         let mut order: BTreeMap<ComponentId, u32> = BTreeMap::new();
         for (ci, ((call, caller), target)) in ex.calls.iter().zip(&callers).zip(&targets).enumerate() {
             let within = caller.map(|c| self[c].id.clone());
@@ -975,9 +1082,15 @@ impl Linker {
                 }
                 // `T::name` with `T` a repo type that has no such component:
                 // a member it doesn't make one of (a variant, a derived method).
-                CallTarget::External if self.of_repo_type(self.scope_of(module), lang, &call.callee) || self.of_self_type(caller, lang, &call.callee) => row.evidence = Evidence::Member,
+                CallTarget::External
+                    if self.of_repo_type(self.scope_of(module), lang, &call.callee) || self.of_self_type(caller, lang, &call.callee) =>
+                {
+                    row.evidence = Evidence::Member
+                }
                 // Written as in the repo, and nothing there has the name: not found.
-                CallTarget::External if self.leads_into_repo(self.scope_of(module), lang, &call.callee) => row.evidence = Evidence::NotFound,
+                CallTarget::External if self.leads_into_repo(self.scope_of(module), lang, &call.callee) => {
+                    row.evidence = Evidence::NotFound
+                }
                 CallTarget::External => {}
             }
             as_said(&mut row, said.calls.get(&ci));
@@ -991,7 +1104,14 @@ impl Linker {
                     && self[*t].def.is_some()
                     && !self[*t].is_type
                 {
-                    add_relation(relations, RelationKind::Calls, caller_id, self[*t].id.clone(), RelationDetail { sites: vec![call.span], deferred: true, ..RelationDetail::default() }, prover);
+                    add_relation(
+                        relations,
+                        RelationKind::Calls,
+                        caller_id,
+                        self[*t].id.clone(),
+                        RelationDetail { sites: vec![call.span], deferred: true, ..RelationDetail::default() },
+                        prover,
+                    );
                 }
                 if named {
                     refs.push(row);
@@ -1001,12 +1121,18 @@ impl Linker {
             if let CallTarget::One(t) = target {
                 let t = *t;
                 let next = order.entry(caller_id.clone()).or_insert(0);
-                let detail = RelationDetail { sites: vec![call.span], order: Some(*next), deferred: call.deferred, ..RelationDetail::default() };
+                let detail =
+                    RelationDetail { sites: vec![call.span], order: Some(*next), deferred: call.deferred, ..RelationDetail::default() };
                 *next += 1;
                 add_relation(relations, RelationKind::Calls, caller_id.clone(), self[t].id.clone(), detail, prover.clone());
                 // Calling a type makes a value of it (`Report(...)`, `new Store()`).
                 if self[t].holds_data {
-                    let detail = RelationDetail { sites: vec![call.span], ports: Some(("makes".to_owned(), "value".to_owned())), data: Some(self[t].name.clone()), ..RelationDetail::default() };
+                    let detail = RelationDetail {
+                        sites: vec![call.span],
+                        ports: Some(("makes".to_owned(), "value".to_owned())),
+                        data: Some(self[t].name.clone()),
+                        ..RelationDetail::default()
+                    };
                     add_relation(relations, RelationKind::DataFlow, caller_id.clone(), self[t].id.clone(), detail, prover.clone());
                 }
                 // Outputs of other repo calls passed in as arguments: the
@@ -1024,9 +1150,26 @@ impl Linker {
                         Ok((ports, carried)) => {
                             // Proven only when both ends are, and the type
                             // each end names is the one the server says.
-                            let typed = self[source].signature.as_ref().and_then(|s| s.returns.as_deref()).is_none_or(|r| self[source].types_confirmed(r)) && self[t].types_confirmed(&carried);
-                            let detail = RelationDetail { sites: vec![call.span], ports: Some(ports), data: Some(carried), ..RelationDetail::default() };
-                            add_relation(relations, RelationKind::DataFlow, self[source].id.clone(), self[t].id.clone(), detail, prover.clone().filter(|_| source_proven.is_some() && typed));
+                            let typed = self[source]
+                                .signature
+                                .as_ref()
+                                .and_then(|s| s.returns.as_deref())
+                                .is_none_or(|r| self[source].types_confirmed(r))
+                                && self[t].types_confirmed(&carried);
+                            let detail = RelationDetail {
+                                sites: vec![call.span],
+                                ports: Some(ports),
+                                data: Some(carried),
+                                ..RelationDetail::default()
+                            };
+                            add_relation(
+                                relations,
+                                RelationKind::DataFlow,
+                                self[source].id.clone(),
+                                self[t].id.clone(),
+                                detail,
+                                prover.clone().filter(|_| source_proven.is_some() && typed),
+                            );
                         }
                         Err(reason) => row.detail.unverified.push((self[source].id.clone(), arg.position, reason)),
                     }
@@ -1049,7 +1192,12 @@ impl Linker {
             let within = caller.map(|c| self[c].id.clone());
             let mut written: Vec<&str> = Vec::new();
             for q in qualifiers {
-                let span = Span { start_line: name_span.start_line, end_line: name_span.start_line, start_byte: at as u32, end_byte: (at + q.len()) as u32 };
+                let span = Span {
+                    start_line: name_span.start_line,
+                    end_line: name_span.start_line,
+                    start_byte: at as u32,
+                    end_byte: (at + q.len()) as u32,
+                };
                 at += q.len() + sep.len();
                 written.push(q.as_str());
                 if lang.relative_prefixes.iter().any(|r| r == q) {
@@ -1071,7 +1219,12 @@ impl Linker {
             };
             let Some(at) = at else { continue };
             flow_row.within = Some(self[at].id.clone());
-            let add = |relations: &mut BTreeMap<String, RelationRow>, source: usize, target: usize, ports: (String, String), data: Option<String>, prover: Option<String>| {
+            let add = |relations: &mut BTreeMap<String, RelationRow>,
+                       source: usize,
+                       target: usize,
+                       ports: (String, String),
+                       data: Option<String>,
+                       prover: Option<String>| {
                 if source != target {
                     let detail = RelationDetail { sites: vec![raw.span], ports: Some(ports), data, ..RelationDetail::default() };
                     add_relation(relations, RelationKind::DataFlow, self[source].id.clone(), self[target].id.clone(), detail, prover);
@@ -1093,8 +1246,13 @@ impl Linker {
                         continue;
                     }
                     // What comes back, as written (`Result<Report, Error>`, `(u32, u32)`).
-                    let carried = self[source].signature.as_ref().and_then(|s| s.returns.as_deref()).map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "));
-                    let into = if raw.kind == FlowKind::Returned { "returns".to_owned() } else { format!("kept as {}", raw.names.join(", ")) };
+                    let carried = self[source]
+                        .signature
+                        .as_ref()
+                        .and_then(|s| s.returns.as_deref())
+                        .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "));
+                    let into =
+                        if raw.kind == FlowKind::Returned { "returns".to_owned() } else { format!("kept as {}", raw.names.join(", ")) };
                     // Proven when the call is, and what it returns is the type the server says.
                     let typed = carried.as_deref().is_none_or(|c| self[source].types_confirmed(c));
                     add(relations, source, at, ("return".to_owned(), into), carried, by.filter(|_| typed));
@@ -1108,7 +1266,14 @@ impl Linker {
                         None => found.found_ref(),
                     };
                     if let Some(ty) = made.filter(|t| self[*t].holds_data) {
-                        add(relations, at, ty, ("makes".to_owned(), "value".to_owned()), Some(self[ty].name.clone()), server.map(|s| s.prover.clone()));
+                        add(
+                            relations,
+                            at,
+                            ty,
+                            ("makes".to_owned(), "value".to_owned()),
+                            Some(self[ty].name.clone()),
+                            server.map(|s| s.prover.clone()),
+                        );
                     }
                     for (kind, name, span) in flow_refs(raw) {
                         let found = match found.found_ref() {
@@ -1136,7 +1301,11 @@ impl Linker {
                     // it's used; else what's read here is the reader's guess.
                     let proven_by = server.filter(|s| s.access.is_some()).map(|s| s.prover.clone());
                     for (kind, name, span) in flow_refs(raw) {
-                        let found = owner.map(|o| self[o].id.clone()).ok_or(if raw.through.is_some() { Evidence::Unproven } else { Evidence::NotFound });
+                        let found = owner.map(|o| self[o].id.clone()).ok_or(if raw.through.is_some() {
+                            Evidence::Unproven
+                        } else {
+                            Evidence::NotFound
+                        });
                         let mut row = ref_row(kind, name, span, Some(self[at].id.clone()), found, Vec::new());
                         as_said(&mut row, said.at.get(&span.start_byte));
                         row.detail.access = Some(access);
@@ -1177,14 +1346,31 @@ impl Linker {
 }
 
 /// A ref row for a name linked to `found` (its target, or why not).
-fn ref_row(kind: RefKind, name: &str, span: Span, within: Option<ComponentId>, found: Result<ComponentId, Evidence>, mut candidates: Vec<ComponentId>) -> RefRow {
+fn ref_row(
+    kind: RefKind,
+    name: &str,
+    span: Span,
+    within: Option<ComponentId>,
+    found: Result<ComponentId, Evidence>,
+    mut candidates: Vec<ComponentId>,
+) -> RefRow {
     candidates.sort();
     candidates.dedup();
     let (target, evidence) = match found {
         Ok(t) => (Some(t), Evidence::Name),
         Err(e) => (None, e),
     };
-    RefRow { start: span.start_byte, end: span.end_byte, name: name.to_owned(), kind, within, target, evidence, prover: None, detail: RefDetail { candidates, ..RefDetail::default() } }
+    RefRow {
+        start: span.start_byte,
+        end: span.end_byte,
+        name: name.to_owned(),
+        kind,
+        within,
+        target,
+        evidence,
+        prover: None,
+        detail: RefDetail { candidates, ..RefDetail::default() },
+    }
 }
 
 /// A type named (a scope's target or interface, a base), linked.
@@ -1207,7 +1393,12 @@ fn type_paths(written: &crate::Named, lang: &LanguageSpec) -> Vec<crate::Named> 
         let path = &text[from..to];
         let noise = lang.type_noise.iter().any(|w| w == path) || lang.reference_markers.iter().any(|m| m == path);
         if !noise {
-            let name_from = path.char_indices().filter(|(_, c)| !lang.is_identifier_char(*c)).map(|(i, c)| i + c.len_utf8()).next_back().map_or(from, |i| from + i);
+            let name_from = path
+                .char_indices()
+                .filter(|(_, c)| !lang.is_identifier_char(*c))
+                .map(|(i, c)| i + c.len_utf8())
+                .next_back()
+                .map_or(from, |i| from + i);
             out.push(crate::Named { text: path.to_owned(), span: sub_span(written.span, text, name_from, to) });
         }
     };
@@ -1221,7 +1412,11 @@ fn type_paths(written: &crate::Named, lang: &LanguageSpec) -> Vec<crate::Named> 
             continue;
         }
         // A separator inside a path (`a::B`), between two names.
-        if let Some(sep) = start.and(lang.call_separators.iter().find(|sep| rest.starts_with(sep.as_str()) && rest[sep.len()..].chars().next().is_some_and(|n| lang.is_identifier_char(n)))) {
+        if let Some(sep) = start.and(
+            lang.call_separators
+                .iter()
+                .find(|sep| rest.starts_with(sep.as_str()) && rest[sep.len()..].chars().next().is_some_and(|n| lang.is_identifier_char(n))),
+        ) {
             i += sep.len();
             continue;
         }
@@ -1270,7 +1465,15 @@ fn import_refs(linker: &Linker, imp: &crate::Named, scope: &FileScope, lang: &La
         written.push(word);
         let span = sub_span(imp.span, text, from, from + word.len());
         // Importable definitions only (not members), once each.
-        let mut brought: Vec<usize> = linker.named(&lang.name, word).iter().copied().filter(|&c| linker[c].owner.is_none() && imports_text_from(std::slice::from_ref(&imp.text), lang, &scope.module, word, &linker[c].module)).collect();
+        let mut brought: Vec<usize> = linker
+            .named(&lang.name, word)
+            .iter()
+            .copied()
+            .filter(|&c| {
+                linker[c].owner.is_none()
+                    && imports_text_from(std::slice::from_ref(&imp.text), lang, &scope.module, word, &linker[c].module)
+            })
+            .collect();
         // Not defined where the path says: what that module brings in
         // itself (a re-export), one step.
         if brought.is_empty() && from_repo {
@@ -1281,7 +1484,8 @@ fn import_refs(linker: &Linker, imp: &crate::Named, scope: &FileScope, lang: &La
         // Modules with the name, narrowed to those whose path ends with the
         // most of the path written so far.
         let named_modules = linker.module_named.get(&lang.name).and_then(|n| n.get(word)).map_or(&[][..], Vec::as_slice);
-        let matched = |m: usize| (1..=path.len()).rev().find(|&n| lang.words(&linker[m].symbol).ends_with(&path[path.len() - n..])).unwrap_or(0);
+        let matched =
+            |m: usize| (1..=path.len()).rev().find(|&n| lang.words(&linker[m].symbol).ends_with(&path[path.len() - n..])).unwrap_or(0);
         let best = named_modules.iter().map(|&m| matched(m)).max().unwrap_or(0);
         let mut modules: Vec<usize> = named_modules.iter().copied().filter(|&m| matched(m) == best).collect();
         modules.sort_by(|a, b| linker[*a].id.cmp(&linker[*b].id));
@@ -1320,7 +1524,14 @@ fn unique_starts(refs: Vec<RefRow>) -> Vec<RefRow> {
 }
 
 /// Adds a relation to a file's, or folds it into the one with the same id.
-fn add_relation(relations: &mut BTreeMap<String, RelationRow>, kind: RelationKind, source: ComponentId, target: ComponentId, detail: RelationDetail, prover: Option<String>) {
+fn add_relation(
+    relations: &mut BTreeMap<String, RelationRow>,
+    kind: RelationKind,
+    source: ComponentId,
+    target: ComponentId,
+    detail: RelationDetail,
+    prover: Option<String>,
+) {
     if source == target {
         return;
     }
@@ -1381,7 +1592,10 @@ fn split(text: &str, lang: &LanguageSpec) -> Vec<String> {
 
 /// A callee with a leading alias replaced by what it stands for (its last name).
 fn de_alias_expr(callee: &Expr, aliases: &[(String, String)], lang: &LanguageSpec) -> Expr {
-    let original = callee.head().and_then(|head| aliases.iter().find(|(alias, _)| alias == head)).and_then(|(_, original)| lang.words(original).last().map(|w| (*w).to_owned()));
+    let original = callee
+        .head()
+        .and_then(|head| aliases.iter().find(|(alias, _)| alias == head))
+        .and_then(|(_, original)| lang.words(original).last().map(|w| (*w).to_owned()));
     match original {
         Some(original) => callee.with_head(&original),
         None => callee.clone(),
@@ -1413,12 +1627,23 @@ fn flow(linker: &Linker, source: usize, target: usize, position: u32, lang: &Lan
         }
     });
     let Some(produced) = produced else { return Err(format!("{} declares no return type", linker[source].symbol)) };
-    let params: Vec<&arch_graph::Param> =
-        linker[target].signature.as_ref().map(|s| s.params.iter().filter(|p| !lang.words(&p.name).iter().any(|w| lang.self_names.iter().any(|n| n == w))).collect()).unwrap_or_default();
-    let Some(param) = params.get(position as usize) else { return Err(format!("{} has no parameter at position {position}", linker[target].symbol)) };
-    let Some(wanted) = param.ty.as_deref().map(base) else { return Err(format!("parameter '{}' of {} has no type", param.name, linker[target].symbol)) };
+    let params: Vec<&arch_graph::Param> = linker[target]
+        .signature
+        .as_ref()
+        .map(|s| s.params.iter().filter(|p| !lang.words(&p.name).iter().any(|w| lang.self_names.iter().any(|n| n == w))).collect())
+        .unwrap_or_default();
+    let Some(param) = params.get(position as usize) else {
+        return Err(format!("{} has no parameter at position {position}", linker[target].symbol));
+    };
+    let Some(wanted) = param.ty.as_deref().map(base) else {
+        return Err(format!("parameter '{}' of {} has no type", param.name, linker[target].symbol));
+    };
     let compatible = produced == wanted || lang.compatible_types.iter().any(|group| group.contains(&produced) && group.contains(&wanted));
-    if compatible { Ok((("return".to_owned(), param.name.clone()), produced)) } else { Err(format!("{produced} doesn't match parameter '{}': {wanted}", param.name)) }
+    if compatible {
+        Ok((("return".to_owned(), param.name.clone()), produced))
+    } else {
+        Err(format!("{produced} doesn't match parameter '{}': {wanted}", param.name))
+    }
 }
 
 /// What a written type name refers to, seen from a file.
@@ -1485,7 +1710,11 @@ fn find_type(linker: &Linker, text: &str, scope: &FileScope, lang: &LanguageSpec
         let written: Vec<&str> = raw[..raw.len() - 1].iter().map(String::as_str).collect();
         let modules: Vec<&str> = linker.written_modules(lang, scope, &written).into_iter().map(|m| linker[m].symbol.as_str()).collect();
         let defined: Vec<usize> = candidates.iter().copied().filter(|&c| modules.contains(&linker[c].module.as_str())).collect();
-        let found = if defined.is_empty() { linker.reexported(lang, scope, &written, name).into_iter().filter(|&c| linker[c].is_type).collect() } else { defined };
+        let found = if defined.is_empty() {
+            linker.reexported(lang, scope, &written, name).into_iter().filter(|&c| linker[c].is_type).collect()
+        } else {
+            defined
+        };
         match found.as_slice() {
             [one] => return TypeRef::Found(*one),
             [_, ..] => return TypeRef::Unknown,
@@ -1512,7 +1741,8 @@ fn find_type(linker: &Linker, text: &str, scope: &FileScope, lang: &LanguageSpec
                     return TypeRef::Outside;
                 }
                 let written: Vec<&str> = raw[..raw.len() - 1].iter().map(String::as_str).collect();
-                let through: Vec<usize> = linker.reexported(lang, scope, &written, name).into_iter().filter(|&c| linker[c].is_type).collect();
+                let through: Vec<usize> =
+                    linker.reexported(lang, scope, &written, name).into_iter().filter(|&c| linker[c].is_type).collect();
                 match through.as_slice() {
                     [one] => TypeRef::Found(*one),
                     [] => TypeRef::Outside,
@@ -1528,7 +1758,8 @@ fn find_type(linker: &Linker, text: &str, scope: &FileScope, lang: &LanguageSpec
     if let [one] = local.as_slice() {
         return TypeRef::Found(*one);
     }
-    let imported: Vec<usize> = candidates.iter().copied().filter(|&c| imports_from(&scope.imports, lang, &scope.module, name, &linker[c].module)).collect();
+    let imported: Vec<usize> =
+        candidates.iter().copied().filter(|&c| imports_from(&scope.imports, lang, &scope.module, name, &linker[c].module)).collect();
     match imported.as_slice() {
         [one] => TypeRef::Found(*one),
         [] if scope.imports.words.contains(name.as_str()) => {
@@ -1596,7 +1827,6 @@ fn imports_text_from(imports: &[String], lang: &LanguageSpec, importer: &str, na
         })
     })
 }
-
 
 /// Candidates whose symbol ends with the written qualified path.
 fn path_matches(linker: &Linker, candidates: &[usize], parts: &[String], lang: &LanguageSpec) -> Vec<usize> {
@@ -1732,7 +1962,9 @@ impl Cx<'_> {
                 }
                 // A parameter with a written type.
                 let name = lang.strip_references(q);
-                if let Some(param) = self.linker[caller].signature.as_ref().and_then(|s| s.params.iter().find(|p| lang.strip_references(&p.name) == name)) {
+                if let Some(param) =
+                    self.linker[caller].signature.as_ref().and_then(|s| s.params.iter().find(|p| lang.strip_references(&p.name) == name))
+                {
                     return match &param.ty {
                         Some(ty) => self.written_type(caller, ty),
                         None => Receiver::Unknown,
@@ -1759,7 +1991,13 @@ impl Cx<'_> {
         let mut i = 0;
         while i < types.len() && i < 32 {
             let t = types[i];
-            let mut next: Vec<usize> = linker.implements.get(&linker[t].id).into_iter().flatten().filter_map(|(_, target)| linker.by_id.get(target).copied()).collect();
+            let mut next: Vec<usize> = linker
+                .implements
+                .get(&linker[t].id)
+                .into_iter()
+                .flatten()
+                .filter_map(|(_, target)| linker.by_id.get(target).copied())
+                .collect();
             if linker[t].def.is_some()
                 && let Some(lang) = self.lang(t)
             {
@@ -1908,15 +2146,19 @@ impl Cx<'_> {
         // (what's in an inline `mod tests` isn't seen outside it by name).
         let caller_module = linker[caller].module.as_str();
         let space = self.space(caller);
-        if let Some(target) = narrow(free.iter().copied().filter(|&c| linker[c].module == caller_module && self.space(c) == space).collect()) {
+        if let Some(target) =
+            narrow(free.iter().copied().filter(|&c| linker[c].module == caller_module && self.space(c) == space).collect())
+        {
             return target;
         }
-        let imported: Vec<usize> = free.iter().copied().filter(|&c| imports_from(imports, lang, caller_module, name, &linker[c].module)).collect();
+        let imported: Vec<usize> =
+            free.iter().copied().filter(|&c| imports_from(imports, lang, caller_module, name, &linker[c].module)).collect();
         if let Some(target) = narrow(imported) {
             return target;
         }
         // Brought from a repo module that re-exports it.
-        let through: Vec<usize> = linker.through_reexport(linker.scope_of(caller), lang, name).into_iter().filter(|&c| !self.is_member(c)).collect();
+        let through: Vec<usize> =
+            linker.through_reexport(linker.scope_of(caller), lang, name).into_iter().filter(|&c| !self.is_member(c)).collect();
         narrow(through).unwrap_or(CallTarget::Unproven(free))
     }
 }

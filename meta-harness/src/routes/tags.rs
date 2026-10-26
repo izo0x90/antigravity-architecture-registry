@@ -49,7 +49,10 @@ impl IntoResponse for Refused {
 
 /// Tags are kept in the state database, and owners say what subjects say
 /// (a terminal's lines): off the async threads.
-async fn blocking<T: Send + 'static>(tags: &Arc<Tags>, f: impl FnOnce(&Tags) -> Result<T, TagError> + Send + 'static) -> Result<T, Refused> {
+async fn blocking<T: Send + 'static>(
+    tags: &Arc<Tags>,
+    f: impl FnOnce(&Tags) -> Result<T, TagError> + Send + 'static,
+) -> Result<T, Refused> {
     let tags = tags.clone();
     tokio::task::spawn_blocking(move || f(&tags)).await.map_err(|e| Refused(TagError::Store(e.to_string())))?.map_err(Refused)
 }
@@ -61,7 +64,6 @@ async fn list(_: Needs<can::ViewRead>, State(state): State<TagsState>) -> Json<V
 async fn read(_: Needs<can::ViewRead>, State(state): State<TagsState>, Path(tag): Path<String>) -> Result<Json<TagRead>, Refused> {
     blocking(&state.tags, move |t| t.read(&tag)).await.map(Json)
 }
-
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -81,7 +83,12 @@ struct Untagging {
     subject: Subject,
 }
 
-async fn untag(_: Needs<can::TagsEdit>, State(state): State<TagsState>, Path(tag): Path<String>, Json(body): Json<Untagging>) -> Result<Json<Tag>, Refused> {
+async fn untag(
+    _: Needs<can::TagsEdit>,
+    State(state): State<TagsState>,
+    Path(tag): Path<String>,
+    Json(body): Json<Untagging>,
+) -> Result<Json<Tag>, Refused> {
     blocking(&state.tags, move |t| t.untag(&tag, &body.subject, USER)).await.map(Json)
 }
 
@@ -93,7 +100,12 @@ struct Editing {
     note: Option<String>,
 }
 
-async fn edit(_: Needs<can::TagsEdit>, State(state): State<TagsState>, Path(tag): Path<String>, Json(body): Json<Editing>) -> Result<Json<Tag>, Refused> {
+async fn edit(
+    _: Needs<can::TagsEdit>,
+    State(state): State<TagsState>,
+    Path(tag): Path<String>,
+    Json(body): Json<Editing>,
+) -> Result<Json<Tag>, Refused> {
     blocking(&state.tags, move |t| t.edit(&tag, Edit { name: body.name, colour: body.colour, note: body.note }, USER)).await.map(Json)
 }
 

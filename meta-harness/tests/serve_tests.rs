@@ -72,7 +72,8 @@ impl Server {
     /// the headers, the body.
     fn get(&self, path: &str, headers: &str) -> (u16, String, Vec<u8>) {
         let mut stream = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        write!(stream, "GET {path} HTTP/1.1\r\nHost: localhost\r\nCookie: nah_cockpit={SECRET}\r\n{headers}Connection: close\r\n\r\n").unwrap();
+        write!(stream, "GET {path} HTTP/1.1\r\nHost: localhost\r\nCookie: nah_cockpit={SECRET}\r\n{headers}Connection: close\r\n\r\n")
+            .unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
         let mut answer = Vec::new();
         let _ = stream.read_to_end(&mut answer);
@@ -134,7 +135,13 @@ fn a_server_without_the_cockpit_serves_the_project_but_not_the_page() {
 fn the_server_says_its_secret_and_refuses_an_address_the_internet_reaches() {
     let home = tempfile::tempdir().unwrap();
     let run = |args: &[&str]| {
-        std::process::Command::new(env!("CARGO_BIN_EXE_meta-harness")).args(args).env("HOME", home.path()).env("XDG_CONFIG_HOME", home.path().join("config")).env_remove("NAH_COCKPIT_TOKEN").output().unwrap()
+        std::process::Command::new(env!("CARGO_BIN_EXE_meta-harness"))
+            .args(args)
+            .env("HOME", home.path())
+            .env("XDG_CONFIG_HOME", home.path().join("config"))
+            .env_remove("NAH_COCKPIT_TOKEN")
+            .output()
+            .unwrap()
     };
     let first = run(&["token"]);
     let secret = String::from_utf8(first.stdout).unwrap();
@@ -150,7 +157,15 @@ fn the_server_says_its_secret_and_refuses_an_address_the_internet_reaches() {
 #[test]
 fn the_servers_a_home_links_to_are_kept_from_the_command_line() {
     let home = tempfile::tempdir().unwrap();
-    let run = |args: &[&str]| std::process::Command::new(env!("CARGO_BIN_EXE_meta-harness")).arg("servers").args(args).env("HOME", home.path()).env("XDG_DATA_HOME", home.path().join("data")).output().unwrap();
+    let run = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_meta-harness"))
+            .arg("servers")
+            .args(args)
+            .env("HOME", home.path())
+            .env("XDG_DATA_HOME", home.path().join("data"))
+            .output()
+            .unwrap()
+    };
     let added = run(&["add", "cloud", "http://100.64.0.7:8080", "its-secret"]);
     assert!(added.status.success(), "{}", String::from_utf8_lossy(&added.stderr));
     let listed = String::from_utf8(run(&["list"]).stdout).unwrap();
@@ -209,7 +224,9 @@ face = "Fake-Regular.ttf"
     assert!(installed.status.success(), "{}", String::from_utf8_lossy(&installed.stderr));
     let (status, head, body) = server.get("/api/ui/fonts/fake-font", "");
     assert_eq!((status, body), (200, face));
-    let header = |name: &str| head.lines().find_map(|l| l.split_once(':').filter(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v.trim().to_owned()));
+    let header = |name: &str| {
+        head.lines().find_map(|l| l.split_once(':').filter(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v.trim().to_owned()))
+    };
     assert_eq!(header("content-type").as_deref(), Some("font/ttf"));
     assert_eq!(header("cache-control").as_deref(), Some("no-cache"), "asked again each time it's used");
     let changed = header("last-modified").expect("when it last changed");
@@ -218,13 +235,18 @@ face = "Fake-Regular.ttf"
     assert_eq!(server.get("/api/ui/fonts/rust", "").0, 400, "not a font");
 
     // A newer pack, not installed yet: outdated, and how to update.
-    std::fs::write(pack.join("pack.toml"), std::fs::read_to_string(pack.join("pack.toml")).unwrap().replacen("version = \"1.0.0\"", "version = \"1.1.0\"", 1)).unwrap();
+    std::fs::write(
+        pack.join("pack.toml"),
+        std::fs::read_to_string(pack.join("pack.toml")).unwrap().replacen("version = \"1.0.0\"", "version = \"1.1.0\"", 1),
+    )
+    .unwrap();
     let (status, _, body) = server.get("/api/ui/fonts/fake-font", "");
     assert_eq!(status, 409, "{}", String::from_utf8_lossy(&body));
     assert!(String::from_utf8_lossy(&body).contains("meta-harness pack update fake-font"));
     // The server's own lock unreadable: its fault, not the cockpit's.
     // (The user's data folder: XDG's here, or macOS's own under its home.)
-    let data = if cfg!(target_os = "macos") { server.home.path().join("Library/Application Support") } else { server.home.path().join("data") };
+    let data =
+        if cfg!(target_os = "macos") { server.home.path().join("Library/Application Support") } else { server.home.path().join("data") };
     let lock = data.join("nah/packs.lock");
     assert!(lock.is_file(), "the lock is where the server's packs are");
     std::fs::write(&lock, "not a lock").unwrap();

@@ -316,7 +316,6 @@ impl Desk {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     /// Kept for the search it's of: another (the same kind's other buffer

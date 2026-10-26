@@ -24,7 +24,9 @@ pub struct Snapshot {
 }
 
 pub(crate) fn tree_of<'r>(repo: &'r Repository, id: &str) -> Result<Tree<'r>> {
-    let reference = repo.find_reference(&format!("{SNAPSHOT_REFS}{id}")).map_err(|_| ChangesError::BadPoint(format!("snapshot:{id} is gone (pruned)")))?;
+    let reference = repo
+        .find_reference(&format!("{SNAPSHOT_REFS}{id}"))
+        .map_err(|_| ChangesError::BadPoint(format!("snapshot:{id} is gone (pruned)")))?;
     Ok(reference.peel_to_tree()?)
 }
 
@@ -91,7 +93,16 @@ impl Changes {
     pub fn snapshots_for(&self, why: &str) -> Result<Vec<Snapshot>> {
         let repo = self.repo()?;
         let said = format!("NAH snapshot: {why}");
-        Ok(self.snapshots()?.into_iter().filter(|s| repo.find_reference(&format!("{SNAPSHOT_REFS}{}", s.id)).ok().and_then(|r| r.peel_to_commit().ok()).is_some_and(|c| c.message().ok() == Some(said.as_str()))).collect())
+        Ok(self
+            .snapshots()?
+            .into_iter()
+            .filter(|s| {
+                repo.find_reference(&format!("{SNAPSHOT_REFS}{}", s.id))
+                    .ok()
+                    .and_then(|r| r.peel_to_commit().ok())
+                    .is_some_and(|c| c.message().ok() == Some(said.as_str()))
+            })
+            .collect())
     }
 
     /// Lets snapshot `id` go (git's cleanup takes what nothing else keeps).

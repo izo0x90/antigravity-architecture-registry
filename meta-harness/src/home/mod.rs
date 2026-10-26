@@ -30,14 +30,21 @@ pub fn now_ms() -> u64 {
 
 impl Home {
     /// Home over its state database, following every server listed there.
-    pub fn start(db: Arc<nah_state::StateDb>, here: Arc<EventHub>, notify: Arc<nah_notify::NotifyHub>, has_project: bool) -> Result<Arc<Self>, nah_state::StateError> {
+    pub fn start(
+        db: Arc<nah_state::StateDb>,
+        here: Arc<EventHub>,
+        notify: Arc<nah_notify::NotifyHub>,
+        has_project: bool,
+    ) -> Result<Arc<Self>, nah_state::StateError> {
         let links = links::Links::start(db.servers()?, notify);
         Ok(Arc::new(Self { db, links, here, has_project, client: pass::client() }))
     }
 
     /// Every server: home's own first, then the others as added.
     pub fn servers(&self) -> Vec<ServerView> {
-        std::iter::once(ServerView { name: HERE.into(), url: String::new(), link: LinkState::Connected, project: self.has_project }).chain(self.links.list()).collect()
+        std::iter::once(ServerView { name: HERE.into(), url: String::new(), link: LinkState::Connected, project: self.has_project })
+            .chain(self.links.list())
+            .collect()
     }
 
     /// Each server's events, home's own first.

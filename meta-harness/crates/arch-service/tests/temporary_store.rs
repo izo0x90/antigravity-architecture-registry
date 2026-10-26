@@ -16,9 +16,22 @@ fn a_temporary_store_is_removed_when_the_service_is_dropped() {
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"app\"\n").unwrap();
     std::fs::write(root.join("src/lib.rs"), "pub fn run() { go(); }\nfn go() {}\n").unwrap();
-    let stores = || std::fs::read_dir(tmp.path()).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with("nah-store-")).count();
+    let stores = || {
+        std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("nah-store-"))
+            .count()
+    };
     let limits = arch_service::Limits::defaults().unwrap();
-    let service = ArchitectureService::open(&root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), arch_service::temporary_facts(&limits).unwrap()).unwrap();
+    let service = ArchitectureService::open(
+        &root,
+        common::shipped_packs(),
+        TypeSystem::defaults().unwrap(),
+        Box::new(MemoryPlans::default()),
+        arch_service::temporary_facts(&limits).unwrap(),
+    )
+    .unwrap();
     service.ingest(&root).unwrap();
     assert!(stores() > 0, "the store is in the temp folder while in use");
     drop(service);

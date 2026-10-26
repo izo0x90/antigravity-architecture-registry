@@ -20,7 +20,11 @@ use crate::cockpit::{Needs, can};
 use crate::modules::ProjectState;
 
 pub(crate) fn routes() -> Router<ProjectState> {
-    Router::new().route("/api/changes", get(list)).route("/api/changes/file", get(file)).route("/api/changes/components", get(components)).route("/api/changes/timeline", get(timeline))
+    Router::new()
+        .route("/api/changes", get(list))
+        .route("/api/changes/file", get(file))
+        .route("/api/changes/components", get(components))
+        .route("/api/changes/timeline", get(timeline))
         // (Its body is the texts, JSON-escaped: room for them.)
         .route("/api/changes/texts", post(texts).layer(axum::extract::DefaultBodyLimit::max(4 * TEXTS_MOST)))
         .route("/api/changes/stage", post(stage))
@@ -50,8 +54,14 @@ pub(crate) fn changes_of(state: &ProjectState) -> ChangesResult<Arc<Changes>> {
 }
 
 /// Runs `f` on the changes off the async threads.
-pub(crate) async fn blocking<T: Send + 'static>(changes: Arc<Changes>, f: impl FnOnce(&Changes) -> Result<T, ChangesError> + Send + 'static) -> ChangesResult<T> {
-    tokio::task::spawn_blocking(move || f(&changes)).await.map_err(|e| ChangesFailed(ChangesError::Git(e.to_string())))?.map_err(ChangesFailed)
+pub(crate) async fn blocking<T: Send + 'static>(
+    changes: Arc<Changes>,
+    f: impl FnOnce(&Changes) -> Result<T, ChangesError> + Send + 'static,
+) -> ChangesResult<T> {
+    tokio::task::spawn_blocking(move || f(&changes))
+        .await
+        .map_err(|e| ChangesFailed(ChangesError::Git(e.to_string())))?
+        .map_err(ChangesFailed)
 }
 
 #[derive(Deserialize)]
@@ -128,9 +138,18 @@ struct TextPair {
 async fn texts(_: Needs<can::ViewRead>, Json(ask): Json<TextsAsk>) -> ChangesResult<Json<Vec<Vec<harness_contracts::changes::Hunk>>>> {
     let size: usize = ask.pairs.iter().map(|p| p.old.len() + p.new.len()).sum();
     if size > TEXTS_MOST {
-        return Err(ChangesFailed(ChangesError::TooBig(format!("{size} bytes of text is too much to compare at once (the most is {TEXTS_MOST})"))));
+        return Err(ChangesFailed(ChangesError::TooBig(format!(
+            "{size} bytes of text is too much to compare at once (the most is {TEXTS_MOST})"
+        ))));
     }
-    let compared = tokio::task::spawn_blocking(move || ask.pairs.iter().map(|p| nah_changes::texts(&p.old, &p.new, p.context.unwrap_or(nah_changes::CONTEXT))).collect::<Result<Vec<_>, _>>()).await.map_err(|e| ChangesFailed(ChangesError::Git(e.to_string())))?;
+    let compared = tokio::task::spawn_blocking(move || {
+        ask.pairs
+            .iter()
+            .map(|p| nah_changes::texts(&p.old, &p.new, p.context.unwrap_or(nah_changes::CONTEXT)))
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .await
+    .map_err(|e| ChangesFailed(ChangesError::Git(e.to_string())))?;
     Ok(Json(compared.map_err(ChangesFailed)?))
 }
 
@@ -138,7 +157,11 @@ async fn texts(_: Needs<can::ViewRead>, Json(ask): Json<TextsAsk>) -> ChangesRes
 /// component with the runs inside its lines (every level: a function and
 /// what holds it), and the changed files it can't say for (out of date in
 /// the index, or changed since the comparison's newer side).
-pub(crate) fn component_changes(arch: &arch_service::ArchitectureService, changes: &Changes, comparison: &Comparison) -> Result<ComponentChangeList, ChangesError> {
+pub(crate) fn component_changes(
+    arch: &arch_service::ArchitectureService,
+    changes: &Changes,
+    comparison: &Comparison,
+) -> Result<ComponentChangeList, ChangesError> {
     let on = changes.on_files(comparison)?;
     let mut out = ComponentChangeList { comparison: comparison.clone(), components: Vec::new(), out_of_date: on.moved };
     for file in &on.files {
@@ -148,10 +171,28 @@ pub(crate) fn component_changes(arch: &arch_service::ArchitectureService, change
             out.out_of_date.push(file.path.clone());
             continue;
         }
-        let spans: Vec<(&arch_graph::Component, u32, u32)> =
-            view.components.iter().filter_map(|(c, _)| c.anchor.as_ref().filter(|a| a.file.as_str() == file.path).map(|a| (c, a.span.start_line, a.span.end_line.max(a.span.start_line)))).collect();
+        let spans: Vec<(&arch_graph::Component, u32, u32)> = view
+            .components
+            .iter()
+            .filter_map(|(c, _)| {
+                c.anchor
+                    .as_ref()
+                    .filter(|a| a.file.as_str() == file.path)
+                    .map(|a| (c, a.span.start_line, a.span.end_line.max(a.span.start_line)))
+            })
+            .collect();
         // Each run's own component: the smallest that holds it.
-        let owner: Vec<Option<&str>> = file.runs.iter().map(|r| spans.iter().filter(|(_, first, last)| r.within(*first, *last)).min_by_key(|(_, first, last)| last - first).map(|(c, ..)| c.id.as_str())).collect();
+        let owner: Vec<Option<&str>> = file
+            .runs
+            .iter()
+            .map(|r| {
+                spans
+                    .iter()
+                    .filter(|(_, first, last)| r.within(*first, *last))
+                    .min_by_key(|(_, first, last)| last - first)
+                    .map(|(c, ..)| c.id.as_str())
+            })
+            .collect();
         for (c, first, last) in &spans {
             let (first, last) = (*first, *last);
             let inside: Vec<_> = file.runs.iter().filter(|r| r.within(first, last)).collect();
@@ -175,8 +216,14 @@ pub(crate) fn component_changes(arch: &arch_service::ArchitectureService, change
 
 /// When the files changed and who was working: the windows between
 /// snapshots (taken at every turn's start and end), each turn's changes.
-async fn timeline(_: Needs<can::ViewRead>, State(state): State<ProjectState>) -> Result<Json<harness_contracts::changes::Timeline>, Response> {
-    let timeline = state.timeline.clone().ok_or_else(|| ChangesFailed(ChangesError::NotARepo(state.arch.root().display().to_string())).into_response())?;
+async fn timeline(
+    _: Needs<can::ViewRead>,
+    State(state): State<ProjectState>,
+) -> Result<Json<harness_contracts::changes::Timeline>, Response> {
+    let timeline = state
+        .timeline
+        .clone()
+        .ok_or_else(|| ChangesFailed(ChangesError::NotARepo(state.arch.root().display().to_string())).into_response())?;
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
     let failed = |e: String| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response();
     let read = tokio::task::spawn_blocking(move || timeline.read(now)).await.map_err(|e| failed(e.to_string()))?;
@@ -227,21 +274,32 @@ async fn unstage(_: Needs<can::ChangesStage>, State(state): State<ProjectState>,
 pub(crate) async fn changed_files(changes: Option<Arc<Changes>>, range: &str) -> Result<std::collections::BTreeSet<String>, ChangesError> {
     let comparison: Comparison = range.parse().map_err(ChangesError::BadPoint)?;
     let changes = changes.ok_or_else(|| ChangesError::NotARepo("the project".into()))?;
-    let paths = tokio::task::spawn_blocking(move || changes.changed_paths(&comparison)).await.map_err(|e| ChangesError::Git(e.to_string()))??;
+    let paths =
+        tokio::task::spawn_blocking(move || changes.changed_paths(&comparison)).await.map_err(|e| ChangesError::Git(e.to_string()))??;
     Ok(paths.into_iter().collect())
 }
 
 /// The components a comparison (`from..to`) changed themselves (not only
 /// in their parts), for "only what changed".
-pub(crate) async fn changed_components(arch: Arc<arch_service::ArchitectureService>, changes: Option<Arc<Changes>>, range: &str) -> Result<Vec<String>, ChangesError> {
+pub(crate) async fn changed_components(
+    arch: Arc<arch_service::ArchitectureService>,
+    changes: Option<Arc<Changes>>,
+    range: &str,
+) -> Result<Vec<String>, ChangesError> {
     let comparison: Comparison = range.parse().map_err(ChangesError::BadPoint)?;
     let changes = changes.ok_or_else(|| ChangesError::NotARepo("the project".into()))?;
-    let list = tokio::task::spawn_blocking(move || component_changes(&arch, &changes, &comparison)).await.map_err(|e| ChangesError::Git(e.to_string()))??;
+    let list = tokio::task::spawn_blocking(move || component_changes(&arch, &changes, &comparison))
+        .await
+        .map_err(|e| ChangesError::Git(e.to_string()))??;
     Ok(list.components.into_iter().filter(|c| c.direct).map(|c| c.component).collect())
 }
 
 /// Which components a comparison changed.
-async fn components(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Query(compared): Query<Compared>) -> ChangesResult<Json<ComponentChangeList>> {
+async fn components(
+    _: Needs<can::ViewRead>,
+    State(state): State<ProjectState>,
+    Query(compared): Query<Compared>,
+) -> ChangesResult<Json<ComponentChangeList>> {
     let comparison = compared.comparison();
     let arch = state.arch.clone();
     Ok(Json(blocking(changes_of(&state)?, move |c| component_changes(&arch, c, &comparison)).await?))

@@ -69,7 +69,9 @@ impl Fonts {
                 Ok(bytes) => {
                     self.have.entry(name).or_insert_with(|| Box::leak(bytes.into_boxed_slice()));
                 }
-                Err(e) if self.named().contains(&name) => note = Some(format!("The font {name} can't be had, so egui's own is used: {}", String::from(e))),
+                Err(e) if self.named().contains(&name) => {
+                    note = Some(format!("The font {name} can't be had, so egui's own is used: {}", String::from(e)))
+                }
                 Err(_) => {}
             }
         }
@@ -89,7 +91,9 @@ impl Fonts {
         if self.named().iter().any(|n| self.asked.contains(n)) {
             return;
         }
-        let lead = |name: &String| self.have.get(name).map(|bytes| Face { name: name.clone(), data: Arc::new(egui::FontData::from_static(bytes)) });
+        let lead = |name: &String| {
+            self.have.get(name).map(|bytes| Face { name: name.clone(), data: Arc::new(egui::FontData::from_static(bytes)) })
+        };
         let faces = Faces { mono: lead(&self.wanted.mono), text: lead(&self.wanted.text) };
         let leads = (faces.mono.as_ref().map(|f| f.name.clone()), faces.text.as_ref().map(|f| f.name.clone()));
         if self.built.as_ref() != Some(&leads) {
@@ -152,7 +156,11 @@ mod tests {
         // One not installed: said, and egui's own leads where it was named.
         let missing = FontsUi { mono: "maple-mono".into(), text: String::new() };
         fonts.want(&missing, &net, &ctx);
-        net.answer("GET /api/ui/fonts/maple-mono", 404, &serde_json::json!({ "error": "pack 'maple-mono' isn't installed (meta-harness pack install maple-mono)" }));
+        net.answer(
+            "GET /api/ui/fonts/maple-mono",
+            404,
+            &serde_json::json!({ "error": "pack 'maple-mono' isn't installed (meta-harness pack install maple-mono)" }),
+        );
         let note = fonts.tend(&ctx).unwrap();
         assert!(note.contains("pack install maple-mono"), "{note}");
         assert_eq!(leading(&ctx), defaults);

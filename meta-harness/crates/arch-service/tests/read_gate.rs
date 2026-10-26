@@ -57,7 +57,14 @@ fn the_code_view_answers_while_a_write_runs() {
     let file = files_by_use(&service)[0].clone();
     let path: PathBuf = dir.path().join(&file);
     let text = std::fs::read_to_string(&path).unwrap();
-    let other = service.observed().unwrap().components().filter_map(|c| c.anchor.as_ref()).map(|a| a.file.as_str().to_owned()).find(|f| f != &file && f.ends_with(".rs")).unwrap();
+    let other = service
+        .observed()
+        .unwrap()
+        .components()
+        .filter_map(|c| c.anchor.as_ref())
+        .map(|a| a.file.as_str().to_owned())
+        .find(|f| f != &file && f.ends_with(".rs"))
+        .unwrap();
     // The same reads with nothing being written.
     let mut idle = Duration::ZERO;
     for _ in 0..100 {
@@ -92,11 +99,16 @@ fn the_code_view_answers_while_a_write_runs() {
     }
     writer.join().unwrap();
     let windows = windows.lock().unwrap().clone();
-    let during: Vec<Duration> = reads.iter().filter(|(s, e)| windows.iter().any(|(ws, we)| s < we && e > ws)).map(|(s, e)| *e - *s).collect();
+    let during: Vec<Duration> =
+        reads.iter().filter(|(s, e)| windows.iter().any(|(ws, we)| s < we && e > ws)).map(|(s, e)| *e - *s).collect();
     assert!(during.len() >= 3, "too few reads overlapped a write to tell ({} of {})", during.len(), reads.len());
     let slowest = during.iter().max().copied().unwrap();
     // Not blocked: no read during a write is slower
     // than three times the slowest read with nothing written, plus 5 ms.
     let bound = idle * 3 + Duration::from_millis(5);
-    assert!(slowest <= bound, "a read waited for a write: slowest {slowest:?} during writes {:?}; slowest with none {idle:?}", windows.iter().map(|(s, e)| *e - *s).collect::<Vec<_>>());
+    assert!(
+        slowest <= bound,
+        "a read waited for a write: slowest {slowest:?} during writes {:?}; slowest with none {idle:?}",
+        windows.iter().map(|(s, e)| *e - *s).collect::<Vec<_>>()
+    );
 }

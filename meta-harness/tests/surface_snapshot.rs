@@ -21,9 +21,11 @@ fn golden(name: &str, actual: &str) {
         std::fs::write(&path, actual).unwrap();
         return;
     }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e} (run with UPDATE_SNAPSHOTS=1 to create it)", path.display()));
+    let expected =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e} (run with UPDATE_SNAPSHOTS=1 to create it)", path.display()));
     if expected != actual {
-        let first = expected.lines().zip(actual.lines()).position(|(a, b)| a != b).unwrap_or(expected.lines().count().min(actual.lines().count()));
+        let first =
+            expected.lines().zip(actual.lines()).position(|(a, b)| a != b).unwrap_or(expected.lines().count().min(actual.lines().count()));
         panic!(
             "{name} changed at line {}:\n  pinned: {:?}\n  now:    {:?}\n(if the change is intended, rerun with UPDATE_SNAPSHOTS=1)",
             first + 1,
@@ -41,7 +43,12 @@ async fn the_mcp_tools_are_as_pinned() {
     let mut out = String::new();
     for tool in tools["result"]["tools"].as_array().unwrap() {
         // One tool per block: its name, description and schema (keys sorted).
-        out.push_str(&format!("## {}\n{}\n{}\n\n", tool["name"].as_str().unwrap(), tool["description"].as_str().unwrap(), serde_json::to_string_pretty(&tool["inputSchema"]).unwrap()));
+        out.push_str(&format!(
+            "## {}\n{}\n{}\n\n",
+            tool["name"].as_str().unwrap(),
+            tool["description"].as_str().unwrap(),
+            serde_json::to_string_pretty(&tool["inputSchema"]).unwrap()
+        ));
     }
     golden("mcp_tools.txt", &out);
 }

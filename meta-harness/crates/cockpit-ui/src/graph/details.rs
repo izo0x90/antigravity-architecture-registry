@@ -11,7 +11,8 @@ use crate::hosted::{Status, Tone};
 use crate::net::NetClient;
 
 fn signature(sig: &Signature) -> String {
-    let params: Vec<String> = sig.params.iter().map(|p| p.ty.as_ref().map_or_else(|| p.name.clone(), |t| format!("{}: {t}", p.name))).collect();
+    let params: Vec<String> =
+        sig.params.iter().map(|p| p.ty.as_ref().map_or_else(|| p.name.clone(), |t| format!("{}: {t}", p.name))).collect();
     let returns = sig.returns.as_ref().map(|r| format!(" -> {r}")).unwrap_or_default();
     format!("({}){returns}", params.join(", "))
 }

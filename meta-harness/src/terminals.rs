@@ -10,7 +10,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use harness_contracts::{ClientEvent, Found, Row, ScreenUpdate, Subject, TAGGED_LINES, TermSize, Terminal, TerminalId, TerminalInput, TerminalNews, TerminalStatus};
+use harness_contracts::{
+    ClientEvent, Found, Row, ScreenUpdate, Subject, TAGGED_LINES, TermSize, Terminal, TerminalId, TerminalInput, TerminalNews,
+    TerminalStatus,
+};
 use harness_core::EventHub;
 use nah_terminal::{Happening, Options};
 use tokio::sync::watch;
@@ -111,7 +114,13 @@ pub struct Open {
 impl Terminals {
     /// The terminals kept from the last run (ended), told on `hub`; a
     /// command that ran `long` or longer is news when it finishes.
-    pub fn load(folder: PathBuf, hooks: PathBuf, hub: Arc<EventHub>, state: Arc<nah_state::StateDb>, settings: Settings) -> Result<Arc<Self>, nah_state::StateError> {
+    pub fn load(
+        folder: PathBuf,
+        hooks: PathBuf,
+        hub: Arc<EventHub>,
+        state: Arc<nah_state::StateDb>,
+        settings: Settings,
+    ) -> Result<Arc<Self>, nah_state::StateError> {
         let kept = state.terminals()?;
         let open = kept.into_iter().map(|t| (t.id.clone(), Arc::new(Open::new(t)))).collect();
         let terminals = Arc::new(Self { folder, hooks, hub, state, open: Mutex::new(open), settings, moved: std::sync::OnceLock::new() });
@@ -148,7 +157,14 @@ impl Terminals {
             TerminalId::new(format!("t{n}"))
         };
         let shell = nah_terminal::users_shell();
-        let info = Terminal { id: id.clone(), title: String::new(), status: TerminalStatus::Running, size: FIRST_SIZE, shell, folder: self.folder.display().to_string() };
+        let info = Terminal {
+            id: id.clone(),
+            title: String::new(),
+            status: TerminalStatus::Running,
+            size: FIRST_SIZE,
+            shell,
+            folder: self.folder.display().to_string(),
+        };
         let open = Arc::new(Open::new(info));
         lock(&self.open).insert(id.clone(), open.clone());
         self.start(&open)?;
@@ -177,7 +193,13 @@ impl Terminals {
     /// Starts `open`'s shell, at its size, in its folder.
     fn start(self: &Arc<Self>, open: &Arc<Open>) -> Result<(), TerminalError> {
         let info = open.info();
-        let options = Options { shell: info.shell.clone(), folder: PathBuf::from(&info.folder), size: info.size, hooks: self.hooks.clone(), history: self.settings.scrollback };
+        let options = Options {
+            shell: info.shell.clone(),
+            folder: PathBuf::from(&info.folder),
+            size: info.size,
+            hooks: self.hooks.clone(),
+            history: self.settings.scrollback,
+        };
         let generation = open.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(generation, |d| d.as_nanos() as u64);
         open.start.store(now.max(open.start.load(Ordering::SeqCst) + 1), Ordering::SeqCst);
@@ -259,7 +281,9 @@ impl Terminals {
         let news = match happening {
             Happening::Bell => TerminalNews::Bell,
             Happening::Ended(code) => TerminalNews::Ended { code: *code },
-            Happening::CommandFinished { code, ran } if *ran >= self.settings.long => TerminalNews::Finished { code: *code, ran_ms: ran.as_millis() as u64 },
+            Happening::CommandFinished { code, ran } if *ran >= self.settings.long => {
+                TerminalNews::Finished { code: *code, ran_ms: ran.as_millis() as u64 }
+            }
             _ => return,
         };
         let terminal = open.info();
@@ -316,7 +340,16 @@ impl Terminals {
 
 impl Open {
     fn new(info: Terminal) -> Self {
-        Self { info: Mutex::new(info), shell: Mutex::default(), changed: watch::channel(0).0, viewers: Mutex::default(), next_viewer: AtomicU64::new(1), generation: AtomicU64::new(0), start: AtomicU64::new(0), followed: Mutex::default() }
+        Self {
+            info: Mutex::new(info),
+            shell: Mutex::default(),
+            changed: watch::channel(0).0,
+            viewers: Mutex::default(),
+            next_viewer: AtomicU64::new(1),
+            generation: AtomicU64::new(0),
+            start: AtomicU64::new(0),
+            followed: Mutex::default(),
+        }
     }
 
     pub fn info(&self) -> Terminal {
@@ -350,7 +383,19 @@ impl Open {
             Some(shell) => shell.screen(since),
             None => {
                 let info = self.info();
-                ScreenUpdate { seq: 0, size: info.size, full: since.is_none(), rows: Vec::new(), cursor: Default::default(), top: 0, oldest: 0, alternate: false, title: info.title, shell: 0, commands: Vec::new() }
+                ScreenUpdate {
+                    seq: 0,
+                    size: info.size,
+                    full: since.is_none(),
+                    rows: Vec::new(),
+                    cursor: Default::default(),
+                    top: 0,
+                    oldest: 0,
+                    alternate: false,
+                    title: info.title,
+                    shell: 0,
+                    commands: Vec::new(),
+                }
             }
         };
         update.shell = self.started();
@@ -445,7 +490,9 @@ impl nah_things::Resolve for Terminals {
     }
 
     fn name(&self, subject: &Subject) -> String {
-        let (Subject::TerminalLines { terminal, shell, .. } | Subject::TerminalCommand { terminal, shell, .. }) = subject else { return String::new() };
+        let (Subject::TerminalLines { terminal, shell, .. } | Subject::TerminalCommand { terminal, shell, .. }) = subject else {
+            return String::new();
+        };
         let current = self.get(terminal).is_ok_and(|o| o.started() == *shell);
         subject.name(&harness_contracts::Known { start: (!current).then_some(*shell), ..harness_contracts::Known::default() })
     }
@@ -488,7 +535,10 @@ impl nah_things::Resolve for Terminals {
             if let Some(command) = what.strip_prefix("command ") {
                 return Ok(Subject::TerminalCommand { terminal, shell, command: number(command)?, typed: String::new() });
             }
-            let lines = what.strip_prefix("lines ").or_else(|| what.strip_prefix("line ")).ok_or("a terminal's `command <n>`, `line <n>` or `lines <a>-<b>`")?;
+            let lines = what
+                .strip_prefix("lines ")
+                .or_else(|| what.strip_prefix("line "))
+                .ok_or("a terminal's `command <n>`, `line <n>` or `lines <a>-<b>`")?;
             let (first, last) = match lines.split_once('-') {
                 Some((a, b)) => (number(a)?, number(b)?),
                 None => (number(lines)?, number(lines)?),
@@ -504,11 +554,15 @@ impl nah_things::Resolve for Terminals {
         let open = |terminal: &TerminalId, shell: u64| self.get(terminal).ok().filter(|o| o.started() == shell);
         Ok(match subject.clone() {
             Subject::TerminalLines { terminal, shell, first, last, command: None } => {
-                let command = open(&terminal, shell).and_then(|o| o.command_around(first, last)).filter(|c| c.output.is_some()).map(|c| c.id);
+                let command =
+                    open(&terminal, shell).and_then(|o| o.command_around(first, last)).filter(|c| c.output.is_some()).map(|c| c.id);
                 Subject::TerminalLines { terminal, shell, first, last, command }
             }
             Subject::TerminalCommand { terminal, shell, command, typed } if typed.is_empty() => {
-                let typed = open(&terminal, shell).and_then(|o| o.command(command)).map(|c| harness_contracts::typed_line(&c.text)).unwrap_or_default();
+                let typed = open(&terminal, shell)
+                    .and_then(|o| o.command(command))
+                    .map(|c| harness_contracts::typed_line(&c.text))
+                    .unwrap_or_default();
                 Subject::TerminalCommand { terminal, shell, command, typed }
             }
             other => other,
@@ -544,8 +598,12 @@ impl nah_things::Resolve for Terminals {
     fn there(&self, subject: &Subject) -> bool {
         let open = |terminal: &TerminalId, shell: u64| self.get(terminal).ok().filter(|o| o.started() == shell);
         match subject {
-            Subject::TerminalLines { terminal, shell, first, last, .. } => open(terminal, *shell).is_some_and(|o| o.lines_text(*first, last + 1).is_some()),
-            Subject::TerminalCommand { terminal, shell, command, .. } => open(terminal, *shell).is_some_and(|o| o.command(*command).is_some_and(|c| o.lines_text(c.prompt, c.prompt + 1).is_some())),
+            Subject::TerminalLines { terminal, shell, first, last, .. } => {
+                open(terminal, *shell).is_some_and(|o| o.lines_text(*first, last + 1).is_some())
+            }
+            Subject::TerminalCommand { terminal, shell, command, .. } => {
+                open(terminal, *shell).is_some_and(|o| o.command(*command).is_some_and(|c| o.lines_text(c.prompt, c.prompt + 1).is_some()))
+            }
             _ => false,
         }
     }
@@ -555,7 +613,12 @@ impl nah_things::Resolve for Terminals {
         let Subject::TerminalLines { terminal, shell, first, last, command } = subject else { return None };
         let open = self.get(terminal).ok().filter(|o| o.started() == *shell)?;
         let (now_first, now_last) = open.lines_now(*first, *last)?;
-        ((now_first, now_last) != (*first, *last)).then(|| Subject::TerminalLines { terminal: terminal.clone(), shell: *shell, first: now_first, last: now_last, command: *command })
+        ((now_first, now_last) != (*first, *last)).then(|| Subject::TerminalLines {
+            terminal: terminal.clone(),
+            shell: *shell,
+            first: now_first,
+            last: now_last,
+            command: *command,
+        })
     }
 }
-

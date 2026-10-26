@@ -8,7 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::{FAKE, Mcp, given_tools, spawn_app};
-use harness_contracts::{AdapterEvent, ClientEvent, InstanceId, ItemBody, McpTransport, NativeId, SessionKey, Slot, SlotId, SlotSession, SlotStatus, Starter, ThreadId};
+use harness_contracts::{
+    AdapterEvent, ClientEvent, InstanceId, ItemBody, McpTransport, NativeId, SessionKey, Slot, SlotId, SlotSession, SlotStatus, Starter,
+    ThreadId,
+};
 use harness_core::slots::{HeldReport, SlotStore};
 use harness_core::{Delivery, Open, Origin, Reported, Sent, SlotManager, SlotSettings};
 use serde_json::json;
@@ -87,7 +90,8 @@ async fn the_lead_sends_to_a_sub_slot_and_gets_its_answer() {
     let sent = slots.send(&sub, "count the files".into(), Delivery::Queue, Origin::Lead, Some(Duration::from_secs(5))).await.unwrap();
     let Sent::Replied { text, .. } = sent else { panic!("{sent:?}") };
     assert!(text.starts_with("echo: From the lead (lead):\n\ncount the files"), "marked as the lead's: {text}");
-    let sent = slots.send(&sub, "[hang] take your time".into(), Delivery::Queue, Origin::User, Some(Duration::from_millis(100))).await.unwrap();
+    let sent =
+        slots.send(&sub, "[hang] take your time".into(), Delivery::Queue, Origin::User, Some(Duration::from_millis(100))).await.unwrap();
     assert!(matches!(sent, Sent::StillWorking { .. }), "{sent:?}");
     let mut report = slots.read(&sub, 10).unwrap();
     for _ in 0..50 {
@@ -125,7 +129,12 @@ async fn a_report_reaches_a_running_lead_or_waits_for_one() {
     assert_eq!(slots.tell(&sub, "the user (discussion d1)", "Why?".into()).await.unwrap(), Reported::Held, "no session of its own: held");
     // The user's, linking a tag (gone since): held with its link, handed
     // on as it is when it's delivered, the link still on its words.
-    let link = harness_contracts::Link { start: 4, end: 9, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("no-such-tag") }, include: harness_contracts::Include::Auto };
+    let link = harness_contracts::Link {
+        start: 4,
+        end: 9,
+        to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("no-such-tag") },
+        include: harness_contracts::Include::Auto,
+    };
     let linked = harness_contracts::Message { text: "See #gone.".into(), links: vec![link] };
     assert_eq!(slots.tell(&sub, "the user (discussion d1)", linked).await.unwrap(), Reported::Held);
     let (_, mut events) = state.harness.hub.subscribe();
@@ -191,7 +200,16 @@ impl SlotStore for Store {
 
 fn manager(state: &meta_harness::modules::AppState, store: Arc<Store>, open_within: Duration) -> Arc<SlotManager> {
     let ours = meta_harness::startup::our_tools("http://127.0.0.1:9");
-    SlotManager::load(state.harness.sessions.clone(), state.harness.registry.clone(), state.harness.hub.clone(), store, ours, Arc::new(|| Ok(Vec::new())), open_within).unwrap()
+    SlotManager::load(
+        state.harness.sessions.clone(),
+        state.harness.registry.clone(),
+        state.harness.hub.clone(),
+        store,
+        ours,
+        Arc::new(|| Ok(Vec::new())),
+        open_within,
+    )
+    .unwrap()
 }
 
 #[tokio::test]
@@ -209,7 +227,11 @@ async fn after_a_restart_slots_come_back_and_resume_on_first_use() {
     assert_eq!(slot.current, Some(opened.session.clone()));
     assert!(slot.current_thread().is_none(), "nothing runs until it's used");
     assert!(after.get(&worker).is_none(), "a queue's worker from the last run is gone");
-    let Sent::Replied { .. } = after.send(&sub, "hello again".into(), Delivery::Queue, Origin::User, Some(Duration::from_secs(5))).await.unwrap() else { panic!() };
+    let Sent::Replied { .. } =
+        after.send(&sub, "hello again".into(), Delivery::Queue, Origin::User, Some(Duration::from_secs(5))).await.unwrap()
+    else {
+        panic!()
+    };
     let resumed = after.get(&sub).unwrap();
     assert_eq!(resumed.current, Some(opened.session), "the same session, resumed");
     assert!(resumed.current_thread().is_some());
@@ -236,14 +258,21 @@ async fn a_session_that_cant_be_resumed_opens_fresh_and_says_so() {
         .unwrap();
     let slots = manager(&state, store, Duration::from_secs(5));
     let opened = slots.open_session(&SlotId::new("sub-1"), Open::Again(key)).await.unwrap();
-    assert!(opened.note.as_deref().is_some_and(|n| n.contains("couldn't be resumed") && n.contains("a new one was opened")), "{:?}", opened.note);
+    assert!(
+        opened.note.as_deref().is_some_and(|n| n.contains("couldn't be resumed") && n.contains("a new one was opened")),
+        "{:?}",
+        opened.note
+    );
 }
 
 #[tokio::test]
 async fn a_slot_whose_harness_is_missing_says_so_until_it_comes() {
     let (_, state) = spawn_app().await;
     let slots = &state.harness.slots;
-    let sub = slots.create("sub", None, SlotSettings { instance: Some(InstanceId::new("later")), ..SlotSettings::default() }, Starter::User).await.unwrap();
+    let sub = slots
+        .create("sub", None, SlotSettings { instance: Some(InstanceId::new("later")), ..SlotSettings::default() }, Starter::User)
+        .await
+        .unwrap();
     let SlotStatus::Unavailable { reason, fix } = slots.get(&sub).unwrap().status else { panic!("unavailable") };
     assert!(reason.contains("isn't set up") && fix.unwrap().contains("pack install later"));
     assert!(slots.open_session(&sub, Open::New { resume: None }).await.unwrap_err().to_string().contains("isn't set up"));
@@ -279,7 +308,8 @@ async fn a_session_that_cant_be_kept_doesnt_stay_running() {
 async fn a_harness_that_never_opens_doesnt_hold_its_slot_forever() {
     let (_, state) = spawn_app().await;
     let slots = manager(&state, Arc::new(Store::default()), Duration::from_millis(200));
-    let settings = SlotSettings { policy: harness_contracts::RuntimePolicy { cwd: Some("[hang-open]".into()), ..Default::default() }, ..fake() };
+    let settings =
+        SlotSettings { policy: harness_contracts::RuntimePolicy { cwd: Some("[hang-open]".into()), ..Default::default() }, ..fake() };
     let sub = slots.create("sub", None, settings, Starter::User).await.unwrap();
     let (opening, closing) = tokio::join!(slots.open_session(&sub, Open::New { resume: None }), async {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -345,7 +375,10 @@ async fn a_chats_message_and_turn_are_tagged_named_by_the_slot_and_kept() {
     assert!(!error, "{said}");
     let (_, read) = lead.tool("tag_read", json!({ "tag": "greeting" })).await;
     // Named with its session (the start of its id: a slot has several).
-    assert!(read.contains("1. chat helper@native-") && read.contains(" turn 1 message 2 (tagged by lead; as it is now):\necho: hello there"), "{read}");
+    assert!(
+        read.contains("1. chat helper@native-") && read.contains(" turn 1 message 2 (tagged by lead; as it is now):\necho: hello there"),
+        "{read}"
+    );
     assert!(read.contains(" turn 1 (tagged by lead; as it is now):\nyou: hello there\necho: hello there"), "{read}");
     // The whole session, by the slot's name alone: each turn, numbered (#11).
     let (error, said) = lead.tool("tag", json!({ "tag": "whole", "subject": "chat helper" })).await;
@@ -408,7 +441,11 @@ async fn a_turns_tool_output_is_folded_the_same_in_every_read_unless_read_in_ful
     // A prompt linking the tag: what it hands the agent is folded the same
     // (the fake agent says back what it was given).
     let (_, tags) = common::http(addr, "GET", "/api/tags", None).await;
-    let id = serde_json::from_str::<serde_json::Value>(&tags).unwrap().as_array().unwrap().iter().find(|t| t["name"] == "turns").unwrap()["id"].as_str().unwrap().to_owned();
+    let id =
+        serde_json::from_str::<serde_json::Value>(&tags).unwrap().as_array().unwrap().iter().find(|t| t["name"] == "turns").unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
     let prompt = json!({ "text": "and #turns", "links": [{ "start": 4, "end": 10, "to": { "kind": "tag", "tag": id } }] }).to_string();
     let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/prompt"), Some(&prompt)).await;
     assert_eq!(status, 200, "{body}");
@@ -490,12 +527,23 @@ async fn a_chat_turn_tagged_while_it_runs_is_kept_whole_once_it_ends() {
     assert!(!error, "{said}");
     // Answered: the turn ends with its answer.
     let thread = state.harness.slots.get(&SlotId::new(&slot)).unwrap().current_thread().cloned().unwrap();
-    let request = state.harness.hub.thread_state(&thread).into_iter().find_map(|e| match e {
-        harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::RequestUpdated { request } } => Some(request.id),
-        _ => None,
-    }).expect("its question");
+    let request = state
+        .harness
+        .hub
+        .thread_state(&thread)
+        .into_iter()
+        .find_map(|e| match e {
+            harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::RequestUpdated { request } } => {
+                Some(request.id)
+            }
+            _ => None,
+        })
+        .expect("its question");
     let session = state.harness.sessions.get(&thread).unwrap();
-    session.respond(&request, harness_contracts::RequestResponse { option_id: Some("allow".into()), answers: Default::default() }).await.unwrap();
+    session
+        .respond(&request, harness_contracts::RequestResponse { option_id: Some("allow".into()), answers: Default::default() })
+        .await
+        .unwrap();
     let mut read = String::new();
     for _ in 0..40 {
         read = lead.tool("tag_read", json!({ "tag": "pending", "thing": 1 })).await.1;

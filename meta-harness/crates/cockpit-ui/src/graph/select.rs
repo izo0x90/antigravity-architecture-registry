@@ -103,7 +103,6 @@ impl GraphState {
         self.selection.as_deref().is_some_and(|s| s == from || s == to)
     }
 
-
     /// Where a move `dir` goes from the selection, by the layout. In the
     /// trees (left to right, a column a level): left is the card it hangs
     /// from, right its first card, down and up the next and previous card
@@ -118,7 +117,15 @@ impl GraphState {
         if tree.request.view == ViewKind::Contains {
             let r = current.rect;
             let (cx, cy) = r.center();
-            let gap = |a0: f32, a1: f32, b0: f32, b1: f32| if a1 < b0 { b0 - a1 } else if b1 < a0 { a0 - b1 } else { 0.0 };
+            let gap = |a0: f32, a1: f32, b0: f32, b1: f32| {
+                if a1 < b0 {
+                    b0 - a1
+                } else if b1 < a0 {
+                    a0 - b1
+                } else {
+                    0.0
+                }
+            };
             let ways = |siblings: bool| {
                 tree.cards
                     .iter()
@@ -147,7 +154,8 @@ impl GraphState {
                 column.sort_by(|a, b| a.rect.y.total_cmp(&b.rect.y).then(a.rect.x.total_cmp(&b.rect.x)));
                 let at = column.iter().position(|c| c.key == current.key).unwrap_or(0);
                 let next = if dir == Dir::Down { column.get(at + 1) } else { at.checked_sub(1).and_then(|i| column.get(i)) };
-                next.map(|c| Goes::To(c.key.clone())).ok_or_else(|| if dir == Dir::Down { "The last at this depth." } else { "The first at this depth." }.into())
+                next.map(|c| Goes::To(c.key.clone()))
+                    .ok_or_else(|| if dir == Dir::Down { "The last at this depth." } else { "The first at this depth." }.into())
             }
         }
     }
@@ -207,7 +215,11 @@ impl GraphState {
             return;
         }
         let from = at.map_or(self.canvas.center(), |r| r.center());
-        let nearest = self.on_screen().into_iter().map(|c| (self.to_screen(&c.rect).center().distance(from), c.key.clone())).min_by(|a, b| a.0.total_cmp(&b.0));
+        let nearest = self
+            .on_screen()
+            .into_iter()
+            .map(|c| (self.to_screen(&c.rect).center().distance(from), c.key.clone()))
+            .min_by(|a, b| a.0.total_cmp(&b.0));
         if let Some((_, key)) = nearest {
             self.select(Some(key));
         }
@@ -258,9 +270,18 @@ impl GraphState {
         // moved through it. Else the nearest card there (in the boxes, at
         // the selection's depth).
         let current = self.selected_card();
-        let inside = current.filter(|c| c.rect.x <= world.x && world.x <= c.rect.right() && c.rect.y <= world.y && world.y <= c.rect.bottom()).map(|c| c.key.clone());
+        let inside = current
+            .filter(|c| c.rect.x <= world.x && world.x <= c.rect.right() && c.rect.y <= world.y && world.y <= c.rect.bottom())
+            .map(|c| c.key.clone());
         let same_depth = |c: &&Card| tree.request.view != ViewKind::Contains || current.is_none_or(|s| s.level == c.level);
-        let nearest = inside.or_else(|| tree.cards.iter().filter(same_depth).map(|c| ((Vec2::from(c.rect.center()) - world).length(), c.key.clone())).min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, k)| k));
+        let nearest = inside.or_else(|| {
+            tree.cards
+                .iter()
+                .filter(same_depth)
+                .map(|c| ((Vec2::from(c.rect.center()) - world).length(), c.key.clone()))
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, k)| k)
+        });
         if nearest == self.selection && to == camera {
             return;
         }
@@ -299,8 +320,16 @@ impl GraphState {
     /// cards, into the selected card and back out, folding cards.
     pub(crate) fn moves(&self) -> Vec<crate::actions::Action> {
         // The four ways by the layout, each saying where it goes.
-        let mut out: Vec<crate::actions::Action> = crate::nav::list_moves().into_iter().filter(|a| a.id != Move::Motion(Motion::Down).id() && a.id != Move::Motion(Motion::Up).id()).collect();
-        for (motion, dir, plain) in [(Motion::Left, Dir::Left, "Left"), (Motion::Down, Dir::Down, "Down"), (Motion::Up, Dir::Up, "Up"), (Motion::Right, Dir::Right, "Right")] {
+        let mut out: Vec<crate::actions::Action> = crate::nav::list_moves()
+            .into_iter()
+            .filter(|a| a.id != Move::Motion(Motion::Down).id() && a.id != Move::Motion(Motion::Up).id())
+            .collect();
+        for (motion, dir, plain) in [
+            (Motion::Left, Dir::Left, "Left"),
+            (Motion::Down, Dir::Down, "Down"),
+            (Motion::Up, Dir::Up, "Up"),
+            (Motion::Right, Dir::Right, "Right"),
+        ] {
             out.push(match self.goes(dir) {
                 Ok(goes) => Move::Motion(motion).offer(self.goes_label(&goes)),
                 Err(_) => Move::Motion(motion).offer_if(false, plain),
@@ -329,7 +358,10 @@ impl GraphState {
         let card = self.selected_card().filter(|c| c.open || c.more > 0);
         out.extend(crate::nav::fold_here(crate::nav::FoldsHere::one(card.map(|c| (c.label.as_str(), !c.open)))));
         out.push(Move::Fold(Fold::OpenAll).offer_if(self.tree.is_some(), "Show one more level"));
-        out.push(Move::Fold(Fold::CloseAll).offer_if(!self.nav.opened.is_empty() || !self.nav.closed.is_empty(), "Put back what was opened and closed by hand"));
+        out.push(
+            Move::Fold(Fold::CloseAll)
+                .offer_if(!self.nav.opened.is_empty() || !self.nav.closed.is_empty(), "Put back what was opened and closed by hand"),
+        );
         out
     }
 
@@ -337,10 +369,15 @@ impl GraphState {
     /// anything.
     fn leave_label(&self) -> Option<String> {
         if let Some(back) = self.trail_roots().last() {
-            return Some(match back.as_deref().and_then(|k| self.card(k).map(|c| c.label.clone()).or(Some(k.rsplit([':', '.']).next().unwrap_or(k).to_owned()))) {
-                Some(name) => format!("Back to {name}"),
-                None => "Back to the starting points".to_owned(),
-            });
+            return Some(
+                match back
+                    .as_deref()
+                    .and_then(|k| self.card(k).map(|c| c.label.clone()).or(Some(k.rsplit([':', '.']).next().unwrap_or(k).to_owned())))
+                {
+                    Some(name) => format!("Back to {name}"),
+                    None => "Back to the starting points".to_owned(),
+                },
+            );
         }
         self.nav.root.as_ref()?;
         Some(match self.tree.as_ref().and_then(|t| t.path.last()) {
@@ -409,7 +446,9 @@ impl Navigable for GraphState {
 
     fn place_in_words(&self, place: &Place) -> String {
         match place.read::<GraphPlace>() {
-            Some(GraphPlace { selection: Some(key), .. }) => self.card(&key).map_or_else(|| crate::nav::short_name(&ComponentId::new(key)), |c| c.label.clone()),
+            Some(GraphPlace { selection: Some(key), .. }) => {
+                self.card(&key).map_or_else(|| crate::nav::short_name(&ComponentId::new(key)), |c| c.label.clone())
+            }
             Some(GraphPlace { nav, .. }) => format!("{} view", nav.view.name().replace('_', " ")),
             None => String::new(),
         }
@@ -450,7 +489,8 @@ impl Navigable for GraphState {
     /// A component (not the one selected), or a whole plan (shown as the
     /// graph's source).
     fn can_show(&self, target: &Target) -> bool {
-        matches!(target, Target::Plan { part: crate::nav::PlanPart::Whole, .. }) || (target.in_component() && target.elsewhere(self.target().as_ref()))
+        matches!(target, Target::Plan { part: crate::nav::PlanPart::Whole, .. })
+            || (target.in_component() && target.elsewhere(self.target().as_ref()))
     }
 
     fn show_target(&mut self, target: &Target) -> Result<(), String> {

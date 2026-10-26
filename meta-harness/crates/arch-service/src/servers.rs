@@ -74,7 +74,9 @@ fn unusable(server: &str, state: nah_packs::State) -> Option<(ServerState, Strin
     match state {
         nah_packs::State::Ready { .. } | nah_packs::State::Outdated { .. } => None,
         nah_packs::State::Missing => Some((ServerState::NotInstalled, format!("not installed: meta-harness pack install {server}"))),
-        nah_packs::State::OutOfRange { found, supports } => Some((ServerState::OutOfRange, format!("{found} isn't in the supported range {supports}"))),
+        nah_packs::State::OutOfRange { found, supports } => {
+            Some((ServerState::OutOfRange, format!("{found} isn't in the supported range {supports}")))
+        }
         nah_packs::State::Broken(why) => Some((ServerState::Broken, why)),
     }
 }
@@ -83,7 +85,14 @@ impl Servers {
     /// Starts the server of every language in `packs` that names one and
     /// has it installed (the rest are kept with why not), and the
     /// confirmer that asks them.
-    pub(crate) fn start(catalog: &nah_packs::Catalog, packs: &PackSet, root: &Path, limits: &ServerLimits, snapshot: Arc<RwLock<Arc<Snapshot>>>, jobs: Jobs) -> Self {
+    pub(crate) fn start(
+        catalog: &nah_packs::Catalog,
+        packs: &PackSet,
+        root: &Path,
+        limits: &ServerLimits,
+        snapshot: Arc<RwLock<Arc<Snapshot>>>,
+        jobs: Jobs,
+    ) -> Self {
         // Servers name places by their real paths: the root is taken as one too.
         let real = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         let root = real.as_path();
@@ -92,14 +101,13 @@ impl Servers {
         for pack in &packs.packs {
             let Some(server) = &pack.server else { continue };
             let mut language = Language { language: pack.name().to_owned(), server: server.clone(), unusable: None, client: None };
-            let launch = lock
-                .as_ref()
-                .map_err(|e| (ServerState::Broken, e.to_string()))
-                .and_then(|lock| match nah_packs::state(catalog, lock, server).map(|s| unusable(server, s)) {
+            let launch = lock.as_ref().map_err(|e| (ServerState::Broken, e.to_string())).and_then(|lock| {
+                match nah_packs::state(catalog, lock, server).map(|s| unusable(server, s)) {
                     Ok(Some(why)) => Err(why),
                     Ok(None) => nah_packs::server_launch(catalog, lock, server, root).map_err(|e| (ServerState::Broken, e.to_string())),
                     Err(e) => Err((ServerState::Broken, e.to_string())),
-                });
+                }
+            });
             match launch {
                 Ok(launch) => {
                     if let Err(e) = launch.keep_cache(root) {
@@ -213,7 +221,11 @@ impl Servers {
         let Some(shared) = &self.shared else { return true };
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            let starting = shared.languages.iter().filter_map(|l| l.client.as_ref()).any(|c| matches!(c.state(), nah_lsp::ServerState::Starting | nah_lsp::ServerState::Restarting { .. }));
+            let starting = shared
+                .languages
+                .iter()
+                .filter_map(|l| l.client.as_ref())
+                .any(|c| matches!(c.state(), nah_lsp::ServerState::Starting | nah_lsp::ServerState::Restarting { .. }));
             let queued = !shared.queue.lock().unwrap_or_else(PoisonError::into_inner).is_empty();
             if !starting && !queued && shared.asking.load(Ordering::SeqCst) == 0 {
                 return true;
@@ -259,8 +271,12 @@ fn statuses(languages: &[Language]) -> Vec<ServerStatus> {
                     status.dropped_positions = client.dropped_positions();
                     match client.state() {
                         nah_lsp::ServerState::Ready { version } => (status.state, status.version) = (ServerState::Ready, version),
-                        nah_lsp::ServerState::Starting => (status.state, status.reason) = (ServerState::Starting, Some("loading the project".into())),
-                        nah_lsp::ServerState::Restarting { reason } | nah_lsp::ServerState::Failed { reason } => (status.state, status.reason) = (ServerState::Failed, Some(reason)),
+                        nah_lsp::ServerState::Starting => {
+                            (status.state, status.reason) = (ServerState::Starting, Some("loading the project".into()))
+                        }
+                        nah_lsp::ServerState::Restarting { reason } | nah_lsp::ServerState::Failed { reason } => {
+                            (status.state, status.reason) = (ServerState::Failed, Some(reason))
+                        }
                         nah_lsp::ServerState::Stopped => (status.state, status.reason) = (ServerState::Failed, Some("stopped".into())),
                     }
                 }
@@ -360,7 +376,12 @@ fn confirm_loop(shared: &Shared, which: usize, keeps: bool) {
         let batch: Vec<RepoPath> = {
             let mut queue = shared.queue.lock().unwrap_or_else(PoisonError::into_inner);
             // Files no server could answer for (no language, no server) leave.
-            queue.retain(|f| snapshot.files.get(f).is_some_and(|rows| shared.languages.iter().any(|l| l.language == rows.file.language && l.client.is_some())));
+            queue.retain(|f| {
+                snapshot
+                    .files
+                    .get(f)
+                    .is_some_and(|rows| shared.languages.iter().any(|l| l.language == rows.file.language && l.client.is_some()))
+            });
             let now = std::time::Instant::now();
             let waiting = shared.retry.lock().unwrap_or_else(PoisonError::into_inner);
             let mine: Vec<RepoPath> = if client.is_ready() {
@@ -423,7 +444,11 @@ fn ask(shared: &Shared, file: &RepoPath) -> Result<(), bool> {
     }
     // What it's asked: each call (by its place among the calls), each type
     // named and each field used (by where its name starts).
-    let calls: Vec<(Asked, u32)> = rows.refs.iter().filter_map(|r| r.detail.call.as_ref().and_then(|(ci, call)| Some((Asked::Call(*ci), call.name_span?.start_byte)))).collect();
+    let calls: Vec<(Asked, u32)> = rows
+        .refs
+        .iter()
+        .filter_map(|r| r.detail.call.as_ref().and_then(|(ci, call)| Some((Asked::Call(*ci), call.name_span?.start_byte))))
+        .collect();
     let named: Vec<(Asked, u32)> = rows
         .refs
         .iter()
@@ -446,10 +471,16 @@ fn ask(shared: &Shared, file: &RepoPath) -> Result<(), bool> {
         BTreeMap::new()
     } else {
         match client.accesses(&absolute, &text, &fields) {
-            Ok(found) => fields.iter().copied().zip(found.into_iter().map(|a| a.map(|a| match a {
-                nah_lsp::Access::Read => code_analyzer::rows::Access::Read,
-                nah_lsp::Access::Write => code_analyzer::rows::Access::Write,
-            }))).collect(),
+            Ok(found) => fields
+                .iter()
+                .copied()
+                .zip(found.into_iter().map(|a| {
+                    a.map(|a| match a {
+                        nah_lsp::Access::Read => code_analyzer::rows::Access::Read,
+                        nah_lsp::Access::Write => code_analyzer::rows::Access::Write,
+                    })
+                }))
+                .collect(),
             Err(_) => return Err(true),
         }
     };
@@ -527,7 +558,11 @@ fn ask(shared: &Shared, file: &RepoPath) -> Result<(), bool> {
                 core.write(&written, t)?;
                 if written.graph_changed() {
                     core.publish(model, t);
-                    core.emit(arch_graph::ArchEvent::Changed { reason: arch_graph::ChangeReason::Ingested, plans: Vec::new(), components: Vec::new() });
+                    core.emit(arch_graph::ArchEvent::Changed {
+                        reason: arch_graph::ChangeReason::Ingested,
+                        plans: Vec::new(),
+                        components: Vec::new(),
+                    });
                 }
                 Ok(())
             });
@@ -560,7 +595,11 @@ enum Asked {
 /// definition: the type it's in).
 fn holding(snapshot: &Snapshot, path: &RepoPath, start: u32) -> Option<ComponentId> {
     let rows = snapshot.files.get(path)?;
-    rows.components.iter().filter(|c| c.detail.def.is_some() && c.span.start_byte <= start && start < c.span.end_byte).min_by_key(|c| c.span.end_byte - c.span.start_byte).map(|c| c.id.clone())
+    rows.components
+        .iter()
+        .filter(|c| c.detail.def.is_some() && c.span.start_byte <= start && start < c.span.end_byte)
+        .min_by_key(|c| c.span.end_byte - c.span.start_byte)
+        .map(|c| c.id.clone())
 }
 
 /// The component whose name is written at `start` in `path`.

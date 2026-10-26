@@ -7,7 +7,8 @@ use super::*;
 
 /// A tap (press, then release) at `at`, at `time`.
 fn tap(ctx: &egui::Context, app: &mut CockpitApp, at: egui::Pos2, time: f64) {
-    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    let button =
+        |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
     frame_at(ctx, app, vec![egui::Event::PointerMoved(at), button(true)], time);
     frame_at(ctx, app, vec![button(false)], time + 0.05);
     frame_at(ctx, app, vec![], time + 0.1);
@@ -29,13 +30,17 @@ fn a_tap_outside_closes_each_and_reaches_nothing_under_it() {
         ("the action list", |ctx, app| drop(frame(ctx, app, key(":"))), |app| app.palette.is_open()),
         ("the menus", |ctx, app| app.open_menu(&[], ctx), |app| app.input_mode == InputMode::Leader),
         ("the issues", |_, app| app.feedback.is_issues_window_open = true, |app| app.feedback.is_issues_window_open),
-        ("the quick look", |ctx, app| {
-            crate::graph::tests::with_detail(app.desk.graph_mut(), "rust:a::step", "src/a.rs", 10, 20);
-            app.desk.graph_mut().select(Some("rust:a::step".into()));
-            frame_at(ctx, app, vec![], 1.0);
-            peek_key(ctx, app, true, 1.0);
-            peek_key(ctx, app, false, 1.05);
-        }, |app| app.quick_look.is_some()),
+        (
+            "the quick look",
+            |ctx, app| {
+                crate::graph::tests::with_detail(app.desk.graph_mut(), "rust:a::step", "src/a.rs", 10, 20);
+                app.desk.graph_mut().select(Some("rust:a::step".into()));
+                frame_at(ctx, app, vec![], 1.0);
+                peek_key(ctx, app, true, 1.0);
+                peek_key(ctx, app, false, 1.05);
+            },
+            |app| app.quick_look.is_some(),
+        ),
     ];
     for (what, open, is_open) in kinds {
         let (ctx, mut app) = app_with_graph();
@@ -46,7 +51,10 @@ fn a_tap_outside_closes_each_and_reaches_nothing_under_it() {
         frame_at(&ctx, &mut app, vec![], 2.1);
         assert!(is_open(&app), "{what}: open");
         let there = in_the_other_panel(&app);
-        assert!(ctx.layer_id_at(there).is_none_or(|l| l.order == egui::Order::Background), "{what}: the tap is outside what's over the panels");
+        assert!(
+            ctx.layer_id_at(there).is_none_or(|l| l.order == egui::Order::Background),
+            "{what}: the tap is outside what's over the panels"
+        );
         tap(&ctx, &mut app, there, 3.0);
         assert!(!is_open(&app), "{what}: a tap outside closes it");
         assert_eq!(app.desk.panels.focused(), focused, "{what}: the tap went no further (the panel under it isn't focused)");
@@ -114,7 +122,8 @@ fn the_menus_closed_give_the_keyboard_back_where_it_was() {
     frame(&ctx, &mut app, vec![]);
     frame(&ctx, &mut app, vec![]);
     let corner = egui::pos2(5.0, SCREEN.y / 2.0);
-    let button = |pressed| egui::Event::PointerButton { pos: corner, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    let button =
+        |pressed| egui::Event::PointerButton { pos: corner, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
     frame(&ctx, &mut app, vec![egui::Event::PointerMoved(corner), button(true)]);
     frame(&ctx, &mut app, vec![button(false)]);
     assert_eq!(app.input_mode, typing);

@@ -192,7 +192,11 @@ pub fn hold(tree: &mut Tree, cap: usize, newest: &str) -> Vec<String> {
 pub fn recount(tree: &mut Tree, children: impl Fn(&str) -> Vec<String>) {
     let drawn: BTreeSet<String> = tree.cards.iter().map(|c| c.key.clone()).collect();
     for card in &mut tree.cards {
-        card.more = if card.open { 0 } else { children(&card.key).into_iter().filter(|k| !drawn.contains(k)).collect::<BTreeSet<_>>().len() as u32 };
+        card.more = if card.open {
+            0
+        } else {
+            children(&card.key).into_iter().filter(|k| !drawn.contains(k)).collect::<BTreeSet<_>>().len() as u32
+        };
     }
 }
 
@@ -238,7 +242,23 @@ mod tests {
     use crate::tree::LineKind;
 
     fn card(key: &str, parent: Option<&str>) -> Card {
-        Card { key: key.into(), label: key.into(), kind: "function".into(), detail: String::new(), parent: parent.map(Into::into), level: 0, more: 0, open: false, links_left_out: 0, mark: Default::default(), other_plans: Vec::new(), callable: true, component: None, outside_plan: false, rect: Rect::default() }
+        Card {
+            key: key.into(),
+            label: key.into(),
+            kind: "function".into(),
+            detail: String::new(),
+            parent: parent.map(Into::into),
+            level: 0,
+            more: 0,
+            open: false,
+            links_left_out: 0,
+            mark: Default::default(),
+            other_plans: Vec::new(),
+            callable: true,
+            component: None,
+            outside_plan: false,
+            rect: Rect::default(),
+        }
     }
 
     #[test]
@@ -246,9 +266,29 @@ mod tests {
         // root ── a ── a1 ── a11 (opened a, then a1)
         //      └─ b ── b1        (opened b)
         //      └─ c ── c1        (opened c: the newest)
-        let cards = [("root", None), ("a", Some("root")), ("a1", Some("a")), ("a11", Some("a1")), ("b", Some("root")), ("b1", Some("b")), ("c", Some("root")), ("c1", Some("c"))];
+        let cards = [
+            ("root", None),
+            ("a", Some("root")),
+            ("a1", Some("a")),
+            ("a11", Some("a1")),
+            ("b", Some("root")),
+            ("b1", Some("b")),
+            ("c", Some("root")),
+            ("c1", Some("c")),
+        ];
         let mut tree = Tree { cards: cards.iter().map(|(k, p)| card(k, *p)).collect(), ..Tree::default() };
-        tree.lines.push(Line { from: "a11".into(), to: "b1".into(), kind: LineKind::Repeat, relation: arch_relation(), order: None, mark: Default::default(), pills: Vec::new(), path: Vec::new(), reach: Vec::new(), evidence: None });
+        tree.lines.push(Line {
+            from: "a11".into(),
+            to: "b1".into(),
+            kind: LineKind::Repeat,
+            relation: arch_relation(),
+            order: None,
+            mark: Default::default(),
+            pills: Vec::new(),
+            path: Vec::new(),
+            reach: Vec::new(),
+            evidence: None,
+        });
         tree.request.opened = ["a", "a1", "b", "c"].iter().map(|c| Opened { card: (*c).into(), levels: 1 }).collect();
         // Under the cap: nothing closes.
         assert!(hold(&mut tree, 8, "c").is_empty());

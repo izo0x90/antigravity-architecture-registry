@@ -7,9 +7,9 @@ mod checks;
 mod contract;
 mod import;
 mod limits;
+mod ops;
 mod perf;
 mod pipeline;
-mod ops;
 mod progress;
 mod queue;
 mod review;
@@ -19,22 +19,25 @@ mod store;
 mod tools;
 mod verify;
 
-pub use contract::{ContractSlice, EffectiveData, FlowNeighbor, HeldInvariant, Neighbor};
-pub use import::{ImportReport, ImportedComponent, Unmapped};
-pub use limits::{Limits, PerfLimits, PipelineLimits, SearchLimits, ServerLimits, StoreLimits, WatchLimits};
-pub use perf::{GraphSize, PerfReport, StageTime, StoreSize, Timed};
-pub use arch_search::{Found, Hit, SearchKind};
-pub use ops::PlanOp;
-pub use queue::{BriefContext, Outcome, Queue, QueueConfig, QueueSettings, job_for, render_brief};
-pub use progress::{Action, Downgrade, cascade, next_actionable, topological};
 pub use arch_graph::ComponentDetail;
-pub use review::{ReviewNote, ReviewProvider, ReviewRequest, ReviewRun, ReviewerCatalog, ReviewerDef, ReviewerKind, ReviewsReport, Rule};
-pub use service::{Actor, ArchitectureService, Blocker, IngestReport, Refresh, Reverified, Verification, affected, only_changes};
-pub use tools::{Invocation, LogicChecks, ProcessRunner, ToolCatalog, ToolDef, ToolOutput, ToolRun, ToolRunner, ToolsReport};
-pub use store::{FsPlans, MemoryPlans, Mover, PlanRepository, cache_dir, open_facts, kept_harness_home, private_paths, state_dir, store_settings, temporary_facts};
+pub use arch_search::{Found, Hit, SearchKind};
 pub use arch_store::SqliteStore;
 pub use chain::chain;
 pub use checks::{CheckCx, blocking_for, check_plan, is_data_type, missing_details, schema_set, stage_gate};
+pub use contract::{ContractSlice, EffectiveData, FlowNeighbor, HeldInvariant, Neighbor};
+pub use import::{ImportReport, ImportedComponent, Unmapped};
+pub use limits::{Limits, PerfLimits, PipelineLimits, SearchLimits, ServerLimits, StoreLimits, WatchLimits};
+pub use ops::PlanOp;
+pub use perf::{GraphSize, PerfReport, StageTime, StoreSize, Timed};
+pub use progress::{Action, Downgrade, cascade, next_actionable, topological};
+pub use queue::{BriefContext, Outcome, Queue, QueueConfig, QueueSettings, job_for, render_brief};
+pub use review::{ReviewNote, ReviewProvider, ReviewRequest, ReviewRun, ReviewerCatalog, ReviewerDef, ReviewerKind, ReviewsReport, Rule};
+pub use service::{Actor, ArchitectureService, Blocker, IngestReport, Refresh, Reverified, Verification, affected, only_changes};
+pub use store::{
+    FsPlans, MemoryPlans, Mover, PlanRepository, cache_dir, kept_harness_home, open_facts, private_paths, state_dir, store_settings,
+    temporary_facts,
+};
+pub use tools::{Invocation, LogicChecks, ProcessRunner, ToolCatalog, ToolDef, ToolOutput, ToolRun, ToolRunner, ToolsReport};
 pub use verify::signature_diff;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

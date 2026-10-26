@@ -4,7 +4,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, Weak};
 
-use harness_contracts::{AdapterEvent, ClientEvent, InstanceId, Level, Notification, NotificationId, NotificationState, RequestStatus, SlotId, ThreadId, TurnId, TurnStatus};
+use harness_contracts::{
+    AdapterEvent, ClientEvent, InstanceId, Level, Notification, NotificationId, NotificationState, RequestStatus, SlotId, ThreadId, TurnId,
+    TurnStatus,
+};
 use harness_core::EventHub;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -48,7 +51,10 @@ impl Inner {
         for thread in slot.sessions.iter().filter_map(|s| s.thread.clone()) {
             self.threads.insert(thread, slot.id.clone());
         }
-        self.slots.insert(slot.id.clone(), (SlotRef { id: slot.id.clone(), name: slot.name.clone(), lead: slot.is_lead() }, slot.instance_id.clone()));
+        self.slots.insert(
+            slot.id.clone(),
+            (SlotRef { id: slot.id.clone(), name: slot.name.clone(), lead: slot.is_lead() }, slot.instance_id.clone()),
+        );
     }
 
     fn slot_closed(&mut self, slot: &SlotId) {
@@ -88,7 +94,11 @@ impl World for Seen<'_> {
     }
 
     fn queued(&self, thread: &ThreadId) -> bool {
-        self.hub.events.thread_state(thread).iter().any(|e| matches!(e, ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } } if turn.status == TurnStatus::Queued))
+        self.hub
+            .events
+            .thread_state(thread)
+            .iter()
+            .any(|e| matches!(e, ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } } if turn.status == TurnStatus::Queued))
     }
 
     fn was_running(&self, turn: &TurnId) -> bool {
@@ -129,9 +139,20 @@ impl NotifyHub {
     /// Loads what's open, catches up with the stream's current state, then
     /// follows it. (What waited on an earlier run was expired before this:
     /// see `NotificationStore::expire_waiting`.)
-    pub fn start(events: Arc<EventHub>, store: Arc<dyn NotificationStore>, live: Arc<dyn Live>, adapters: Vec<Arc<dyn Adapter>>) -> Result<Arc<Self>, NotifyError> {
+    pub fn start(
+        events: Arc<EventHub>,
+        store: Arc<dyn NotificationStore>,
+        live: Arc<dyn Live>,
+        adapters: Vec<Arc<dyn Adapter>>,
+    ) -> Result<Arc<Self>, NotifyError> {
         let open = store.open().map_err(NotifyError::Store)?;
-        let hub = Arc::new(Self { events, store, live, adapters, inner: Mutex::new(Inner { open: open.into_iter().map(|n| (n.id.clone(), n)).collect(), ..Default::default() }) });
+        let hub = Arc::new(Self {
+            events,
+            store,
+            live,
+            adapters,
+            inner: Mutex::new(Inner { open: open.into_iter().map(|n| (n.id.clone(), n)).collect(), ..Default::default() }),
+        });
         let (replay, live) = hub.events.subscribe();
         hub.rebuild(replay.into_iter().map(|s| s.event).collect());
         Self::follow(Arc::downgrade(&hub), live);
@@ -178,11 +199,14 @@ impl NotifyHub {
         let pending: Vec<NotificationId> = replay
             .iter()
             .filter_map(|e| match e {
-                ClientEvent::Session { event: AdapterEvent::RequestUpdated { request } } if request.status == RequestStatus::Pending => Some(NotificationId::request(&request.id)),
+                ClientEvent::Session { event: AdapterEvent::RequestUpdated { request } } if request.status == RequestStatus::Pending => {
+                    Some(NotificationId::request(&request.id))
+                }
                 _ => None,
             })
             .collect();
-        let gone: Vec<NotificationId> = self.lock().open.values().filter(|n| n.request.is_some() && !pending.contains(&n.id)).map(|n| n.id.clone()).collect();
+        let gone: Vec<NotificationId> =
+            self.lock().open.values().filter(|n| n.request.is_some() && !pending.contains(&n.id)).map(|n| n.id.clone()).collect();
         for id in gone {
             self.apply(Change::End { id, to: NotificationState::Done });
         }
@@ -331,7 +355,13 @@ impl NotifyHub {
     /// It answers again (or the user disconnected it): its lost one is done.
     pub fn server_back(&self, server: &str) -> Result<(), NotifyError> {
         let prefix = format!("lost:{server}:");
-        let back: Vec<Notification> = self.lock().open.values().filter(|n| n.id.as_str().starts_with(&prefix)).map(|n| n.moved(NotificationState::Done)).collect::<Result<_, _>>()?;
+        let back: Vec<Notification> = self
+            .lock()
+            .open
+            .values()
+            .filter(|n| n.id.as_str().starts_with(&prefix))
+            .map(|n| n.moved(NotificationState::Done))
+            .collect::<Result<_, _>>()?;
         self.keep(back)?;
         Ok(())
     }

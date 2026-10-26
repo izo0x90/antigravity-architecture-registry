@@ -108,7 +108,11 @@ fn rank_as<S: AsRef<str>>(query: &str, haystacks: &[S], letters_per_typo: usize,
         .collect();
     let mut matcher = neo_frizbee::Matcher::from_patterns(&patterns, &neo_frizbee::Config::default());
     let whole = |i: usize| haystacks[i].as_ref().eq_ignore_ascii_case(query);
-    let mut out: Vec<Ranked> = matcher.match_list(haystacks).into_iter().map(|m| Ranked { index: m.index as usize, score: m.score, exact: m.exact || whole(m.index as usize) }).collect();
+    let mut out: Vec<Ranked> = matcher
+        .match_list(haystacks)
+        .into_iter()
+        .map(|m| Ranked { index: m.index as usize, score: m.score, exact: m.exact || whole(m.index as usize) })
+        .collect();
     // The whole name first, then the best match, then the shortest name.
     let len = |r: &Ranked| haystacks[r.index].as_ref().len();
     out.sort_by(|a, b| b.exact.cmp(&a.exact).then(b.score.cmp(&a.score)).then(len(a).cmp(&len(b))).then(a.index.cmp(&b.index)));
@@ -233,11 +237,23 @@ mod tests {
         assert!(!order("search").contains(&"resolve"));
         assert!(order("sch").contains(&"search_step"), "fuzzy: letters in order");
         let few = ["Search", "resolve"];
-        assert_eq!(rank("serach", &few, &m).first().map(|r| few[r.index]), Some("Search"), "a typo is forgiven in a longer word, when nothing matches as typed");
-        let long = ["rebuild_observed", "history_replay_builds_one_turn_per_user_message", "RequiredField", "upserts_replace_by_id_and_close_removes_thread"];
+        assert_eq!(
+            rank("serach", &few, &m).first().map(|r| few[r.index]),
+            Some("Search"),
+            "a typo is forgiven in a longer word, when nothing matches as typed"
+        );
+        let long = [
+            "rebuild_observed",
+            "history_replay_builds_one_turn_per_user_message",
+            "RequiredField",
+            "upserts_replace_by_id_and_close_removes_thread",
+        ];
         let found: Vec<&str> = rank("rebuild", &long, &m).into_iter().map(|r| long[r.index]).collect();
         assert_eq!(found[0], "rebuild_observed");
-        assert!(!found.contains(&"RequiredField") && !found.contains(&"upserts_replace_by_id_and_close_removes_thread"), "no typos while something matches as typed: {found:?}");
+        assert!(
+            !found.contains(&"RequiredField") && !found.contains(&"upserts_replace_by_id_and_close_removes_thread"),
+            "no typos while something matches as typed: {found:?}"
+        );
         assert!(order("^res").iter().all(|n| n.starts_with("res")));
         assert_eq!(order("search !step !^re !Arch"), ["Search"]);
         assert_eq!(rank("", &names, &m).len(), names.len(), "nothing typed: everything");

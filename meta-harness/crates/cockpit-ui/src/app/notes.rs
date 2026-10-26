@@ -12,9 +12,9 @@ use std::collections::HashMap;
 use harness_contracts::{Discussion, DiscussionStatus, Move, Subject, TagId};
 
 use super::*;
+use crate::conversation::first_line;
 use crate::kind::BufferKind;
 use crate::nav::Things;
-use crate::conversation::first_line;
 
 /// The gutter's columns of tag bars (as many tags as fit; the panel's top
 /// line names every tag on the cursor's thing); the rest share the last.
@@ -44,7 +44,14 @@ pub(super) struct TagHere {
 
 impl TagHere {
     fn of(tag: &harness_contracts::Tag, on: Option<&Subject>) -> Self {
-        Self { id: tag.id.clone(), name: tag.name.clone(), colour: tag.colour, note: tag.note.clone(), count: tag.on.len(), on: on.cloned() }
+        Self {
+            id: tag.id.clone(),
+            name: tag.name.clone(),
+            colour: tag.colour,
+            note: tag.note.clone(),
+            count: tag.on.len(),
+            on: on.cloned(),
+        }
     }
 }
 
@@ -123,7 +130,8 @@ impl CockpitApp {
         }
         // A view of tags: the row's tag first, on the row's thing (exactly).
         if let Some(tag) = row.as_ref().and_then(|id| shared.get(id)) {
-            let on = things.at.first().filter(|thing| tag.on.iter().any(|o| o.subject.same_thing(&thing.subject))).map(|thing| &thing.subject);
+            let on =
+                things.at.first().filter(|thing| tag.on.iter().any(|o| o.subject.same_thing(&thing.subject))).map(|thing| &thing.subject);
             tags.retain(|t| t.id != tag.id);
             tags.insert(0, TagHere::of(tag, on));
         }
@@ -148,7 +156,12 @@ impl CockpitApp {
     /// discussions in a few words, in the colour of whose move it is.
     pub(super) fn notes_named(&self, here: Here) -> Vec<(crate::hosted::NoteMark, String, egui::Color32)> {
         let at = self.notes_here(here);
-        let mut out: Vec<_> = at.tags.into_iter().filter(|t| t.on.is_some()).map(|t| (crate::hosted::NoteMark::Tag, t.name, colors().tag(t.colour))).collect();
+        let mut out: Vec<_> = at
+            .tags
+            .into_iter()
+            .filter(|t| t.on.is_some())
+            .map(|t| (crate::hosted::NoteMark::Tag, t.name, colors().tag(t.colour)))
+            .collect();
         let mut on = at.discussions;
         on.sort_by_key(Standing::urgency);
         if let Some(first) = on.first() {
@@ -256,15 +269,28 @@ impl CockpitApp {
                 }
             };
             let mark_at = |row: egui::Rect| match gutter {
-                Some(gutter) => egui::Rect::from_min_size(egui::pos2(gutter.left() + look.gutter_gap + GUTTER_BARS as f32 * step, row.top() + 1.0), egui::vec2(look.gutter_mark, look.gutter_mark)),
-                None => egui::Rect::from_center_size(egui::pos2(row.right() - look.gutter_gap - look.gutter_mark / 2.0, row.top()), egui::vec2(look.gutter_mark, look.gutter_mark)),
+                Some(gutter) => egui::Rect::from_min_size(
+                    egui::pos2(gutter.left() + look.gutter_gap + GUTTER_BARS as f32 * step, row.top() + 1.0),
+                    egui::vec2(look.gutter_mark, look.gutter_mark),
+                ),
+                None => egui::Rect::from_center_size(
+                    egui::pos2(row.right() - look.gutter_gap - look.gutter_mark / 2.0, row.top()),
+                    egui::vec2(look.gutter_mark, look.gutter_mark),
+                ),
             };
             let noted = &mut self.noted;
             noted.refresh(&self.desk.shared.tags.get(), &self.desk.shared.discussions.get());
             let shown: Vec<(TagId, u8, String, Vec<egui::Rect>)> = noted
                 .tags
                 .iter()
-                .map(|(id, colour, said, on)| (id.clone(), *colour, said.clone(), on.iter().filter_map(|s| drawn.drawn_at(s)).filter(|r| content.intersects(*r)).collect::<Vec<_>>()))
+                .map(|(id, colour, said, on)| {
+                    (
+                        id.clone(),
+                        *colour,
+                        said.clone(),
+                        on.iter().filter_map(|s| drawn.drawn_at(s)).filter(|r| content.intersects(*r)).collect::<Vec<_>>(),
+                    )
+                })
                 .filter(|(.., rows)| !rows.is_empty())
                 .collect();
             let ids: Vec<TagId> = shown.iter().map(|(id, ..)| id.clone()).collect();
@@ -304,8 +330,15 @@ impl CockpitApp {
             for (mark, mut on) in marks {
                 on.sort_by_key(|d| Standing::of(d).urgency());
                 let standing: Vec<Standing> = on.iter().map(|d| Standing::of(d)).collect();
-                painter.text(mark.center(), egui::Align2::CENTER_CENTER, egui_phosphor::fill::CHAT_CIRCLE, crate::theme::solid_font(ui, look.gutter_mark), standing[0].colour());
-                let each = on.iter().map(|d| format!("{} {}: {}", d.id, d.kind.words(), first_line(d.asking()))).collect::<Vec<_>>().join("\n");
+                painter.text(
+                    mark.center(),
+                    egui::Align2::CENTER_CENTER,
+                    egui_phosphor::fill::CHAT_CIRCLE,
+                    crate::theme::solid_font(ui, look.gutter_mark),
+                    standing[0].colour(),
+                );
+                let each =
+                    on.iter().map(|d| format!("{} {}: {}", d.id, d.kind.words(), first_line(d.asking()))).collect::<Vec<_>>().join("\n");
                 bubbles.push((mark, format!("{}\n{each}", discussions_said(&standing)), standing.into_iter().map(|d| d.id).collect()));
             }
             (bars, bubbles)
@@ -328,7 +361,9 @@ impl CockpitApp {
             self.note_marks.push((here.at, row, said));
         }
         for (n, (mark, said, ids)) in bubbles.into_iter().enumerate() {
-            let response = ui.interact(within(mark.expand(reach)), ui.id().with(("discussion_mark", here.kind, n)), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+            let response = ui
+                .interact(within(mark.expand(reach)), ui.id().with(("discussion_mark", here.kind, n)), egui::Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
             if response.clicked() {
                 // As its action (one: it opens; several: which, first).
                 // (The actions now offered are made again: they're of the mark.)

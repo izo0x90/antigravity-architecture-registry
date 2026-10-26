@@ -23,14 +23,20 @@ use nah_packs::{Catalog, Kind, Places};
 /// Every shipped harness pack: its name and its settings.
 fn shipped() -> Vec<(String, AcpSettings)> {
     let dir = tempfile::tempdir().unwrap();
-    let places = Places { project: dir.path().join("p"), home: dir.path().join("h"), config_home: dir.path().join("c"), data_home: dir.path().join("d") };
+    let places = Places {
+        project: dir.path().join("p"),
+        home: dir.path().join("h"),
+        config_home: dir.path().join("c"),
+        data_home: dir.path().join("d"),
+    };
     let catalog = Catalog::load(&distribution(), &places).unwrap();
     let packs: Vec<(String, AcpSettings)> = catalog
         .of_kind(Kind::Harness)
         .map(|pack| {
             let provides = pack.manifest.provides.as_ref().unwrap_or_else(|| panic!("{} provides a harness", pack.name()));
             assert_eq!(provides.driver, harness_acp::DRIVER_KIND, "{} runs on the ACP driver", pack.name());
-            let settings = AcpSettings::parse(&serde_json::to_value(&provides.settings).unwrap()).unwrap_or_else(|e| panic!("{}: {e}", pack.name()));
+            let settings =
+                AcpSettings::parse(&serde_json::to_value(&provides.settings).unwrap()).unwrap_or_else(|e| panic!("{}: {e}", pack.name()));
             (pack.name().to_owned(), settings)
         })
         .collect();
@@ -58,8 +64,17 @@ impl Harness {
     }
 
     async fn open(&self, mode: RuntimeMode) -> Box<dyn SessionRuntime> {
-        let config = SessionConfig { thread_id: ThreadId::new("t"), policy: RuntimePolicy { runtime_mode: mode, ..RuntimePolicy::default() }, model: None, resume: None, mcp_servers: Vec::new() };
-        AcpAdapter::new(InstanceId::new(&self.name), self.profile.clone(), Arc::new(self.agent.clone()), Arc::new(|_| {})).open_session(config).await.unwrap_or_else(|e| panic!("{}: {e}", self.name))
+        let config = SessionConfig {
+            thread_id: ThreadId::new("t"),
+            policy: RuntimePolicy { runtime_mode: mode, ..RuntimePolicy::default() },
+            model: None,
+            resume: None,
+            mcp_servers: Vec::new(),
+        };
+        AcpAdapter::new(InstanceId::new(&self.name), self.profile.clone(), Arc::new(self.agent.clone()), Arc::new(|_| {}))
+            .open_session(config)
+            .await
+            .unwrap_or_else(|e| panic!("{}: {e}", self.name))
     }
 }
 
@@ -67,7 +82,11 @@ fn say(text: &str) -> TurnInput {
     TurnInput::of(text)
 }
 
-async fn until(events: &mut (impl futures::Stream<Item = AdapterEvent> + Unpin), what: &str, done: impl Fn(&AdapterEvent) -> bool) -> AdapterEvent {
+async fn until(
+    events: &mut (impl futures::Stream<Item = AdapterEvent> + Unpin),
+    what: &str,
+    done: impl Fn(&AdapterEvent) -> bool,
+) -> AdapterEvent {
     tokio::time::timeout(Duration::from_secs(5), async {
         while let Some(event) = events.next().await {
             if done(&event) {
@@ -91,8 +110,14 @@ async fn each_mode_it_offers_is_one_of_its_own_and_back() {
         assert!(offered.contains(&RuntimeMode::ApprovalRequired), "{}: asking first is offered", h.name);
         for mode in offered {
             let session = h.open(mode).await;
-            let native = h.agent.seen().modes.last().cloned().or_else(|| MockSetup::like(&h.profile.settings).modes.first().cloned()).unwrap();
-            assert_eq!(h.profile.policy_for(&native, RuntimePolicy::default()).runtime_mode, mode, "{}: {mode:?} is {native} and back", h.name);
+            let native =
+                h.agent.seen().modes.last().cloned().or_else(|| MockSetup::like(&h.profile.settings).modes.first().cloned()).unwrap();
+            assert_eq!(
+                h.profile.policy_for(&native, RuntimePolicy::default()).runtime_mode,
+                mode,
+                "{}: {mode:?} is {native} and back",
+                h.name
+            );
             session.close().await.unwrap();
         }
     }
@@ -104,8 +129,20 @@ async fn permission_requests_are_asked_answered_and_skipped_as_the_mode_says() {
         let session = h.open(RuntimeMode::ApprovalRequired).await;
         let mut events = session.events();
         session.start_turn(say("[permission]")).await.unwrap();
-        let AdapterEvent::RequestUpdated { request } = until(&mut events, "a permission request", |e| matches!(e, AdapterEvent::RequestUpdated { request } if request.status == RequestStatus::Pending)).await else { unreachable!() };
-        let reject = request.options.iter().find(|o| o.decision == ApprovalDecision::Decline).unwrap_or_else(|| panic!("{}: a way to say no", h.name));
+        let AdapterEvent::RequestUpdated { request } = until(
+            &mut events,
+            "a permission request",
+            |e| matches!(e, AdapterEvent::RequestUpdated { request } if request.status == RequestStatus::Pending),
+        )
+        .await
+        else {
+            unreachable!()
+        };
+        let reject = request
+            .options
+            .iter()
+            .find(|o| o.decision == ApprovalDecision::Decline)
+            .unwrap_or_else(|| panic!("{}: a way to say no", h.name));
         session.respond(&request.id, RequestResponse { option_id: Some(reject.id.clone()), ..Default::default() }).await.unwrap();
         until(&mut events, "the turn's end", ended(1)).await;
         assert_eq!(h.agent.seen().permission.as_deref(), Some("reject"), "{}", h.name);
@@ -128,7 +165,15 @@ async fn a_question_asked_through_a_permission_request_is_never_answered_for_the
         let session = h.open(mode).await;
         let mut events = session.events();
         session.start_turn(say("[ask-by-permission]")).await.unwrap();
-        let AdapterEvent::RequestUpdated { request } = until(&mut events, "the question", |e| matches!(e, AdapterEvent::RequestUpdated { request } if request.status == RequestStatus::Pending)).await else { unreachable!() };
+        let AdapterEvent::RequestUpdated { request } = until(
+            &mut events,
+            "the question",
+            |e| matches!(e, AdapterEvent::RequestUpdated { request } if request.status == RequestStatus::Pending),
+        )
+        .await
+        else {
+            unreachable!()
+        };
         assert_eq!((request.kind, h.agent.seen().permission), (RequestKind::Question, None), "{}: asked, not answered", h.name);
         assert!(request.options.iter().all(|o| o.decision == ApprovalDecision::Answer), "{}: its options are answers", h.name);
     }
@@ -170,7 +215,15 @@ async fn what_it_declares_works() {
             let session = h.open(RuntimeMode::ApprovalRequired).await;
             let mut events = session.events();
             session.start_turn(say("[question]")).await.unwrap();
-            let AdapterEvent::RequestUpdated { request } = until(&mut events, "questions", |e| matches!(e, AdapterEvent::RequestUpdated { request } if request.kind == RequestKind::Question)).await else { unreachable!() };
+            let AdapterEvent::RequestUpdated { request } = until(
+                &mut events,
+                "questions",
+                |e| matches!(e, AdapterEvent::RequestUpdated { request } if request.kind == RequestKind::Question),
+            )
+            .await
+            else {
+                unreachable!()
+            };
             assert_eq!(request.questions.len(), 2, "{}: each answer box folds into its question", h.name);
             let answers = [("question_0".to_owned(), vec!["Redis".to_owned()])].into();
             session.respond(&request.id, RequestResponse { option_id: Some("submit".into()), answers }).await.unwrap();
@@ -203,8 +256,14 @@ async fn what_it_declares_works() {
             .await
             .unwrap_or_else(|_| panic!("{}: the turn's end", h.name));
             let one = subagent.unwrap_or_else(|| panic!("{}: its sub-agent", h.name));
-            assert_eq!((one.title.as_str(), one.prompt.as_deref(), one.status.working()), ("Explorer", Some("Explore the parser"), false), "{}", h.name);
-            let mut under: Vec<&harness_contracts::TurnItem> = items.values().filter(|i| i.parent_id.as_ref() == Some(&one.item_id)).collect();
+            assert_eq!(
+                (one.title.as_str(), one.prompt.as_deref(), one.status.working()),
+                ("Explorer", Some("Explore the parser"), false),
+                "{}",
+                h.name
+            );
+            let mut under: Vec<&harness_contracts::TurnItem> =
+                items.values().filter(|i| i.parent_id.as_ref() == Some(&one.item_id)).collect();
             under.sort_by_key(|i| i.ordinal);
             let under: Vec<String> = under.iter().map(|i| i.title.clone().or_else(|| i.body.said()).unwrap_or_default()).collect();
             if how.declare {
@@ -219,7 +278,12 @@ async fn what_it_declares_works() {
         let found = probe(&launcher, &h.profile).await.unwrap();
         if settings.sign_in.is_some() {
             let sign_in = found.sign_in.unwrap_or_else(|| panic!("{}: says who it's signed in as", h.name));
-            assert_eq!((sign_in.status, sign_in.account.map(|a| a.label)), (AuthStatus::SignedIn, Some("Test account".into())), "{}", h.name);
+            assert_eq!(
+                (sign_in.status, sign_in.account.map(|a| a.label)),
+                (AuthStatus::SignedIn, Some("Test account".into())),
+                "{}",
+                h.name
+            );
         }
         let kind = if settings.advertise.auth_terminal { AuthMethodKind::Command } else { AuthMethodKind::Agent };
         assert!(found.auth_methods.iter().all(|m| m.kind == kind), "{}: logins are {kind:?}", h.name);

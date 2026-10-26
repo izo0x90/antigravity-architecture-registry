@@ -7,7 +7,12 @@
 pub fn keep_browser_keys(window: &web_sys::Window) -> Result<(), wasm_bindgen::JsValue> {
     use wasm_bindgen::JsCast;
     let listener = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(|e: web_sys::KeyboardEvent| {
-        if e.ctrl_key() && !e.shift_key() && !e.alt_key() && !e.meta_key() && crate::keymap::local().browser_keys.contains(&e.key().to_lowercase()) {
+        if e.ctrl_key()
+            && !e.shift_key()
+            && !e.alt_key()
+            && !e.meta_key()
+            && crate::keymap::local().browser_keys.contains(&e.key().to_lowercase())
+        {
             e.prevent_default();
         }
     });

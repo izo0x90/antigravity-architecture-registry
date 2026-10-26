@@ -2,8 +2,8 @@
 //! what opening one card adds, where a card sits, everything about one card,
 //! and the views' settings (the cockpit draws with the same sizes).
 
-use arch_graph::tree::{QUERY_EXTRA, TreeConfig, TreeRequest};
 use arch_graph::ComponentDetail;
+use arch_graph::tree::{QUERY_EXTRA, TreeConfig, TreeRequest};
 use arch_service::ServiceError;
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
@@ -11,8 +11,8 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::arch::{ArchResult, blocking};
-use crate::modules::ProjectState;
 use crate::cockpit::{Needs, can};
+use crate::modules::ProjectState;
 
 pub fn routes() -> Router<ProjectState> {
     Router::new()
@@ -84,7 +84,12 @@ struct SourceQuery {
 }
 
 /// Everything about one card (its component's details).
-async fn details(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Path(card): Path<String>, Query(q): Query<SourceQuery>) -> ArchResult<ComponentDetail> {
+async fn details(
+    _: Needs<can::ViewRead>,
+    State(state): State<ProjectState>,
+    Path(card): Path<String>,
+    Query(q): Query<SourceQuery>,
+) -> ArchResult<ComponentDetail> {
     Ok(Json(blocking(&state.arch, move |a| a.card(&card, &q.source)).await?))
 }
 

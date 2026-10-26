@@ -90,7 +90,8 @@ impl CodeRules {
         let file: RuleFile = toml::from_str(text).map_err(|e| IndexError::Pack(e.to_string()))?;
         for spec in file.rules {
             let what = format!("rule '{}'", spec.id);
-            let pack = packs.by_name(&spec.language).ok_or_else(|| IndexError::Pack(format!("{what}: no language pack '{}'", spec.language)))?;
+            let pack =
+                packs.by_name(&spec.language).ok_or_else(|| IndexError::Pack(format!("{what}: no language pack '{}'", spec.language)))?;
             if spec.types.is_empty() {
                 return Err(IndexError::Pack(format!("{what}: no types")));
             }
@@ -118,10 +119,16 @@ impl CodeRules {
     }
 
     /// Every match of `language`'s rules in a parsed file.
-    pub(crate) fn hits(&self, language: &str, root: &ast_grep_core::Node<'_, ast_grep_core::tree_sitter::StrDoc<ast_grep_language::SupportLang>>) -> Vec<RuleHit> {
+    pub(crate) fn hits(
+        &self,
+        language: &str,
+        root: &ast_grep_core::Node<'_, ast_grep_core::tree_sitter::StrDoc<ast_grep_language::SupportLang>>,
+    ) -> Vec<RuleHit> {
         let mut out = Vec::new();
         for rule in self.rules.iter().filter(|r| r.spec.language == language) {
-            out.extend(root.find_all(&rule.matcher).map(|m| RuleHit { rule: rule.spec.id.clone(), span: crate::extract::span(m.get_node()) }));
+            out.extend(
+                root.find_all(&rule.matcher).map(|m| RuleHit { rule: rule.spec.id.clone(), span: crate::extract::span(m.get_node()) }),
+            );
         }
         out
     }
@@ -129,7 +136,8 @@ impl CodeRules {
     /// Loads every `*.toml` rule file in a directory (sorted by name).
     pub fn load_dir(&mut self, dir: &Path, packs: &PackSet, types: &TypeSystem) -> Result<(), IndexError> {
         let entries = std::fs::read_dir(dir).map_err(|e| IndexError::Io(format!("{}: {e}", dir.display())))?;
-        let mut paths: Vec<_> = entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|e| e == "toml")).collect();
+        let mut paths: Vec<_> =
+            entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|e| e == "toml")).collect();
         paths.sort();
         for path in paths {
             let text = std::fs::read_to_string(&path).map_err(|e| IndexError::Io(format!("{}: {e}", path.display())))?;
@@ -141,7 +149,13 @@ impl CodeRules {
     /// Checks `components` (as they are in `graph`) against the rules that
     /// apply to their language and type, from the matches kept with each
     /// file's facts (`facts` finds a file's).
-    pub fn check<'a, 'f>(&self, components: impl IntoIterator<Item = &'a Component>, graph: &Graph, facts: &dyn Fn(&RepoPath) -> Option<&'f crate::rows::FileRows>, types: &TypeSystem) -> Vec<Finding> {
+    pub fn check<'a, 'f>(
+        &self,
+        components: impl IntoIterator<Item = &'a Component>,
+        graph: &Graph,
+        facts: &dyn Fn(&RepoPath) -> Option<&'f crate::rows::FileRows>,
+        types: &TypeSystem,
+    ) -> Vec<Finding> {
         let mut findings = Vec::new();
         for c in components {
             let Some(anchor) = &c.anchor else { continue };
@@ -154,7 +168,9 @@ impl CodeRules {
             // Facts read from other content (or with other rules) say nothing
             // about the code the anchor points at.
             let Some(rows) = facts(&anchor.file) else { continue };
-            if rows.file.content_hash != anchor.content_hash || crate::rows::rules_read_with(&rows.file.read_version) != self.fingerprint(&anchor.language) {
+            if rows.file.content_hash != anchor.content_hash
+                || crate::rows::rules_read_with(&rows.file.read_version) != self.fingerprint(&anchor.language)
+            {
                 continue;
             }
             let own = anchor.span.start_byte as usize..anchor.span.end_byte as usize;
@@ -180,13 +196,15 @@ impl CodeRules {
                 match rule.spec.kind {
                     RuleKind::Forbidden => {
                         for hit in hits.into_iter().filter(|h| !nested.iter().any(|n| n.contains(h))) {
-                            let mut f = Finding::error(FindingCode::ForbiddenPattern, target.clone(), message.clone()).at(anchor.file.clone(), hit);
+                            let mut f =
+                                Finding::error(FindingCode::ForbiddenPattern, target.clone(), message.clone()).at(anchor.file.clone(), hit);
                             f.severity = severity;
                             findings.push(f);
                         }
                     }
                     RuleKind::Required if hits.is_empty() => {
-                        let mut f = Finding::error(FindingCode::MissingRequiredPattern, target.clone(), message).at(anchor.file.clone(), anchor.span);
+                        let mut f = Finding::error(FindingCode::MissingRequiredPattern, target.clone(), message)
+                            .at(anchor.file.clone(), anchor.span);
                         f.severity = severity;
                         findings.push(f);
                     }

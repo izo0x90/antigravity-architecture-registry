@@ -20,7 +20,8 @@ impl CockpitApp {
         let count = self.desk.panels.len();
         let Some(panel) = number.checked_sub(1) else { return true };
         if panel == self.desk.panels.focused() {
-            self.note = Some(format!("Panel {number} is this one: give another panel's number (1 to {count}, or {} for a new one).", count + 1));
+            self.note =
+                Some(format!("Panel {number} is this one: give another panel's number (1 to {count}, or {} for a new one).", count + 1));
             return false;
         }
         if panel > count || panel >= self.config.panels.max {
@@ -102,7 +103,8 @@ impl CockpitApp {
                     }
                     None => {
                         self.desk.details.want(&id, &source, &self.desk.net, ctx);
-                        self.desk.pending_goto = Some(Pending { wait: Wait::Relations { op, component: id }, from, origin, panel: self.landing });
+                        self.desk.pending_goto =
+                            Some(Pending { wait: Wait::Relations { op, component: id }, from, origin, panel: self.landing });
                     }
                 }
             }
@@ -235,7 +237,8 @@ impl CockpitApp {
             None => {
                 let source = self.desk.shared.source.get().clone();
                 self.desk.details.want(&id, &source, &self.desk.net, ctx);
-                self.desk.pending_goto = Some(Pending { wait: Wait::Code { component: id, line }, from, origin: self.focused_kind(), panel: self.landing });
+                self.desk.pending_goto =
+                    Some(Pending { wait: Wait::Code { component: id, line }, from, origin: self.focused_kind(), panel: self.landing });
             }
         }
     }
@@ -245,7 +248,8 @@ impl CockpitApp {
         self.desk.details.tick();
         // A lookup a go-to waits on failed: say so (others were only prefetches).
         for (id, error) in std::mem::take(&mut self.desk.details.failed) {
-            if matches!(&self.desk.pending_goto, Some(Pending { wait: Wait::Relations { component, .. } | Wait::Code { component, .. }, .. }) if *component == id) {
+            if matches!(&self.desk.pending_goto, Some(Pending { wait: Wait::Relations { component, .. } | Wait::Code { component, .. }, .. }) if *component == id)
+            {
                 self.note = Some(format!("Couldn't look up {}: {error}", self.component_name(&id)));
                 self.desk.pending_goto = None;
             }
@@ -262,7 +266,9 @@ impl CockpitApp {
         }
         let source = self.desk.shared.source.get().clone();
         let ready = match &self.desk.pending_goto {
-            Some(Pending { wait: Wait::Relations { component, .. } | Wait::Code { component, .. }, .. }) => self.desk.details.get(component, &source).is_some(),
+            Some(Pending { wait: Wait::Relations { component, .. } | Wait::Code { component, .. }, .. }) => {
+                self.desk.details.get(component, &source).is_some()
+            }
             _ => false,
         };
         if ready && let Some(Pending { wait, from, origin, panel }) = self.desk.pending_goto.take() {

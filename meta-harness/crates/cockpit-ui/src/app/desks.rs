@@ -94,7 +94,12 @@ impl CockpitApp {
             match self.servers.iter().find(|s| s.name != HERE).map(|s| s.name.clone()) {
                 Some(other) => self.switch_to(&other, ctx),
                 None if had.is_empty() => {
-                    let key = self.bound_actions().into_iter().find(|b| b.action.id == "server.add").map(|b| format!(" ({})", b.key_hint())).unwrap_or_default();
+                    let key = self
+                        .bound_actions()
+                        .into_iter()
+                        .find(|b| b.action.id == "server.add")
+                        .map(|b| format!(" ({})", b.key_hint()))
+                        .unwrap_or_default();
                     self.note = Some(format!("This home serves no project: link a server{key} to see one."));
                 }
                 None => {}
@@ -181,7 +186,9 @@ impl CockpitApp {
             }
         }
         if let Some(want) = self.shell.want.clone()
-            && (want == self.desk.server || self.away.contains_key(&want) || (!self.servers.is_empty() && !self.servers.iter().any(|s| s.name == want)))
+            && (want == self.desk.server
+                || self.away.contains_key(&want)
+                || (!self.servers.is_empty() && !self.servers.iter().any(|s| s.name == want)))
         {
             self.shell.want = None;
             self.switch_to(&want, ctx);
@@ -214,7 +221,8 @@ impl CockpitApp {
     /// The servers' actions.
     pub(super) fn server_actions(&self) -> Vec<Action> {
         use ShellCommand as S;
-        let act = |id: &str, label: &str, detail: &str, c: ShellCommand| Action::new(id, label, detail, c).group(Group::Act).importance(MINOR);
+        let act =
+            |id: &str, label: &str, detail: &str, c: ShellCommand| Action::new(id, label, detail, c).group(Group::Act).importance(MINOR);
         let link = |s: &ServerView| match &s.link {
             LinkState::Connected => "connected".to_owned(),
             LinkState::Connecting => "connecting".to_owned(),
@@ -230,14 +238,41 @@ impl CockpitApp {
         };
         let mut out = Vec::new();
         if known.len() > 1 {
-            out.push(act("server.switch", "Show another server", "Its project, on its own desk (the others stay live)", S::ServerSwitch).param(Param::Choice(known.iter().map(|s| choice(s)).collect())).importance(SECONDARY));
+            out.push(
+                act("server.switch", "Show another server", "Its project, on its own desk (the others stay live)", S::ServerSwitch)
+                    .param(Param::Choice(known.iter().map(|s| choice(s)).collect()))
+                    .importance(SECONDARY),
+            );
         }
-        out.push(act("server.add", "Link another server", "Its name, address and token: the cockpit follows it from then on", S::ServerAdd).param(Param::Text { hint: "name http://host:port secret (`meta-harness token` there)".into(), start: String::new() }));
-        let others = |keep: fn(&LinkState) -> bool| -> Vec<Choice> { self.servers.iter().filter(|s| s.name != HERE && keep(&s.link)).map(choice).collect() };
+        out.push(
+            act("server.add", "Link another server", "Its name, address and token: the cockpit follows it from then on", S::ServerAdd)
+                .param(Param::Text { hint: "name http://host:port secret (`meta-harness token` there)".into(), start: String::new() }),
+        );
+        let others = |keep: fn(&LinkState) -> bool| -> Vec<Choice> {
+            self.servers.iter().filter(|s| s.name != HERE && keep(&s.link)).map(choice).collect()
+        };
         for (id, label, detail, command, keep) in [
-            ("server.connect", "Follow a server again", "Its events and calls come through again", S::ServerConnect, (|l: &LinkState| matches!(l, LinkState::Disconnected | LinkState::Lost { .. })) as fn(&LinkState) -> bool),
-            ("server.disconnect", "Stop following a server (it runs on)", "The cockpit stops listening to it; it keeps running", S::ServerDisconnect, |l: &LinkState| matches!(l, LinkState::Connected | LinkState::Connecting)),
-            ("server.remove", "Unlink a server", "Forgets it (it keeps running; link it again to follow it)", S::ServerRemove, |_: &LinkState| true),
+            (
+                "server.connect",
+                "Follow a server again",
+                "Its events and calls come through again",
+                S::ServerConnect,
+                (|l: &LinkState| matches!(l, LinkState::Disconnected | LinkState::Lost { .. })) as fn(&LinkState) -> bool,
+            ),
+            (
+                "server.disconnect",
+                "Stop following a server (it runs on)",
+                "The cockpit stops listening to it; it keeps running",
+                S::ServerDisconnect,
+                |l: &LinkState| matches!(l, LinkState::Connected | LinkState::Connecting),
+            ),
+            (
+                "server.remove",
+                "Unlink a server",
+                "Forgets it (it keeps running; link it again to follow it)",
+                S::ServerRemove,
+                |_: &LinkState| true,
+            ),
         ] {
             let choices = others(keep);
             if !choices.is_empty() {
@@ -245,11 +280,23 @@ impl CockpitApp {
             }
         }
         if !self.servers.is_empty() {
-            out.push(act("server.shutdown", "Shut a server down", "It stops (asks first): its agents and terminals end", S::ServerShutdown).param(Param::Choice(self.servers.iter().map(choice).collect())));
+            out.push(
+                act("server.shutdown", "Shut a server down", "It stops (asks first): its agents and terminals end", S::ServerShutdown)
+                    .param(Param::Choice(self.servers.iter().map(choice).collect())),
+            );
         }
         if let Some(name) = &self.confirming_shutdown {
             let choices = vec![Choice::new("yes", format!("Shut {name} down")), Choice::new("no", "Keep it running")];
-            out.push(act("server.shutdown_confirm", &format!("Shut {name} down?"), "Its agents and terminals end with it", S::ServerShutdownConfirm).param(Param::Choice(choices)).importance(PRIMARY));
+            out.push(
+                act(
+                    "server.shutdown_confirm",
+                    &format!("Shut {name} down?"),
+                    "Its agents and terminals end with it",
+                    S::ServerShutdownConfirm,
+                )
+                .param(Param::Choice(choices))
+                .importance(PRIMARY),
+            );
         }
         out
     }
@@ -269,8 +316,12 @@ impl CockpitApp {
                 [name, url, secret] => self.home.add_server(name, url, secret, ctx.clone(), say(format!("{name} wasn't added"))),
                 _ => self.note = Some("A server is `name http://host:port secret` (its secret: `meta-harness token` there).".into()),
             },
-            (ShellCommand::ServerConnect, Some(name)) => self.home.server_link(&name, true, ctx.clone(), say(format!("{name} wasn't followed"))),
-            (ShellCommand::ServerDisconnect, Some(name)) => self.home.server_link(&name, false, ctx.clone(), say(format!("{name} wasn't let go"))),
+            (ShellCommand::ServerConnect, Some(name)) => {
+                self.home.server_link(&name, true, ctx.clone(), say(format!("{name} wasn't followed")))
+            }
+            (ShellCommand::ServerDisconnect, Some(name)) => {
+                self.home.server_link(&name, false, ctx.clone(), say(format!("{name} wasn't let go")))
+            }
             (ShellCommand::ServerRemove, Some(name)) => self.home.remove_server(&name, ctx.clone(), say(format!("{name} wasn't removed"))),
             (ShellCommand::ServerShutdown, Some(name)) => {
                 self.confirming_shutdown = Some(name);
@@ -287,6 +338,4 @@ impl CockpitApp {
             _ => {}
         }
     }
-
 }
-

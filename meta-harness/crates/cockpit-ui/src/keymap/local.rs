@@ -41,7 +41,16 @@ pub struct ListKeys {
 
 impl Default for ListKeys {
     fn default() -> Self {
-        Self { next: chords(&["ArrowDown"]), prev: chords(&["ArrowUp"]), half_down: chords(&["PageDown"]), half_up: chords(&["PageUp"]), first: chords(&["ctrl+Home"]), last: chords(&["ctrl+End"]), pick: chords(&["Enter"]), cycle: chords(&["Tab"]) }
+        Self {
+            next: chords(&["ArrowDown"]),
+            prev: chords(&["ArrowUp"]),
+            half_down: chords(&["PageDown"]),
+            half_up: chords(&["PageUp"]),
+            first: chords(&["ctrl+Home"]),
+            last: chords(&["ctrl+End"]),
+            pick: chords(&["Enter"]),
+            cycle: chords(&["Tab"]),
+        }
     }
 }
 
@@ -51,9 +60,16 @@ impl ListKeys {
     pub fn moved(&self, input: &mut egui::InputState) -> Option<crate::nav::Motion> {
         use crate::nav::Motion;
         let took = |chords: &[Chord], input: &mut egui::InputState| chords.iter().fold(false, |took, c| c.consume(input) || took);
-        [(&self.next, Motion::Down), (&self.prev, Motion::Up), (&self.half_down, Motion::HalfDown), (&self.half_up, Motion::HalfUp), (&self.first, Motion::First), (&self.last, Motion::Last)]
-            .into_iter()
-            .fold(None, |moved, (chords, m)| if took(chords, input) { Some(m) } else { moved })
+        [
+            (&self.next, Motion::Down),
+            (&self.prev, Motion::Up),
+            (&self.half_down, Motion::HalfDown),
+            (&self.half_up, Motion::HalfUp),
+            (&self.first, Motion::First),
+            (&self.last, Motion::Last),
+        ]
+        .into_iter()
+        .fold(None, |moved, (chords, m)| if took(chords, input) { Some(m) } else { moved })
     }
 
     pub fn picked(&self, input: &egui::InputState) -> bool {
@@ -125,7 +141,14 @@ fn default_leave_wait() -> u64 {
 impl Default for InputKeys {
     fn default() -> Self {
         let [newline] = <[Chord; 1]>::try_from(chords(&["shift+Enter"])).expect("one key");
-        Self { send: chords(&["Enter"]), add: chords(&["ctrl+Enter"]), newline, leave: default_leave(), leave_wait_ms: default_leave_wait(), link: default_link() }
+        Self {
+            send: chords(&["Enter"]),
+            add: chords(&["ctrl+Enter"]),
+            newline,
+            leave: default_leave(),
+            leave_wait_ms: default_leave_wait(),
+            link: default_link(),
+        }
     }
 }
 
@@ -160,7 +183,12 @@ impl InputKeys {
     /// What a typing box's keys do (`leave`: what the way back out does),
     /// each key with its words.
     pub fn keys(&self, back: &Chord, leave: &'static str) -> Vec<(String, &'static str)> {
-        vec![(self.label(Sent::Send), "sends"), (self.newline.label(), "new line"), (self.link.label(), "a link: whole, pointer, as it fits"), (back.label(), leave)]
+        vec![
+            (self.label(Sent::Send), "sends"),
+            (self.newline.label(), "new line"),
+            (self.link.label(), "a link: whole, pointer, as it fits"),
+            (back.label(), leave),
+        ]
     }
 
     /// What a field that takes every key says about its keys: how to leave.
@@ -229,7 +257,14 @@ pub struct LocalKeys {
 impl Default for LocalKeys {
     fn default() -> Self {
         let [leader, back] = <[Chord; 2]>::try_from(chords(&["Space", "Escape"])).expect("two keys");
-        Self { list: ListKeys::default(), input: InputKeys::default(), pointer: PointerKeys::default(), leader, back, browser_keys: Default::default() }
+        Self {
+            list: ListKeys::default(),
+            input: InputKeys::default(),
+            pointer: PointerKeys::default(),
+            leader,
+            back,
+            browser_keys: Default::default(),
+        }
     }
 }
 
@@ -270,7 +305,11 @@ mod tests {
     fn pressed(key: egui::Key, modifiers: egui::Modifiers) -> egui::InputState {
         let ctx = egui::Context::default();
         let mut out = None;
-        let raw = egui::RawInput { events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }], modifiers, ..Default::default() };
+        let raw = egui::RawInput {
+            events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
+            modifiers,
+            ..Default::default()
+        };
         let _ = ctx.run(raw, |ctx| out = Some(ctx.input(|i| i.clone())));
         out.unwrap()
     }
@@ -279,7 +318,16 @@ mod tests {
     fn lists_and_boxes_take_their_keys_from_config() {
         let ctrl = egui::Modifiers { ctrl: true, ..Default::default() };
         use crate::nav::Motion;
-        let list = ListKeys { next: chords(&["ctrl+j", "ArrowDown"]), prev: chords(&["ctrl+k"]), half_down: chords(&["ctrl+d"]), half_up: chords(&["ctrl+u"]), first: chords(&["ctrl+Home"]), last: chords(&["ctrl+End"]), pick: chords(&["Enter"]), cycle: chords(&["Tab"]) };
+        let list = ListKeys {
+            next: chords(&["ctrl+j", "ArrowDown"]),
+            prev: chords(&["ctrl+k"]),
+            half_down: chords(&["ctrl+d"]),
+            half_up: chords(&["ctrl+u"]),
+            first: chords(&["ctrl+Home"]),
+            last: chords(&["ctrl+End"]),
+            pick: chords(&["Enter"]),
+            cycle: chords(&["Tab"]),
+        };
         assert_eq!(list.moved(&mut pressed(egui::Key::J, ctrl)), Some(Motion::Down));
         assert_eq!(list.moved(&mut pressed(egui::Key::K, ctrl)), Some(Motion::Up));
         assert_eq!(list.moved(&mut pressed(egui::Key::D, ctrl)), Some(Motion::HalfDown));
@@ -290,6 +338,10 @@ mod tests {
         let input = InputKeys::default();
         assert_eq!(input.sent(&pressed(egui::Key::Enter, egui::Modifiers::default())), Some(Sent::Send));
         assert_eq!(input.sent(&pressed(egui::Key::Enter, ctrl)), Some(Sent::Add));
-        assert_eq!(input.sent(&pressed(egui::Key::Enter, egui::Modifiers { shift: true, ..Default::default() })), None, "Shift+Enter: a new line");
+        assert_eq!(
+            input.sent(&pressed(egui::Key::Enter, egui::Modifiers { shift: true, ..Default::default() })),
+            None,
+            "Shift+Enter: a new line"
+        );
     }
 }

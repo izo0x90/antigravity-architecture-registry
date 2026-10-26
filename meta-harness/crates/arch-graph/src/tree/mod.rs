@@ -19,9 +19,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub use held::{Expanded, Place, apply};
-pub use layout::{Point, Rect, card_lines, count_text};
 #[cfg(any(test, feature = "testing"))]
 pub use layout::problems;
+pub use layout::{Point, Rect, card_lines, count_text};
 pub use lens::FlowIndex;
 pub use query::EXTRA as QUERY_EXTRA;
 pub use read::GraphRead;
@@ -501,7 +501,13 @@ pub fn lay_out(tree: &mut Tree, config: &LayoutConfig, out_of_time: &dyn Fn() ->
 pub fn expand<G: GraphRead>(input: &Input<G>, held: &Tree, card: &str, levels: u32, cap: usize) -> (Tree, Expanded) {
     let request = held.request.opening(card, levels);
     let known: Vec<String> = held.cards.iter().map(|c| c.key.clone()).collect();
-    let branch_request = TreeRequest { root: Some(card.to_owned()), depth: Some(levels), opened: Vec::new(), closed: request.closed.clone(), ..request.clone() };
+    let branch_request = TreeRequest {
+        root: Some(card.to_owned()),
+        depth: Some(levels),
+        opened: Vec::new(),
+        closed: request.closed.clone(),
+        ..request.clone()
+    };
     let lens = lens::Lens::new(input, &branch_request);
     let mut branch = walk::walk_known(&lens, input, &branch_request, &known);
     // The card itself is held already.

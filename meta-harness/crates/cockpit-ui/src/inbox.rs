@@ -13,11 +13,11 @@ use harness_contracts::{Level, Notification, NotificationId, RuntimeRequest};
 
 use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY};
 use crate::agents::Act;
-use crate::request_card::{Drafts, render_request};
+use crate::hosted::{Status, Tone};
 use crate::kind::BufferKind;
 use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target, Waiting};
+use crate::request_card::{Drafts, render_request};
 use crate::shared::Shared;
-use crate::hosted::{Status, Tone};
 use crate::theme::colors;
 use crate::viewport::{Go, Measured, Show};
 
@@ -92,7 +92,13 @@ impl InboxView {
             self.cursor = usize::MAX;
         }
         let shown = self.item.as_ref().and_then(|id| store.notifications.get(id)).map(|n| {
-            let harness = n.slot.as_ref().and_then(|s| store.slots.get(s)).and_then(|s| s.instance_id.as_ref()).and_then(|i| store.instances.get(i)).map(|i| i.display_name.clone());
+            let harness = n
+                .slot
+                .as_ref()
+                .and_then(|s| store.slots.get(s))
+                .and_then(|s| s.instance_id.as_ref())
+                .and_then(|i| store.instances.get(i))
+                .map(|i| i.display_name.clone());
             let from = [Some(crate::attention::detail(n, &agents)), harness].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             let request = n.thread.as_ref().zip(n.request.as_ref()).and_then(|(t, r)| store.threads.get(t)?.request(r).cloned());
             let said = n.thread.as_ref().and_then(|t| agents.last_said(t)).filter(|s| n.detail.as_deref() != Some(s.as_str()));
@@ -104,7 +110,8 @@ impl InboxView {
             self.shown_changed.bump();
         }
         let open = shared.open.get();
-        self.at = self.item.as_ref().and_then(|id| open.iter().position(|(s, n)| *s == shared.server && n == id).map(|i| (i + 1, open.len())));
+        self.at =
+            self.item.as_ref().and_then(|id| open.iter().position(|(s, n)| *s == shared.server && n == id).map(|i| (i + 1, open.len())));
         let parts = self.parts();
         if self.cursor == usize::MAX {
             self.cursor = parts.iter().position(|p| *p == Part::Request).unwrap_or(0);
@@ -136,12 +143,25 @@ impl InboxView {
     /// its questions).
     fn answer(&mut self, option: String) -> Step {
         let Some(shown) = &self.shown else { return Step::Nothing("Nothing to answer: it was answered already.".into()) };
-        let Some(request) = shown.request.as_ref().filter(|_| shown.waits) else { return Step::Nothing("Nothing to answer: it was answered already.".into()) };
-        let says_yes = request.options.iter().find(|o| o.id == option).is_some_and(|o| matches!(o.decision, harness_contracts::ApprovalDecision::Accept | harness_contracts::ApprovalDecision::AcceptForSession | harness_contracts::ApprovalDecision::AcceptAlways));
+        let Some(request) = shown.request.as_ref().filter(|_| shown.waits) else {
+            return Step::Nothing("Nothing to answer: it was answered already.".into());
+        };
+        let says_yes = request.options.iter().find(|o| o.id == option).is_some_and(|o| {
+            matches!(
+                o.decision,
+                harness_contracts::ApprovalDecision::Accept
+                    | harness_contracts::ApprovalDecision::AcceptForSession
+                    | harness_contracts::ApprovalDecision::AcceptAlways
+            )
+        });
         if says_yes && !self.drafts.complete(request) {
             return Step::Nothing("Answer the questions it needs first.".into());
         }
-        let act = Act::Answer { thread: request.thread_id.clone(), request: request.id.clone(), response: self.drafts.response(request, &option) };
+        let act = Act::Answer {
+            thread: request.thread_id.clone(),
+            request: request.id.clone(),
+            response: self.drafts.response(request, &option),
+        };
         let slot = shown.notification.slot.clone().unwrap_or_else(|| harness_contracts::SlotId::new(harness_contracts::LEAD));
         self.asks.push(Ask::Agents { slot, act });
         Step::Done
@@ -176,10 +196,16 @@ impl InboxView {
         let mark = |ui: &mut egui::Ui, rect: egui::Rect, index: usize, drawn: &mut Vec<Spot>| {
             drawn.push(Spot { key: index.to_string(), rect });
             if index == cursor {
-                ui.painter().rect_stroke(rect.expand(2.0), theme.radius_m, egui::Stroke::new(theme.line_thin, colors().focus), egui::StrokeKind::Outside);
+                ui.painter().rect_stroke(
+                    rect.expand(2.0),
+                    theme.radius_m,
+                    egui::Stroke::new(theme.line_thin, colors().focus),
+                    egui::StrokeKind::Outside,
+                );
             }
         };
-        let area = self.scrolling.area(egui::ScrollArea::vertical().id_salt(("inbox", cx.at)).auto_shrink([false, true]), ui.input(|i| i.time));
+        let area =
+            self.scrolling.area(egui::ScrollArea::vertical().id_salt(("inbox", cx.at)).auto_shrink([false, true]), ui.input(|i| i.time));
         let output = area.show(ui, |ui| {
             let says = ui
                 .vertical(|ui| {
@@ -373,19 +399,45 @@ impl ActionProvider for InboxView {
         // Under its request while you're on it (the one shown: its keys).
         let here = self.parts().get(self.cursor) == Some(&Part::Request);
         if let Some(request) = shown.request.as_ref().filter(|_| shown.waits) {
-            out.extend(crate::request_card::offer(request, crate::request_card::Offer { under: if here { crate::request_card::Under::Here } else { crate::request_card::Under::Nowhere }, keyed: true }, Command::OpenPage, Command::Answer));
+            out.extend(crate::request_card::offer(
+                request,
+                crate::request_card::Offer {
+                    under: if here { crate::request_card::Under::Here } else { crate::request_card::Under::Nowhere },
+                    keyed: true,
+                },
+                Command::OpenPage,
+                Command::Answer,
+            ));
         }
         // Opening it and putting it away: under what it says while you're on it.
         let on_says = self.parts().get(self.cursor) == Some(&Part::Says);
-        let under = |action: Action, caption: &str, icon: &'static str| if on_says { action.on_item(crate::actions::Style::Button, caption, Some(icon)) } else { action };
+        let under = |action: Action, caption: &str, icon: &'static str| {
+            if on_says { action.on_item(crate::actions::Style::Button, caption, Some(icon)) } else { action }
+        };
         if shown.notification.discussion.is_some() {
-            out.push(under(act("inbox.open_chat", "Open the discussion", "The discussion that waits on you", Command::OpenChat).importance(PRIMARY), "Open it", icon::CHAT_CIRCLE_DOTS));
+            out.push(under(
+                act("inbox.open_chat", "Open the discussion", "The discussion that waits on you", Command::OpenChat).importance(PRIMARY),
+                "Open it",
+                icon::CHAT_CIRCLE_DOTS,
+            ));
         } else if shown.notification.slot.is_some() {
-            out.push(under(act("inbox.open_chat", "Open its chat", "The agent's chat this came from", Command::OpenChat).importance(SECONDARY), "Open its chat", icon::CHAT_TEARDROP_TEXT));
+            out.push(under(
+                act("inbox.open_chat", "Open its chat", "The agent's chat this came from", Command::OpenChat).importance(SECONDARY),
+                "Open its chat",
+                icon::CHAT_TEARDROP_TEXT,
+            ));
         } else if shown.notification.terminal.is_some() {
-            out.push(under(act("inbox.open_chat", "Open its terminal", "The terminal this came from", Command::OpenChat).importance(SECONDARY), "Open its terminal", icon::TERMINAL_WINDOW));
+            out.push(under(
+                act("inbox.open_chat", "Open its terminal", "The terminal this came from", Command::OpenChat).importance(SECONDARY),
+                "Open its terminal",
+                icon::TERMINAL_WINDOW,
+            ));
         }
-        out.push(under(act("inbox.dismiss", "Put it away", "Off the list of what waits on you", Command::Dismiss).importance(MINOR), "Put away", icon::ARCHIVE));
+        out.push(under(
+            act("inbox.dismiss", "Put it away", "Off the list of what waits on you", Command::Dismiss).importance(MINOR),
+            "Put away",
+            icon::ARCHIVE,
+        ));
         out
     }
 

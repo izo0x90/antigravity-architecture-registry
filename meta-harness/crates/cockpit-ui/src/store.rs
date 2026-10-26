@@ -4,8 +4,8 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use harness_contracts::{
-    AdapterEvent, ClientEvent, InstanceId, ItemId, PlanArtifact, ProviderSnapshot, RequestId, RequestStatus, RuntimeRequest, Thread, ThreadId,
-    Turn, TurnId, TurnItem, TurnStatus, Usage, Slot, SlotId, Notification, NotificationId, NotificationState,
+    AdapterEvent, ClientEvent, InstanceId, ItemId, Notification, NotificationId, NotificationState, PlanArtifact, ProviderSnapshot,
+    RequestId, RequestStatus, RuntimeRequest, Slot, SlotId, Thread, ThreadId, Turn, TurnId, TurnItem, TurnStatus, Usage,
 };
 
 /// The agent's updates kept per thread: the last minute's (each tenth of a
@@ -84,7 +84,35 @@ pub struct Seen {
 impl ThreadView {
     fn new(thread: Thread) -> Self {
         let epoch = EPOCHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Self { thread, turns: Vec::new(), rank: Vec::new(), items: Vec::new(), requests: Vec::new(), request_at: HashMap::new(), pending: Vec::new(), plan: None, usage: None, activity: 0, epoch, known_at: None, settled_at: None, replayed_news: None, news: 0, changed: Vec::new(), stream: Vec::new(), item_at: HashMap::new(), turn_at: HashMap::new(), shown_at: Vec::new(), request_items: HashMap::new(), arrivals: VecDeque::new(), subagents: Vec::new(), subagent_at: HashMap::new(), subagent_items: HashMap::new(), working: 0, last_seen_ended: None }
+        Self {
+            thread,
+            turns: Vec::new(),
+            rank: Vec::new(),
+            items: Vec::new(),
+            requests: Vec::new(),
+            request_at: HashMap::new(),
+            pending: Vec::new(),
+            plan: None,
+            usage: None,
+            activity: 0,
+            epoch,
+            known_at: None,
+            settled_at: None,
+            replayed_news: None,
+            news: 0,
+            changed: Vec::new(),
+            stream: Vec::new(),
+            item_at: HashMap::new(),
+            turn_at: HashMap::new(),
+            shown_at: Vec::new(),
+            request_items: HashMap::new(),
+            arrivals: VecDeque::new(),
+            subagents: Vec::new(),
+            subagent_at: HashMap::new(),
+            subagent_items: HashMap::new(),
+            working: 0,
+            last_seen_ended: None,
+        }
     }
 
     /// Its sub-agents, in the order they started.
@@ -233,7 +261,9 @@ impl ThreadView {
 
     /// The items of `turn`, in order.
     pub fn items_of(&self, turn: &TurnId) -> impl DoubleEndedIterator<Item = &TurnItem> {
-        let span = self.turn_at.get(turn).map(|t| self.rank[*t]).map_or(0..0, |r| self.stream.partition_point(|(t, _)| self.rank[*t] < r)..self.stream.partition_point(|(t, _)| self.rank[*t] <= r));
+        let span = self.turn_at.get(turn).map(|t| self.rank[*t]).map_or(0..0, |r| {
+            self.stream.partition_point(|(t, _)| self.rank[*t] < r)..self.stream.partition_point(|(t, _)| self.rank[*t] <= r)
+        });
         self.stream[span].iter().map(|(_, i)| &self.items[*i])
     }
 
@@ -386,7 +416,8 @@ impl ThreadView {
     /// sub-agent's (its parent shown, in its turn) after its parent's
     /// others; else after its turn's others.
     fn place(&mut self, turn: usize, item: usize) {
-        let parent = self.items[item].parent_id.as_ref().and_then(|p| self.stream.iter().rposition(|(t, i)| *t == turn && self.items[*i].id == *p));
+        let parent =
+            self.items[item].parent_id.as_ref().and_then(|p| self.stream.iter().rposition(|(t, i)| *t == turn && self.items[*i].id == *p));
         let at = match parent {
             Some(parent) => {
                 let id = &self.items[self.stream[parent].1].id;
@@ -490,7 +521,13 @@ impl Store {
             // Architecture events go to the graph views, not the session store.
             ClientEvent::Architecture { .. } => {}
             // The desk's terminals and tags keep these.
-            ClientEvent::TerminalUpdated { .. } | ClientEvent::TerminalClosed { .. } | ClientEvent::TerminalNews { .. } | ClientEvent::TagUpdated { .. } | ClientEvent::TagRemoved { .. } | ClientEvent::DiscussionUpdated { .. } | ClientEvent::DiscussionRemoved { .. } => {}
+            ClientEvent::TerminalUpdated { .. }
+            | ClientEvent::TerminalClosed { .. }
+            | ClientEvent::TerminalNews { .. }
+            | ClientEvent::TagUpdated { .. }
+            | ClientEvent::TagRemoved { .. }
+            | ClientEvent::DiscussionUpdated { .. }
+            | ClientEvent::DiscussionRemoved { .. } => {}
         }
     }
 
@@ -696,7 +733,11 @@ mod tests {
     }
 
     fn turn(id: &str, ordinal: u32, status: TurnStatus) -> ClientEvent {
-        ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new(id), thread_id: ThreadId::new("t"), ordinal, status, failure: None, usage: None } } }
+        ClientEvent::Session {
+            event: AdapterEvent::TurnUpdated {
+                turn: Turn { id: TurnId::new(id), thread_id: ThreadId::new("t"), ordinal, status, failure: None, usage: None },
+            },
+        }
     }
 
     fn in_turn(id: &str, turn: &str) -> ClientEvent {
@@ -735,7 +776,15 @@ mod tests {
             item.parent_id = Some(ItemId::new(parent));
             ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } }
         };
-        for event in [in_turn("task", "one"), in_turn("other", "one"), under("a", "task"), in_turn("mine", "one"), under("b", "task"), under("a1", "a"), under("c", "task")] {
+        for event in [
+            in_turn("task", "one"),
+            in_turn("other", "one"),
+            under("a", "task"),
+            in_turn("mine", "one"),
+            under("b", "task"),
+            under("a1", "a"),
+            under("c", "task"),
+        ] {
             store.apply(event, 0.0);
         }
         let view = &store.threads[&ThreadId::new("t")];
@@ -761,7 +810,19 @@ mod tests {
         store.apply(thread(ThreadStatus::Running), 3.0);
         store.apply(turn("two", 2, TurnStatus::Queued), 3.5);
         assert_eq!(came(&store), [(1.0, 2)], "two in one tenth; the same again, the thread's own and a turn queued aren't news");
-        let mut request = RuntimeRequest { id: RequestId::new("r"), thread_id: ThreadId::new("t"), turn_id: Some(TurnId::new("one")), item_id: None, kind: RequestKind::Question, status: RequestStatus::Pending, title: "ok?".into(), detail: None, options: Vec::new(), questions: Vec::new(), response: None };
+        let mut request = RuntimeRequest {
+            id: RequestId::new("r"),
+            thread_id: ThreadId::new("t"),
+            turn_id: Some(TurnId::new("one")),
+            item_id: None,
+            kind: RequestKind::Question,
+            status: RequestStatus::Pending,
+            title: "ok?".into(),
+            detail: None,
+            options: Vec::new(),
+            questions: Vec::new(),
+            response: None,
+        };
         store.apply(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request: request.clone() } }, 4.0);
         request.status = RequestStatus::Resolved;
         store.apply(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request } }, 5.0);

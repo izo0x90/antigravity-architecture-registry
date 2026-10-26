@@ -62,7 +62,10 @@ impl McpService {
     pub fn tools_for(&self, caller: &Principal) -> Arc<Vec<McpTool>> {
         let can = self.access.of(caller);
         let mut lists = self.lists.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        lists.entry(can.bits()).or_insert_with(|| Arc::new(self.defs.iter().filter(|d| can.contains(d.needs)).map(|d| d.tool.clone()).collect())).clone()
+        lists
+            .entry(can.bits())
+            .or_insert_with(|| Arc::new(self.defs.iter().filter(|d| can.contains(d.needs)).map(|d| d.tool.clone()).collect()))
+            .clone()
     }
 
     /// Answers a request; notifications (no id) get no answer, as JSON-RPC requires.

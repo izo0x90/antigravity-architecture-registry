@@ -245,7 +245,9 @@ impl McpServer {
         let transport = match &self.transport {
             McpTransport::Http { url, headers } => McpTransport::Http { url: url_only(url), headers: hide(headers) },
             McpTransport::Sse { url, headers } => McpTransport::Sse { url: url_only(url), headers: hide(headers) },
-            McpTransport::Stdio { command, args, env } => McpTransport::Stdio { command: command.clone(), args: args.clone(), env: hide(env) },
+            McpTransport::Stdio { command, args, env } => {
+                McpTransport::Stdio { command: command.clone(), args: args.clone(), env: hide(env) }
+            }
         };
         Self { name: self.name.clone(), transport }
     }
@@ -264,10 +266,20 @@ pub struct ToolServers {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum McpTransport {
-    Http { url: String, headers: Vec<(String, String)> },
+    Http {
+        url: String,
+        headers: Vec<(String, String)>,
+    },
     /// The older HTTP transport: events on a stream, messages posted back.
-    Sse { url: String, headers: Vec<(String, String)> },
-    Stdio { command: String, args: Vec<String>, env: Vec<(String, String)> },
+    Sse {
+        url: String,
+        headers: Vec<(String, String)>,
+    },
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

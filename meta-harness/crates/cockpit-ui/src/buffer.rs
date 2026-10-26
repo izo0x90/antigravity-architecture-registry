@@ -10,9 +10,9 @@ use std::any::Any;
 use arch_graph::{ArchEvent, CodeAnchor, ComponentId};
 
 use crate::actions::{ActionProvider, RunCx};
-use crate::kind::BufferKind;
 use crate::feedback::FeedbackInspectorState;
 use crate::hosted::{Hosted, Status};
+use crate::kind::BufferKind;
 use crate::nav::Navigable;
 use crate::net::NetClient;
 

@@ -53,8 +53,12 @@ pub(super) fn rules(plan: &Plan, graph: &Graph, tools: &ToolCatalog, report: &mu
             }
         }
         // Side effects stay within what the interface declares.
-        let declared: BTreeSet<String> =
-            graph.interface_chain(&c.id).iter().filter_map(|i| graph.component(i)).flat_map(|i| i.schemas.side_effects.iter().map(|e| e.target.clone())).collect();
+        let declared: BTreeSet<String> = graph
+            .interface_chain(&c.id)
+            .iter()
+            .filter_map(|i| graph.component(i))
+            .flat_map(|i| i.schemas.side_effects.iter().map(|e| e.target.clone()))
+            .collect();
         let has_interface = graph.outgoing(&c.id, Some(RelationKind::Implements)).next().is_some();
         if has_interface {
             for effect in c.schemas.side_effects.iter().filter(|e| !declared.contains(&e.target)) {

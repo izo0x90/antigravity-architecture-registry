@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use arch_graph::RepoPath;
-use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use ignore::Match;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
 use crate::{IndexError, Pack, PackSet};
 
@@ -86,7 +86,9 @@ fn rules(base: &Path, file: &Path) -> Option<Gitignore> {
 fn exclude_of(top: &Path) -> PathBuf {
     let dot_git = top.join(GIT_DIR);
     let Ok(text) = std::fs::read_to_string(&dot_git) else { return dot_git.join("info/exclude") };
-    let Some(git_dir) = text.lines().find_map(|l| l.strip_prefix("gitdir:")).map(|d| top.join(d.trim())) else { return dot_git.join("info/exclude") };
+    let Some(git_dir) = text.lines().find_map(|l| l.strip_prefix("gitdir:")).map(|d| top.join(d.trim())) else {
+        return dot_git.join("info/exclude");
+    };
     let common = std::fs::read_to_string(git_dir.join("commondir")).map(|c| git_dir.join(c.trim())).unwrap_or(git_dir);
     common.join("info/exclude")
 }
@@ -306,17 +308,16 @@ pub fn walk(root: &Path, scope: &Path, packs: &PackSet) -> Result<Vec<SourceFile
 /// The same with the project's [`Ignores`] already made.
 pub fn walk_with(ignores: &Ignores, root: &Path, scope: &Path, packs: &PackSet) -> Result<Vec<SourceFile>, IndexError> {
     let start = if scope.is_absolute() { scope.to_path_buf() } else { root.join(scope) };
-    let candidates = if start.is_file() {
-        if ignores.is_ignored(&start) { Vec::new() } else { vec![start] }
-    } else {
-        ignores.files(&start)
-    };
+    let candidates =
+        if start.is_file() { if ignores.is_ignored(&start) { Vec::new() } else { vec![start] } } else { ignores.files(&start) };
     let real_root = resolved(root);
     let mut files = Vec::new();
     for absolute in candidates {
         let Some(pack) = packs.for_path(&absolute) else { continue };
         let relative = resolved(&absolute);
-        let relative = relative.strip_prefix(&real_root).map_err(|_| IndexError::Io(format!("{} is outside {}", absolute.display(), root.display())))?;
+        let relative = relative
+            .strip_prefix(&real_root)
+            .map_err(|_| IndexError::Io(format!("{} is outside {}", absolute.display(), root.display())))?;
         let path = RepoPath::new(&relative.to_string_lossy()).map_err(|e| IndexError::Io(e.to_string()))?;
         let module = module_symbol(root, &path, pack);
         files.push(SourceFile { path, absolute: root.join(relative), language: pack.name().to_owned(), module });

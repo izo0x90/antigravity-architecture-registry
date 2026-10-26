@@ -288,7 +288,11 @@ impl GraphState {
 
     /// The depth shown now (the view's own when none was picked).
     pub fn depth(&self) -> u32 {
-        self.nav.depth.or_else(|| self.tree.as_ref().and_then(|t| t.request.depth)).or_else(|| self.config.as_ref().map(|c| c.view(self.nav.view).depth)).unwrap_or(0)
+        self.nav
+            .depth
+            .or_else(|| self.tree.as_ref().and_then(|t| t.request.depth))
+            .or_else(|| self.config.as_ref().map(|c| c.view(self.nav.view).depth))
+            .unwrap_or(0)
     }
 
     /// What a view request shows, in words.
@@ -309,7 +313,12 @@ impl GraphState {
 
     /// What the desk's comparison changed, by component; showing only
     /// those, the tree is asked for again when they change.
-    pub fn set_changed(&mut self, changed: BTreeMap<ComponentId, harness_contracts::changes::ComponentChanges>, comparison: &harness_contracts::changes::Comparison, read: u64) {
+    pub fn set_changed(
+        &mut self,
+        changed: BTreeMap<ComponentId, harness_contracts::changes::ComponentChanges>,
+        comparison: &harness_contracts::changes::Comparison,
+        read: u64,
+    ) {
         self.changed_read = read;
         self.comparison = Some(comparison.clone());
         if changed != self.changed {
@@ -419,7 +428,10 @@ impl GraphState {
         if let Some(cut) = &tree.cut {
             let why = if cut.reason == arch_graph::tree::CutReason::Time { "out of time" } else { "too big" };
             words.push(format!("cut ({why})"));
-            more.push(format!("The graph shows {} of {} levels ({} more left out). Go into a card, or show fewer levels.", cut.shown, cut.asked, cut.hidden));
+            more.push(format!(
+                "The graph shows {} of {} levels ({} more left out). Go into a card, or show fewer levels.",
+                cut.shown, cut.asked, cut.hidden
+            ));
         }
         if let Some(ms) = tree.slow_ms {
             words.push(format!("slow: {ms} ms"));
@@ -448,7 +460,6 @@ impl GraphState {
         self.load = Load::Failed(error);
     }
 }
-
 
 impl crate::buffer::Buffer for GraphState {
     fn render(&mut self, ui: &mut egui::Ui, cx: &mut crate::actions::RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
@@ -514,7 +525,9 @@ impl crate::buffer::Buffer for GraphState {
             self.generation += 1;
             self.load = Load::Loading;
             let (inbox, generation) = (self.inbox.clone(), self.generation);
-            net.graph_tree(&self.nav.asking(self.changed_directly()), ctx.clone(), move |r| push(&inbox, Reply::Tree(generation, Box::new(r))));
+            net.graph_tree(&self.nav.asking(self.changed_directly()), ctx.clone(), move |r| {
+                push(&inbox, Reply::Tree(generation, Box::new(r)))
+            });
         }
         if let Some((card, held)) = self.expanding.take()
             && self.tree.is_some()
@@ -525,7 +538,6 @@ impl crate::buffer::Buffer for GraphState {
         self.want_details(net, ctx);
         self.tend_find(net, ctx);
     }
-
 
     fn on_event(&mut self, event: &ArchEvent) {
         match event {
@@ -544,7 +556,12 @@ impl crate::buffer::Buffer for GraphState {
                         Some(a) => (a.return_to.clone(), a.return_selection.clone()),
                         None => (self.nav.clone(), self.selection.clone()),
                     };
-                    self.agent = Some(AgentMove { what: self.describe_request(request), select: request.select.clone(), return_to, return_selection });
+                    self.agent = Some(AgentMove {
+                        what: self.describe_request(request),
+                        select: request.select.clone(),
+                        return_to,
+                        return_selection,
+                    });
                 }
                 self.navigate(NavChange::Request(request.clone()));
                 if let Some(select) = &request.select {
@@ -559,14 +576,12 @@ impl crate::buffer::Buffer for GraphState {
         }
     }
 
-
     /// Fetch everything again (events may have been missed).
     fn invalidate(&mut self) {
         self.stale = true;
         self.plans_stale = true;
         self.details.clear();
     }
-
 
     /// Its name and code place (fetched), and what its card says.
     fn knows(&self, id: &ComponentId) -> Option<crate::buffer::Known> {
@@ -575,7 +590,9 @@ impl crate::buffer::Buffer for GraphState {
         if card.is_none() && component.is_none() {
             return None;
         }
-        let known = component.map(crate::buffer::Known::of).unwrap_or_else(|| crate::buffer::Known { name: card.map(|c| c.label.clone()), ..Default::default() });
+        let known = component
+            .map(crate::buffer::Known::of)
+            .unwrap_or_else(|| crate::buffer::Known { name: card.map(|c| c.label.clone()), ..Default::default() });
         Some(crate::buffer::Known { says: self.card_says(id), ..known })
     }
 
@@ -591,7 +608,10 @@ impl crate::buffer::Buffer for GraphState {
     fn describe(&self) -> String {
         let name = |key: &str| {
             let id = ComponentId::new(key);
-            self.component(&id).map(|c| c.name.clone()).or_else(|| self.card(key).map(|c| c.label.clone())).unwrap_or_else(|| crate::nav::short_name(&id))
+            self.component(&id)
+                .map(|c| c.name.clone())
+                .or_else(|| self.card(key).map(|c| c.label.clone()))
+                .unwrap_or_else(|| crate::nav::short_name(&id))
         };
         let mut out = format!("{} view", self.nav.view.name().replace('_', " "));
         if self.nav.source != Source::Code {

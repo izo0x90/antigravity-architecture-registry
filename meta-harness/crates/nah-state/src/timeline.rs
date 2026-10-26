@@ -14,14 +14,20 @@ impl TimelineStore for StateDb {
     fn snapshots(&self) -> Result<Vec<Kept>, String> {
         said(self.transaction(|tx| {
             let mut stmt = tx.prepare("SELECT id, at_ms, previous, files FROM timeline_snapshots ORDER BY at_ms, id").map_err(failed)?;
-            let rows = stmt.query_map([], |r| Ok(Kept { id: r.get(0)?, at_ms: r.get::<_, i64>(1)? as u64, previous: r.get(2)?, files: r.get(3)? })).map_err(failed)?;
+            let rows = stmt
+                .query_map([], |r| Ok(Kept { id: r.get(0)?, at_ms: r.get::<_, i64>(1)? as u64, previous: r.get(2)?, files: r.get(3)? }))
+                .map_err(failed)?;
             rows.collect::<Result<_, _>>().map_err(failed)
         }))
     }
 
     fn add_snapshot(&self, s: &Kept) -> Result<(), String> {
         said(self.transaction(|tx| {
-            tx.execute("INSERT OR REPLACE INTO timeline_snapshots (id, at_ms, previous, files) VALUES (?1, ?2, ?3, ?4)", params![s.id, s.at_ms as i64, s.previous, s.files]).map_err(failed)?;
+            tx.execute(
+                "INSERT OR REPLACE INTO timeline_snapshots (id, at_ms, previous, files) VALUES (?1, ?2, ?3, ?4)",
+                params![s.id, s.at_ms as i64, s.previous, s.files],
+            )
+            .map_err(failed)?;
             Ok(())
         }))
     }
@@ -62,7 +68,8 @@ impl TimelineStore for StateDb {
 
     fn thread_closed(&self, thread: &str, at_ms: u64) -> Result<(), String> {
         said(self.transaction(|tx| {
-            tx.execute("UPDATE timeline_turns SET closed_ms = ?2 WHERE thread = ?1 AND closed_ms IS NULL", params![thread, at_ms as i64]).map_err(failed)?;
+            tx.execute("UPDATE timeline_turns SET closed_ms = ?2 WHERE thread = ?1 AND closed_ms IS NULL", params![thread, at_ms as i64])
+                .map_err(failed)?;
             Ok(())
         }))
     }

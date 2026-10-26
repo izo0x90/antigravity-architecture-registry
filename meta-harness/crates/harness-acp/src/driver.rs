@@ -87,7 +87,9 @@ impl ProviderDriver for AcpDriver {
                 launch = Err(format!("its home folder {}: {why}", dir.display()));
             }
         }
-        let profile = Arc::new(Profile::new(settings, &self.project, launch.as_ref().ok()).keeping_home(home.clone()).keeping_out(entry.private.clone()));
+        let profile = Arc::new(
+            Profile::new(settings, &self.project, launch.as_ref().ok()).keeping_home(home.clone()).keeping_out(entry.private.clone()),
+        );
         let launcher = launch.map(|launch| (Arc::new(ProcessLauncher::from(&launch)) as Arc<dyn AcpLauncher>, Some(launch)));
         let instance = AcpInstance::create(InstanceParts { id, harness: entry.profile, profile, launcher });
         let first = instance.clone();

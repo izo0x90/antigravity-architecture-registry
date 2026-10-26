@@ -12,7 +12,6 @@ use super::reach::{NOT_YOURS, Reach};
 use super::schema::tool;
 use super::{ToolDef, ToolSet};
 
-
 pub(crate) struct Things {
     pub(crate) things: Arc<nah_things::Things>,
     pub(crate) slots: Arc<harness_core::SlotManager>,

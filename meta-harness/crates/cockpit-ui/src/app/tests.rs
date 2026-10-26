@@ -3,19 +3,19 @@
 mod action_list;
 mod asks;
 mod attention;
-mod desks;
-mod discussing;
 mod audits;
-mod hand;
 mod bindings;
 mod chat_view;
+mod desks;
+mod discussing;
+mod hand;
 mod keys_snapshot;
 mod layout;
 mod links;
 mod look;
 mod menus;
-mod offers;
 mod moves;
+mod offers;
 mod outside;
 mod overlays;
 mod plans;
@@ -87,7 +87,8 @@ fn drawn_containing(output: &egui::FullOutput, words: &str) -> Vec<egui::Rect> {
 
 /// A click at `at` (a mouse: moved there, pressed, let go).
 fn click(ctx: &egui::Context, app: &mut CockpitApp, at: egui::Pos2) {
-    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    let button =
+        |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
     for events in [vec![egui::Event::PointerMoved(at)], vec![button(true)], vec![button(false)], vec![]] {
         frame(ctx, app, events);
     }
@@ -126,15 +127,27 @@ fn double_click_on(ctx: &egui::Context, app: &mut CockpitApp, label: &str) {
     fn find(shape: &egui::Shape, label: &str) -> Option<egui::Rect> {
         match shape {
             // A control's text is its caption, then its key.
-            egui::Shape::Text(t) if t.galley.text() == label || t.galley.text().starts_with(&format!("{label}  ")) => Some(egui::Rect::from_min_size(t.pos, t.galley.size())),
+            egui::Shape::Text(t) if t.galley.text() == label || t.galley.text().starts_with(&format!("{label}  ")) => {
+                Some(egui::Rect::from_min_size(t.pos, t.galley.size()))
+            }
             egui::Shape::Vec(list) => list.iter().find_map(|s| find(s, label)),
             _ => None,
         }
     }
     let output = frame_at(ctx, app, vec![], 10.0);
-    let at = output.shapes.iter().find_map(|c| find(&c.shape, label)).unwrap_or_else(|| panic!("{label:?} isn't drawn: {}", texts(&output))).center();
-    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
-    for (n, events) in [vec![egui::Event::PointerMoved(at)], vec![button(true)], vec![button(false)], vec![button(true)], vec![button(false)], vec![]].into_iter().enumerate() {
+    let at = output
+        .shapes
+        .iter()
+        .find_map(|c| find(&c.shape, label))
+        .unwrap_or_else(|| panic!("{label:?} isn't drawn: {}", texts(&output)))
+        .center();
+    let button =
+        |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    for (n, events) in
+        [vec![egui::Event::PointerMoved(at)], vec![button(true)], vec![button(false)], vec![button(true)], vec![button(false)], vec![]]
+            .into_iter()
+            .enumerate()
+    {
         frame_at(ctx, app, events, 10.05 + n as f64 * 0.05);
     }
 }
@@ -144,7 +157,9 @@ fn click_on(ctx: &egui::Context, app: &mut CockpitApp, label: &str) {
     fn find(shape: &egui::Shape, label: &str) -> Option<egui::Rect> {
         match shape {
             // A control's text is its caption, then its key.
-            egui::Shape::Text(t) if t.galley.text() == label || t.galley.text().starts_with(&format!("{label}  ")) => Some(egui::Rect::from_min_size(t.pos, t.galley.size())),
+            egui::Shape::Text(t) if t.galley.text() == label || t.galley.text().starts_with(&format!("{label}  ")) => {
+                Some(egui::Rect::from_min_size(t.pos, t.galley.size()))
+            }
             egui::Shape::Vec(list) => list.iter().find_map(|s| find(s, label)),
             _ => None,
         }
@@ -153,8 +168,14 @@ fn click_on(ctx: &egui::Context, app: &mut CockpitApp, label: &str) {
     // unseen for a frame, then drawn.
     frame(ctx, app, vec![]);
     let output = frame(ctx, app, vec![]);
-    let at = output.shapes.iter().find_map(|c| find(&c.shape, label)).unwrap_or_else(|| panic!("{label:?} isn't drawn: {}", texts(&output))).center();
-    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    let at = output
+        .shapes
+        .iter()
+        .find_map(|c| find(&c.shape, label))
+        .unwrap_or_else(|| panic!("{label:?} isn't drawn: {}", texts(&output)))
+        .center();
+    let button =
+        |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
     frame(ctx, app, vec![egui::Event::PointerMoved(at)]);
     frame(ctx, app, vec![button(true)]);
     frame(ctx, app, vec![button(false)]);
@@ -212,7 +233,16 @@ fn frame(ctx: &egui::Context, app: &mut CockpitApp, events: Vec<egui::Event>) ->
 }
 
 fn frame_at(ctx: &egui::Context, app: &mut CockpitApp, events: Vec<egui::Event>, time: f64) -> egui::FullOutput {
-    run(ctx, app, egui::RawInput { events, time: Some(time), screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)), ..Default::default() })
+    run(
+        ctx,
+        app,
+        egui::RawInput {
+            events,
+            time: Some(time),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+            ..Default::default()
+        },
+    )
 }
 
 fn key(text: &str) -> Vec<egui::Event> {
@@ -234,7 +264,12 @@ fn press(key: egui::Key, ctrl: bool) -> Vec<egui::Event> {
 /// ctrl+key (modifiers are held for the whole frame).
 fn ctrl(ctx: &egui::Context, app: &mut CockpitApp, key: egui::Key) {
     let modifiers = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
-    let raw = egui::RawInput { events: press(key, true), modifiers, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)), ..Default::default() };
+    let raw = egui::RawInput {
+        events: press(key, true),
+        modifiers,
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+        ..Default::default()
+    };
     let _ = run(ctx, app, raw);
 }
 
@@ -288,15 +323,28 @@ fn full_app() -> (egui::Context, CockpitApp) {
     // Enough jobs and messages that half a page means something.
     let mut snapshot = crate::queue::tests::snapshot(arch_graph::QueueStatus::Idle);
     for i in 0..30 {
-        snapshot.jobs.push(arch_graph::Job { component: ComponentId::new(format!("rust:q{i}")), kind: arch_graph::JobKind::Implement, state: arch_graph::JobState::Queued, attempts: 0, findings: vec![] });
+        snapshot.jobs.push(arch_graph::Job {
+            component: ComponentId::new(format!("rust:q{i}")),
+            kind: arch_graph::JobKind::Implement,
+            state: arch_graph::JobState::Queued,
+            attempts: 0,
+            findings: vec![],
+        });
     }
     app.desk.queue_mut().on_event(&arch_graph::ArchEvent::QueueUpdated { snapshot: Box::new(snapshot) });
     crate::chat::tests::conversation_events().into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
     for n in 4..40 {
-        app.desk.shared.agents.get_mut().apply(crate::chat::tests::item(n, harness_contracts::ItemBody::UserMessage { text: format!("message {n}"), pieces: Vec::new() }));
+        app.desk.shared.agents.get_mut().apply(crate::chat::tests::item(
+            n,
+            harness_contracts::ItemBody::UserMessage { text: format!("message {n}"), pieces: Vec::new() },
+        ));
     }
     // A terminal with lines on its screen, come over its socket.
-    app.desk.shared.terminals.get_mut().apply(&harness_contracts::ClientEvent::TerminalUpdated { terminal: crate::terminals::tests::terminal("t1") });
+    app.desk
+        .shared
+        .terminals
+        .get_mut()
+        .apply(&harness_contracts::ClientEvent::TerminalUpdated { terminal: crate::terminals::tests::terminal("t1") });
     app.desk.share();
     let (terminal, net) = app.desk.view_with_net(BufferKind::Terminal);
     terminal.tick(net, &ctx);
@@ -322,7 +370,8 @@ fn cursor(app: &CockpitApp) -> Option<String> {
 
 /// The quick look's key, down (and typed) or let go, at `time`.
 fn peek_key(ctx: &egui::Context, app: &mut CockpitApp, pressed: bool, time: f64) {
-    let mut events = vec![egui::Event::Key { key: egui::Key::Q, physical_key: None, pressed, repeat: false, modifiers: Default::default() }];
+    let mut events =
+        vec![egui::Event::Key { key: egui::Key::Q, physical_key: None, pressed, repeat: false, modifiers: Default::default() }];
     if pressed {
         events.push(egui::Event::Text("q".into()));
     }

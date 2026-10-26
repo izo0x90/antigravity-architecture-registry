@@ -72,7 +72,11 @@ pub enum PlanPart {
     Component(ComponentId),
     /// A section of a component's card (`overview`, `logic`, ...).
     Section(ComponentId, String),
-    Relation { kind: arch_graph::RelationKind, source: ComponentId, target: ComponentId },
+    Relation {
+        kind: arch_graph::RelationKind,
+        source: ComponentId,
+        target: ComponentId,
+    },
     Item(String),
 }
 
@@ -137,7 +141,6 @@ pub enum Waiting {
     Step(i32),
     /// Put it away.
     Dismiss(NotificationId),
-
 }
 
 impl Target {
@@ -148,7 +151,9 @@ impl Target {
             Self::Component(id) | Self::Job { component: id } => short_name(id),
             Self::Notification(id) => format!("item {id}"),
             Self::Terminal(id) => format!("terminal {id}"),
-            Self::Line { file: path, line, .. } | Self::Change { file: path, line } | Self::Span { file: path, start: line, .. } => format!("{}:{line}", file(path)),
+            Self::Line { file: path, line, .. } | Self::Change { file: path, line } | Self::Span { file: path, start: line, .. } => {
+                format!("{}:{line}", file(path))
+            }
             Self::Message { index, .. } => format!("message {}", index + 1),
             Self::Agent { slot: Some(slot), .. } => format!("agent slot {slot}"),
             Self::Subagent { slot, .. } | Self::SubagentStart { slot, .. } => format!("a sub-agent of agent slot {slot}"),
@@ -181,7 +186,9 @@ impl Target {
             Subject::Plan { plan } => Self::Plan { plan, part: PlanPart::Whole },
             Subject::PlanComponent { plan, id } => Self::Plan { plan, part: PlanPart::Component(id) },
             Subject::PlanSection { plan, id, section } => Self::Plan { plan, part: PlanPart::Section(id, section) },
-            Subject::PlanRelation { plan, relation, source, target } => Self::Plan { plan, part: PlanPart::Relation { kind: relation, source, target } },
+            Subject::PlanRelation { plan, relation, source, target } => {
+                Self::Plan { plan, part: PlanPart::Relation { kind: relation, source, target } }
+            }
             Subject::PlanItem { plan, item } => Self::Plan { plan, part: PlanPart::Item(item) },
             Subject::Discussion { id } => Self::Discussion(id),
             _ => return None,
@@ -217,7 +224,20 @@ impl Target {
         match self {
             Self::Component(id) | Self::Job { component: id } => Some(id),
             Self::Line { within, .. } => within.as_ref(),
-            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Subagent { .. } | Self::SubagentStart { .. } | Self::Notification(_) | Self::Terminal(_) | Self::TerminalLines { .. } | Self::TerminalCommand { .. } | Self::Chat { .. } | Self::Plan { .. } | Self::Discussion(_) | Self::Tag(_) => None,
+            Self::Message { .. }
+            | Self::Change { .. }
+            | Self::Span { .. }
+            | Self::Agent { .. }
+            | Self::Subagent { .. }
+            | Self::SubagentStart { .. }
+            | Self::Notification(_)
+            | Self::Terminal(_)
+            | Self::TerminalLines { .. }
+            | Self::TerminalCommand { .. }
+            | Self::Chat { .. }
+            | Self::Plan { .. }
+            | Self::Discussion(_)
+            | Self::Tag(_) => None,
         }
     }
 
@@ -242,7 +262,9 @@ impl Target {
     /// A place in the code the target names directly (a line, a file link).
     pub fn code(&self) -> Option<(String, Option<usize>)> {
         match self {
-            Self::Line { file, line, .. } | Self::Change { file, line } | Self::Span { file, start: line, .. } => Some((file.clone(), Some(*line))),
+            Self::Line { file, line, .. } | Self::Change { file, line } | Self::Span { file, start: line, .. } => {
+                Some((file.clone(), Some(*line)))
+            }
             Self::Message { link, .. } => link.clone(),
             _ => None,
         }
@@ -526,7 +548,14 @@ impl Changes {
 /// page, first and last.
 pub fn list_moves() -> Vec<crate::actions::Action> {
     let m = |motion: Motion, label: &str| Move::Motion(motion).offer(label);
-    vec![m(Motion::Down, "Down"), m(Motion::Up, "Up"), m(Motion::HalfDown, "Half a page down"), m(Motion::HalfUp, "Half a page up"), m(Motion::First, "First"), m(Motion::Last, "Last")]
+    vec![
+        m(Motion::Down, "Down"),
+        m(Motion::Up, "Up"),
+        m(Motion::HalfDown, "Half a page down"),
+        m(Motion::HalfUp, "Half a page up"),
+        m(Motion::First, "First"),
+        m(Motion::Last, "Last"),
+    ]
 }
 
 /// What says a fold is folded or open (every view's).
@@ -548,7 +577,11 @@ pub struct FoldsHere<'a> {
 impl<'a> FoldsHere<'a> {
     /// One fold: what it is, in words, and whether it's folded.
     pub fn one(here: Option<(&'a str, bool)>) -> Self {
-        Self { toggle: here, open: here.filter(|(_, folded)| *folded).map(|(what, _)| what), close: here.filter(|(_, folded)| !folded).map(|(what, _)| what) }
+        Self {
+            toggle: here,
+            open: here.filter(|(_, folded)| *folded).map(|(what, _)| what),
+            close: here.filter(|(_, folded)| !folded).map(|(what, _)| what),
+        }
     }
 }
 
@@ -565,8 +598,12 @@ pub fn fold_here(here: FoldsHere<'_>) -> Vec<crate::actions::Action> {
     };
     vec![
         toggle,
-        here.open.map_or_else(|| Move::Fold(Fold::Open).offer_if(false, "Unfold"), |what| Move::Fold(Fold::Open).offer(format!("Unfold {what}"))),
-        here.close.map_or_else(|| Move::Fold(Fold::Close).offer_if(false, "Fold"), |what| Move::Fold(Fold::Close).offer(format!("Fold {what}"))),
+        here.open.map_or_else(
+            || Move::Fold(Fold::Open).offer_if(false, "Unfold"),
+            |what| Move::Fold(Fold::Open).offer(format!("Unfold {what}")),
+        ),
+        here.close
+            .map_or_else(|| Move::Fold(Fold::Close).offer_if(false, "Fold"), |what| Move::Fold(Fold::Close).offer(format!("Fold {what}"))),
     ]
 }
 
@@ -597,7 +634,21 @@ pub enum GoTo {
 }
 
 impl GoTo {
-    pub const ALL: [GoTo; 13] = [Self::Code, Self::Spec, Self::Graph, Self::Tree, Self::Queue, Self::Changes, Self::Uses, Self::Callers, Self::Callees, Self::Parent, Self::Members, Self::Implements, Self::Flows];
+    pub const ALL: [GoTo; 13] = [
+        Self::Code,
+        Self::Spec,
+        Self::Graph,
+        Self::Tree,
+        Self::Queue,
+        Self::Changes,
+        Self::Uses,
+        Self::Callers,
+        Self::Callees,
+        Self::Parent,
+        Self::Members,
+        Self::Implements,
+        Self::Flows,
+    ];
 
     /// Its action's id (what the keymap binds).
     pub fn id(self) -> &'static str {
@@ -771,7 +822,8 @@ pub fn rank_matches(items: &[Item], query: &str) -> Vec<usize> {
     let matching = arch_search::Matching::shared();
     let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
     let texts: Vec<&str> = items.iter().map(|i| i.text.as_str()).collect();
-    let mut out: Vec<usize> = arch_search::rank(query, &names, matching).into_iter().filter(|r| !names[r.index].is_empty()).map(|r| r.index).collect();
+    let mut out: Vec<usize> =
+        arch_search::rank(query, &names, matching).into_iter().filter(|r| !names[r.index].is_empty()).map(|r| r.index).collect();
     let named: std::collections::HashSet<usize> = out.iter().copied().collect();
     out.extend(arch_search::rank_text(query, &texts).into_iter().map(|r| r.index).filter(|i| !named.contains(i)));
     out
@@ -1063,7 +1115,8 @@ mod tests {
 
     #[test]
     fn matches_rank_names_then_text_and_step_from_the_cursor() {
-        let items = vec![Item::new("0", "stepper", ""), Item::new("1", "run", "calls step"), Item::new("2", "step", ""), Item::new("3", "log", "")];
+        let items =
+            vec![Item::new("0", "stepper", ""), Item::new("1", "run", "calls step"), Item::new("2", "step", ""), Item::new("3", "log", "")];
         assert_eq!(rank_matches(&items, "step"), vec![2, 0, 1], "the whole name, then names, then text");
         assert!(rank_matches(&items, "STEP").is_empty(), "capitals ask for case (as everywhere)");
         assert_eq!(rank_matches(&items, "spr"), vec![0], "names: letters in order");

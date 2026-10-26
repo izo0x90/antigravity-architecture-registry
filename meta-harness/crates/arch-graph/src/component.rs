@@ -248,7 +248,10 @@ impl Component {
     pub fn check_location(&self) -> Result<(), ModelError> {
         let in_code = matches!(self.status, Status::Existing | Status::Modifying | Status::Deprecated) || self.stage == Stage::Implemented;
         if in_code && self.anchor.is_none() {
-            return Err(ModelError::Location { id: self.id.clone(), reason: format!("{:?}/{:?} needs a verified code anchor", self.status, self.stage) });
+            return Err(ModelError::Location {
+                id: self.id.clone(),
+                reason: format!("{:?}/{:?} needs a verified code anchor", self.status, self.stage),
+            });
         }
         if self.stage.needs_location() && self.anchor.is_none() && self.proposed.is_none() {
             return Err(ModelError::Location { id: self.id.clone(), reason: format!("{:?} needs a proposed location", self.stage) });

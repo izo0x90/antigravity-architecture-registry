@@ -16,7 +16,9 @@ pub enum LinkState {
     Connecting,
     Connected,
     /// It stopped answering (home tries again, waiting longer each time).
-    Lost { reason: String },
+    Lost {
+        reason: String,
+    },
     /// The user disconnected it (the server runs on; home doesn't follow it).
     Disconnected,
 }

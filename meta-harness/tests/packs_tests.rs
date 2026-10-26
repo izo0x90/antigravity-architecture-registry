@@ -28,7 +28,17 @@ fn installed(catalog: &Catalog, platform: &str) -> std::path::PathBuf {
     let dest = catalog.root.join("antigravity-acp").join(&version);
     std::fs::create_dir_all(&dest).unwrap();
     let mut lock = Lock::default();
-    lock.packs.insert("antigravity-acp".into(), Installed { pack_version: version, tool_version: Some("1.4.3".into()), platform: platform.into(), dest: dest.clone(), sha256: vec![], installed_at: 0 });
+    lock.packs.insert(
+        "antigravity-acp".into(),
+        Installed {
+            pack_version: version,
+            tool_version: Some("1.4.3".into()),
+            platform: platform.into(),
+            dest: dest.clone(),
+            sha256: vec![],
+            installed_at: 0,
+        },
+    );
     lock.write(&catalog.lock_path).unwrap();
     dest
 }
@@ -56,8 +66,16 @@ fn the_shipped_harness_pack_gives_its_driver_a_launch_once_it_passes_its_check()
     assert!(listed.contains("antigravity-acp") && listed.contains("not installed"), "{listed}");
     // Not installed: no launch, and the command that fixes it.
     let (reason, fix) = unavailable(launch_of(&harness_launches(&catalog), "antigravity"));
-    assert!(reason.contains("isn't installed") && fix.as_deref().is_some_and(|f| f.starts_with("meta-harness pack install antigravity-acp")), "{reason} {fix:?}");
-    assert!(run(&Command::Which("antigravity-acp".into()), &catalog).unwrap_err().to_string().contains("meta-harness pack install antigravity-acp"));
+    assert!(
+        reason.contains("isn't installed") && fix.as_deref().is_some_and(|f| f.starts_with("meta-harness pack install antigravity-acp")),
+        "{reason} {fix:?}"
+    );
+    assert!(
+        run(&Command::Which("antigravity-acp".into()), &catalog)
+            .unwrap_err()
+            .to_string()
+            .contains("meta-harness pack install antigravity-acp")
+    );
 
     // Installed, and its check (ACP initialize) answers a supported version:
     // the driver gets the launch.
@@ -85,7 +103,10 @@ fn the_shipped_harness_pack_gives_its_driver_a_launch_once_it_passes_its_check()
     // A version outside the pack's range: no launch; update fixes it.
     fake_server(&dest.join("agy_acp_server.par"), "1.5.0");
     let (reason, fix) = unavailable(launch_of(&harness_launches(&catalog), "antigravity"));
-    assert!(reason.contains("1.5.0 isn't in") && fix.as_deref().is_some_and(|f| f.starts_with("meta-harness pack update antigravity-acp")), "{reason} {fix:?}");
+    assert!(
+        reason.contains("1.5.0 isn't in") && fix.as_deref().is_some_and(|f| f.starts_with("meta-harness pack update antigravity-acp")),
+        "{reason} {fix:?}"
+    );
     // The server gone: the check fails, with why.
     std::fs::remove_file(dest.join("agy_acp_server.par")).unwrap();
     let (reason, _) = unavailable(launch_of(&harness_launches(&catalog), "antigravity"));
@@ -107,11 +128,21 @@ fn an_instances_own_launch_from_harnesses_toml_wins_and_which_shows_it() {
     };
     assert_eq!(launch(&harness_launches(&catalog)).program, "/users/own", "the user's own, without checking the pack");
     // The project's file comes later: it wins.
-    std::fs::write(places.project.join(".nah/harnesses.toml"), "[antigravity]\nprogram = \"/project/own\"\nargs = [\"--x\"]\nenv = { A = \"b\" }\n").unwrap();
+    std::fs::write(
+        places.project.join(".nah/harnesses.toml"),
+        "[antigravity]\nprogram = \"/project/own\"\nargs = [\"--x\"]\nenv = { A = \"b\" }\n",
+    )
+    .unwrap();
     let own = launch(&harness_launches(&catalog));
-    assert_eq!((own.program.as_str(), own.args.clone(), own.env.clone()), ("/project/own", vec!["--x".to_owned()], vec![("A".to_owned(), "b".to_owned())]));
+    assert_eq!(
+        (own.program.as_str(), own.args.clone(), own.env.clone()),
+        ("/project/own", vec!["--x".to_owned()], vec![("A".to_owned(), "b".to_owned())])
+    );
     let which = run(&Command::Which("antigravity-acp".into()), &catalog).unwrap();
-    assert!(which.contains("/project/own --x") && which.contains("A=b") && which.contains(".nah/harnesses.toml for antigravity"), "{which}");
+    assert!(
+        which.contains("/project/own --x") && which.contains("A=b") && which.contains(".nah/harnesses.toml for antigravity"),
+        "{which}"
+    );
     // A bad file says where.
     std::fs::write(places.project.join(".nah/harnesses.toml"), "[antigravity]\nprogramme = \"x\"\n").unwrap();
     let (reason, _) = unavailable(launch_of(&harness_launches(&catalog), "antigravity"));
@@ -126,8 +157,21 @@ fn on_the_developer_sandbox_the_launch_is_the_emulated_server() {
     let launch = nah_packs::harness_launch(&catalog, &Lock::read(&catalog.lock_path).unwrap(), "antigravity-acp").unwrap();
     let d = dest.display().to_string();
     assert_eq!(launch.program, format!("{d}/qemu/usr/bin/qemu-x86_64"));
-    assert_eq!(&launch.args[..5], ["-L".to_owned(), format!("{d}/sysroot"), "-E".to_owned(), format!("LD_LIBRARY_PATH={d}/sysroot/lib/x86_64-linux-gnu"), format!("{d}/libexec/agy_acp_server.par")]);
-    assert!(launch.args[5].starts_with("--uid=") && launch.args[5].len() > "--uid=".len() && !launch.args[5].contains('{'), "the user filled in: {}", launch.args[5]);
+    assert_eq!(
+        &launch.args[..5],
+        [
+            "-L".to_owned(),
+            format!("{d}/sysroot"),
+            "-E".to_owned(),
+            format!("LD_LIBRARY_PATH={d}/sysroot/lib/x86_64-linux-gnu"),
+            format!("{d}/libexec/agy_acp_server.par")
+        ]
+    );
+    assert!(
+        launch.args[5].starts_with("--uid=") && launch.args[5].len() > "--uid=".len() && !launch.args[5].contains('{'),
+        "the user filled in: {}",
+        launch.args[5]
+    );
     assert!(launch.env.is_empty(), "the server finds the harness next to itself in libexec");
     assert!(run(&Command::List, &catalog).unwrap().contains("linux-arm64-16k (developer)"), "pack list names the developer platform");
 }
@@ -135,14 +179,34 @@ fn on_the_developer_sandbox_the_launch_is_the_emulated_server() {
 #[tokio::test]
 async fn a_harness_without_a_launch_says_why_and_how_to_fix_it() {
     let driver = harness_acp::AcpDriver::new(std::env::temp_dir());
-    let none = HarnessLaunch::Unavailable { reason: "antigravity-acp isn't installed".into(), fix: Some("meta-harness pack install antigravity-acp".into()) };
-    let profile = harness_contracts::HarnessProfile { instance: harness_contracts::InstanceId::new("antigravity"), driver: harness_contracts::DriverKind::new("acp"), display_name: "Antigravity".into(), settings: serde_json::Value::Null };
-    let instance = driver.create(profile.instance.clone(), driver.default_config(&HarnessEntry { profile, launch: none, home: None, private: Vec::new() })).await.unwrap();
+    let none = HarnessLaunch::Unavailable {
+        reason: "antigravity-acp isn't installed".into(),
+        fix: Some("meta-harness pack install antigravity-acp".into()),
+    };
+    let profile = harness_contracts::HarnessProfile {
+        instance: harness_contracts::InstanceId::new("antigravity"),
+        driver: harness_contracts::DriverKind::new("acp"),
+        display_name: "Antigravity".into(),
+        settings: serde_json::Value::Null,
+    };
+    let instance = driver
+        .create(profile.instance.clone(), driver.default_config(&HarnessEntry { profile, launch: none, home: None, private: Vec::new() }))
+        .await
+        .unwrap();
     instance.refresh().await.unwrap();
     let status = instance.snapshot().borrow().status.clone();
-    assert!(matches!(&status, harness_contracts::ProviderStatus::Unavailable { reason } if reason.contains("isn't installed") && reason.contains("meta-harness pack install antigravity-acp")), "{status:?}");
+    assert!(
+        matches!(&status, harness_contracts::ProviderStatus::Unavailable { reason } if reason.contains("isn't installed") && reason.contains("meta-harness pack install antigravity-acp")),
+        "{status:?}"
+    );
     // A session asked for anyway says the same, not a missing file.
-    let config = harness_contracts::SessionConfig { thread_id: harness_contracts::ThreadId::new("t"), policy: Default::default(), model: None, resume: None, mcp_servers: Vec::new() };
+    let config = harness_contracts::SessionConfig {
+        thread_id: harness_contracts::ThreadId::new("t"),
+        policy: Default::default(),
+        model: None,
+        resume: None,
+        mcp_servers: Vec::new(),
+    };
     let err = instance.adapter().open_session(config).await.err().expect("no session without a launch").to_string();
     assert!(err.contains("isn't installed") && !err.contains("os error"), "{err}");
 }
@@ -161,7 +225,11 @@ async fn a_harness_whose_home_the_project_keeps_is_started_with_it_there() {
     let entry = entries.iter().find(|e| e.profile.instance.as_str() == "antigravity").unwrap().clone();
     let kept = project.join(".nah/harness/antigravity");
     assert_eq!(entry.home.as_deref(), Some(kept.as_path()));
-    assert!(matches!(&entry.launch, HarnessLaunch::Ready { launch } if launch.program == "/bin/sh"), "its own launch still: {:?}", entry.launch);
+    assert!(
+        matches!(&entry.launch, HarnessLaunch::Ready { launch } if launch.program == "/bin/sh"),
+        "its own launch still: {:?}",
+        entry.launch
+    );
     assert_eq!(entries.iter().find(|e| e.profile.instance.as_str() == "claude-code").unwrap().home, None, "native: its own folders");
 
     let driver = harness_acp::AcpDriver::new(project.clone());
@@ -193,7 +261,11 @@ fn a_harness_setting_that_cant_be_used_stops_the_harnesses_saying_why() {
         std::fs::write(places.project.join(".nah/harnesses.toml"), file).unwrap();
         let catalog = Catalog::load(&distribution(), &places).unwrap();
         for entry in harness_launches(&catalog) {
-            assert!(matches!(&entry.launch, HarnessLaunch::Unavailable { reason, .. } if reason.contains(why)), "{file}: {:?}", entry.launch);
+            assert!(
+                matches!(&entry.launch, HarnessLaunch::Unavailable { reason, .. } if reason.contains(why)),
+                "{file}: {:?}",
+                entry.launch
+            );
         }
     }
 }
@@ -205,24 +277,45 @@ fn a_home_reached_through_a_link_into_the_project_is_refused() {
     std::fs::create_dir_all(places.project.join(".nah")).unwrap();
     let outside = dir.path().join("elsewhere");
     std::os::unix::fs::symlink(&places.project, &outside).unwrap();
-    std::fs::write(places.project.join(".nah/harnesses.toml"), format!("[antigravity]\nhome = \"{}\"\n", outside.join("agent-home").display())).unwrap();
+    std::fs::write(
+        places.project.join(".nah/harnesses.toml"),
+        format!("[antigravity]\nhome = \"{}\"\n", outside.join("agent-home").display()),
+    )
+    .unwrap();
     let catalog = Catalog::load(&distribution(), &places).unwrap();
     for entry in harness_launches(&catalog) {
-        assert!(matches!(&entry.launch, HarnessLaunch::Unavailable { reason, .. } if reason.contains("is in the project")), "{:?}", entry.launch);
+        assert!(
+            matches!(&entry.launch, HarnessLaunch::Unavailable { reason, .. } if reason.contains("is in the project")),
+            "{:?}",
+            entry.launch
+        );
     }
 }
 
 #[tokio::test]
 async fn a_harness_whose_pack_cant_move_its_home_isnt_started_elsewhere() {
     let project = tempfile::tempdir().unwrap();
-    let profile = harness_contracts::HarnessProfile { instance: harness_contracts::InstanceId::new("other"), driver: harness_contracts::DriverKind::new("acp"), display_name: "Other".into(), settings: serde_json::Value::Null };
+    let profile = harness_contracts::HarnessProfile {
+        instance: harness_contracts::InstanceId::new("other"),
+        driver: harness_contracts::DriverKind::new("acp"),
+        display_name: "Other".into(),
+        settings: serde_json::Value::Null,
+    };
     let launch = harness_contracts::Launch { program: "/bin/true".into(), args: Vec::new(), env: Vec::new(), env_remove: Vec::new() };
     let driver = harness_acp::AcpDriver::new(project.path().into());
-    let entry = HarnessEntry { profile, launch: HarnessLaunch::Ready { launch }, home: Some(project.path().join(".nah/harness/other")), private: Vec::new() };
+    let entry = HarnessEntry {
+        profile,
+        launch: HarnessLaunch::Ready { launch },
+        home: Some(project.path().join(".nah/harness/other")),
+        private: Vec::new(),
+    };
     let other = driver.create(entry.profile.instance.clone(), driver.default_config(&entry)).await.unwrap();
     other.refresh().await.unwrap();
     let status = other.snapshot().borrow().status.clone();
-    assert!(matches!(&status, harness_contracts::ProviderStatus::Unavailable { reason } if reason.contains("doesn't say how")), "{status:?}");
+    assert!(
+        matches!(&status, harness_contracts::ProviderStatus::Unavailable { reason } if reason.contains("doesn't say how")),
+        "{status:?}"
+    );
 }
 
 #[test]
@@ -248,7 +341,17 @@ fn languages_and_their_servers_are_shipped_packs() {
         // Its launch is filled in for the project (and, for a server
         // installed in its own folder, that folder), its caches outside it.
         let mut lock = Lock::default();
-        lock.packs.insert(server.into(), Installed { pack_version: "1.0.0".into(), tool_version: None, platform: "x".into(), dest: "/packs/x".into(), sha256: vec![], installed_at: 0 });
+        lock.packs.insert(
+            server.into(),
+            Installed {
+                pack_version: "1.0.0".into(),
+                tool_version: None,
+                platform: "x".into(),
+                dest: "/packs/x".into(),
+                sha256: vec![],
+                installed_at: 0,
+            },
+        );
         let launch = nah_packs::server_launch(&catalog, &lock, server, Path::new("/repo")).unwrap();
         assert!(!launch.cache.starts_with("/repo"), "{launch:?}");
         assert!(launch.env.iter().all(|(_, v)| !v.starts_with("/repo")), "{launch:?}");
@@ -267,7 +370,13 @@ fn meta_harness_analyze_writes_what_the_server_keeps() {
         std::fs::copy(fixture.join(file), root.join(file)).unwrap();
     }
     let out = dir.path().join("analysis.json");
-    let run = std::process::Command::new(env!("CARGO_BIN_EXE_meta-harness")).args(["analyze", "--root"]).arg(&root).arg("--out").arg(&out).output().unwrap();
+    let run = std::process::Command::new(env!("CARGO_BIN_EXE_meta-harness"))
+        .args(["analyze", "--root"])
+        .arg(&root)
+        .arg("--out")
+        .arg(&out)
+        .output()
+        .unwrap();
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     assert!(String::from_utf8_lossy(&run.stdout).contains("3 files read"), "{}", String::from_utf8_lossy(&run.stdout));
     let written: serde_json::Value = serde_json::from_slice(&std::fs::read(&out).unwrap()).unwrap();
@@ -277,16 +386,27 @@ fn meta_harness_analyze_writes_what_the_server_keeps() {
     let setup = meta_harness::project::analysis_setup(&root).unwrap();
     let facts = arch_service::open_facts(&root, &setup.limits).unwrap();
     let ready = std::time::Duration::from_secs(setup.limits.servers.ready_s);
-    let service = arch_service::ArchitectureService::open(&root, setup.packs, setup.types, Box::new(arch_service::MemoryPlans::default()), facts).unwrap().with_limits(setup.limits).with_servers(&setup.catalog);
+    let service =
+        arch_service::ArchitectureService::open(&root, setup.packs, setup.types, Box::new(arch_service::MemoryPlans::default()), facts)
+            .unwrap()
+            .with_limits(setup.limits)
+            .with_servers(&setup.catalog);
     service.ingest(&root).unwrap();
     service.wait_for_servers(ready).unwrap();
-    let stored: Vec<serde_json::Value> = written["files"].as_array().unwrap().iter().flat_map(|f| f["relations"].as_array().unwrap().iter().cloned()).collect();
+    let stored: Vec<serde_json::Value> =
+        written["files"].as_array().unwrap().iter().flat_map(|f| f["relations"].as_array().unwrap().iter().cloned()).collect();
     // Each relation, with how it's known (the server that proved it, if one did).
-    let rows: std::collections::BTreeSet<String> = stored.iter().map(|r| format!("{} {} {} {} {}", r["kind"], r["source"], r["target"], r["evidence"], r["prover"])).collect();
+    let rows: std::collections::BTreeSet<String> =
+        stored.iter().map(|r| format!("{} {} {} {} {}", r["kind"], r["source"], r["target"], r["evidence"], r["prover"])).collect();
     let kept: std::collections::BTreeSet<String> = service
         .file_rows()
         .iter()
-        .flat_map(|f| f.relations.iter().map(|r| serde_json::to_value(r).unwrap()).map(|r| format!("{} {} {} {} {}", r["kind"], r["source"], r["target"], r["evidence"], r["prover"])))
+        .flat_map(|f| {
+            f.relations
+                .iter()
+                .map(|r| serde_json::to_value(r).unwrap())
+                .map(|r| format!("{} {} {} {} {}", r["kind"], r["source"], r["target"], r["evidence"], r["prover"]))
+        })
         .collect();
     assert!(!rows.is_empty());
     assert_eq!(rows, kept, "the same rows");

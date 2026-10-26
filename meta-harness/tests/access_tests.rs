@@ -8,8 +8,18 @@ use common::{http_anonymous, spawn_app};
 
 /// Open on purpose: health, the launch link, the agents' endpoint (their
 /// session's key says who they are), and the sockets (a ticket each).
-const OPEN_HANDLERS: &[&str] = &["crate::cockpit::launch", "mcp_sse_proxy", "mcp_messages_proxy", "ws_events_handler", "crate::remote::socket", "home_socket", "pass_socket", "terminal_socket"];
-const OPEN_PATHS: &[&str] = &["/health", "/cockpit", "/api/mcp/sse", "/api/mcp/messages", "/ws/events", "/ws/cockpit", "/ws/home", "/s/w1/ws/events"];
+const OPEN_HANDLERS: &[&str] = &[
+    "crate::cockpit::launch",
+    "mcp_sse_proxy",
+    "mcp_messages_proxy",
+    "ws_events_handler",
+    "crate::remote::socket",
+    "home_socket",
+    "pass_socket",
+    "terminal_socket",
+];
+const OPEN_PATHS: &[&str] =
+    &["/health", "/cockpit", "/api/mcp/sse", "/api/mcp/messages", "/ws/events", "/ws/cockpit", "/ws/home", "/s/w1/ws/events"];
 
 #[test]
 fn every_routed_handler_takes_needs_first() {
@@ -28,10 +38,17 @@ fn every_routed_handler_takes_needs_first() {
                     continue;
                 }
                 let (source, fn_name) = match name.rsplit_once("::") {
-                    Some((module, f)) => (std::fs::read_to_string(root.join(format!("{}.rs", module.trim_start_matches("crate::").replace("::", "/")))).unwrap(), f.to_owned()),
+                    Some((module, f)) => (
+                        std::fs::read_to_string(root.join(format!("{}.rs", module.trim_start_matches("crate::").replace("::", "/"))))
+                            .unwrap(),
+                        f.to_owned(),
+                    ),
                     None => (text.clone(), name.to_owned()),
                 };
-                let at = source.find(&format!("\nasync fn {fn_name}(")).or_else(|| source.find(&format!("\npub async fn {fn_name}("))).unwrap_or_else(|| panic!("{}: no handler {name} for {}", file.display(), &r[1]));
+                let at = source
+                    .find(&format!("\nasync fn {fn_name}("))
+                    .or_else(|| source.find(&format!("\npub async fn {fn_name}(")))
+                    .unwrap_or_else(|| panic!("{}: no handler {name} for {}", file.display(), &r[1]));
                 let params = source[at..].split_once('(').unwrap().1.trim_start();
                 assert!(params.starts_with("_: Needs<"), "{} {}: {name} must take Needs<…> first", file.display(), &r[1]);
                 checked += 1;

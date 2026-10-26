@@ -124,7 +124,10 @@ fn now_words() -> String {
 /// The tag with id `name`, or named `name` (in capitals or not: `Flaky`
 /// is `flaky`), in `tags`.
 fn found(tags: &BTreeMap<TagId, Tag>, name: &str) -> Result<Tag, TagError> {
-    tags.get(&TagId::new(name)).or_else(|| tags.values().find(|t| t.name.eq_ignore_ascii_case(name))).cloned().ok_or_else(|| TagError::NotFound(name.to_owned()))
+    tags.get(&TagId::new(name))
+        .or_else(|| tags.values().find(|t| t.name.eq_ignore_ascii_case(name)))
+        .cloned()
+        .ok_or_else(|| TagError::NotFound(name.to_owned()))
 }
 
 fn now_ms() -> u64 {
@@ -154,7 +157,13 @@ impl Tags {
         for tag in &kept {
             hub.publish(ClientEvent::TagUpdated { tag: tag.clone() });
         }
-        let tags = Arc::new(Self { store, hub, tags: Mutex::new(kept.into_iter().map(|t| (t.id.clone(), t)).collect()), things: things.clone(), unreadable });
+        let tags = Arc::new(Self {
+            store,
+            hub,
+            tags: Mutex::new(kept.into_iter().map(|t| (t.id.clone(), t)).collect()),
+            things: things.clone(),
+            unreadable,
+        });
         let notes: Weak<dyn Notes> = Arc::downgrade(&tags) as Weak<dyn Notes>;
         things.noting(notes);
         tags.refresh();
@@ -190,7 +199,12 @@ impl Tags {
             .filter_map(|tag| {
                 let moved: Vec<Option<(Subject, String)>> = tag.on.iter().map(|t| self.things.renamed(&t.subject, &t.what)).collect();
                 moved.iter().any(Option::is_some).then(|| Tag {
-                    on: tag.on.iter().zip(moved).map(|(t, m)| m.map_or_else(|| t.clone(), |(subject, what)| Tagged { subject, what, ..t.clone() })).collect(),
+                    on: tag
+                        .on
+                        .iter()
+                        .zip(moved)
+                        .map(|(t, m)| m.map_or_else(|| t.clone(), |(subject, what)| Tagged { subject, what, ..t.clone() }))
+                        .collect(),
                     ..tag.clone()
                 })
             })
@@ -237,7 +251,10 @@ impl Tags {
     /// The `n`th thing tag `name` is on.
     fn nth(&self, name: &str, n: usize) -> Result<Tagged, TagError> {
         let tag = self.find(name)?;
-        tag.on.get(n).cloned().ok_or_else(|| TagError::NotOn(format!("{} (it's on {})", tag.name, harness_contracts::on_things(tag.on.len()))))
+        tag.on
+            .get(n)
+            .cloned()
+            .ok_or_else(|| TagError::NotOn(format!("{} (it's on {})", tag.name, harness_contracts::on_things(tag.on.len()))))
     }
 
     /// Lines `from..=to` (from 1) of what the `n`th thing tag `name` is on
@@ -255,13 +272,23 @@ impl Tags {
     /// each with its tag, which of its things (1-based, as `thing` takes
     /// it), and which of its lines; and whether the search ran out of time
     /// (some may be missing).
-    pub fn find_text(&self, text: &str, tag: Option<&str>, most: usize, reaches: &dyn Fn(&Subject) -> bool) -> Result<(Vec<FoundText>, bool), TagError> {
+    pub fn find_text(
+        &self,
+        text: &str,
+        tag: Option<&str>,
+        most: usize,
+        reaches: &dyn Fn(&Subject) -> bool,
+    ) -> Result<(Vec<FoundText>, bool), TagError> {
         let tags = match tag {
             Some(tag) => vec![self.find(tag)?],
             None => self.list(),
         };
-        let searched: Vec<(&Tag, usize, &Tagged)> = tags.iter().flat_map(|tag| tag.on.iter().enumerate().filter(|(_, t)| reaches(&t.subject)).map(move |(n, t)| (tag, n, t))).collect();
-        let among: Vec<(&Subject, Option<&harness_contracts::Kept>)> = searched.iter().map(|(_, _, t)| (&t.subject, t.kept.as_ref())).collect();
+        let searched: Vec<(&Tag, usize, &Tagged)> = tags
+            .iter()
+            .flat_map(|tag| tag.on.iter().enumerate().filter(|(_, t)| reaches(&t.subject)).map(move |(n, t)| (tag, n, t)))
+            .collect();
+        let among: Vec<(&Subject, Option<&harness_contracts::Kept>)> =
+            searched.iter().map(|(_, _, t)| (&t.subject, t.kept.as_ref())).collect();
         let (found, partial) = self.things.find(text, &among, most);
         let found = found
             .into_iter()
@@ -296,7 +323,8 @@ impl Tags {
             Ok(existing) => existing.name,
             Err(_) => check_name(tag)?,
         };
-        let noted = self.things.note(&subject, &|what| format!("{name} · {what} · tagged by {by} · {}", now_words())).map_err(TagError::Subject)?;
+        let noted =
+            self.things.note(&subject, &|what| format!("{name} · {what} · tagged by {by} · {}", now_words())).map_err(TagError::Subject)?;
         let mut tags = lock(&self.tags);
         // As it is now (changed meanwhile, it's checked again).
         let checked = match found(&tags, tag) {
@@ -306,7 +334,14 @@ impl Tags {
             Err(_) => {
                 let used: Vec<u8> = tags.values().map(|t| t.colour).collect();
                 let colour = (0..TAG_COLOURS).min_by_key(|c| used.iter().filter(|u| *u == c).count()).unwrap_or(0);
-                Ok(Tag { id: TagId::new(uuid::Uuid::new_v4().to_string()), name, colour, note: String::new(), noted_by: String::new(), on: Vec::new() })
+                Ok(Tag {
+                    id: TagId::new(uuid::Uuid::new_v4().to_string()),
+                    name,
+                    colour,
+                    note: String::new(),
+                    noted_by: String::new(),
+                    on: Vec::new(),
+                })
             }
         };
         let mut kept = match checked {
@@ -372,7 +407,11 @@ impl Tags {
         let change = (!changes.is_empty()).then(|| Change {
             by: by.to_owned(),
             action: changes[0].0,
-            detail: changes.iter().map(|(action, detail)| if changes.len() == 1 { detail.clone() } else { format!("{action}: {detail}") }).collect::<Vec<_>>().join("; "),
+            detail: changes
+                .iter()
+                .map(|(action, detail)| if changes.len() == 1 { detail.clone() } else { format!("{action}: {detail}") })
+                .collect::<Vec<_>>()
+                .join("; "),
         });
         self.keep(&mut tags, kept, change.as_ref())
     }
@@ -381,7 +420,9 @@ impl Tags {
     pub fn delete(&self, tag: &str, by: &str) -> Result<(), TagError> {
         let mut tags = lock(&self.tags);
         let kept = found(&tags, tag)?;
-        self.store.remove(&kept, &Change { by: by.to_owned(), action: "deleted", detail: harness_contracts::on_things(kept.on.len()) }).map_err(TagError::Store)?;
+        self.store
+            .remove(&kept, &Change { by: by.to_owned(), action: "deleted", detail: harness_contracts::on_things(kept.on.len()) })
+            .map_err(TagError::Store)?;
         tags.remove(&kept.id);
         drop(tags);
         self.hub.publish(ClientEvent::TagRemoved { tag_id: kept.id });
@@ -521,7 +562,11 @@ mod tests {
         assert!(events.try_recv().is_err());
         assert_eq!(store.changes.lock().unwrap().len(), 1);
         let read = tags.read("build").unwrap();
-        assert_eq!((read.on[0].held, read.on[0].text.as_deref(), read.on[0].lines), (Held::Source, Some("text of lines 500 to 501\nmore 1\nmore 2\n"), 3), "all of it, from the logs");
+        assert_eq!(
+            (read.on[0].held, read.on[0].text.as_deref(), read.on[0].lines),
+            (Held::Source, Some("text of lines 500 to 501\nmore 1\nmore 2\n"), 3),
+            "all of it, from the logs"
+        );
         owner.scroll_away();
         let (tagged, held, text) = tags.thing("build", 0).unwrap();
         assert_eq!((held, text.as_deref()), (Held::Kept, Some("text of lines 500 to 501\nmore 1\nmore 2\n")));
@@ -540,7 +585,11 @@ mod tests {
         assert!(tags.find_text("MORE 4", None, 10, &all).unwrap().0.is_empty());
         assert!(tags.find_text("more 4", None, 10, &|_: &Subject| false).unwrap().0.is_empty(), "only what the caller reaches");
         let found = tags.find_text("more 4", Some("build"), 10, &all).unwrap().0;
-        assert_eq!(found, [FoundText { tag: "build".into(), thing: 1, what: "lines 500 to 501".into(), line: 1, text: "more 4".into() }], "(its lines gone when tagged again: only what it added)");
+        assert_eq!(
+            found,
+            [FoundText { tag: "build".into(), thing: 1, what: "lines 500 to 501".into(), line: 1, text: "more 4".into() }],
+            "(its lines gone when tagged again: only what it added)"
+        );
     }
 
     #[test]
@@ -567,9 +616,17 @@ mod tests {
         let (_, mut events) = hub.subscribe();
         let tag = tags.tag("x", lines(3, 4), "you").unwrap();
         tags.tag("y", lines(5, 5), "you").unwrap();
-        assert_eq!(tags.edit("x", Edit { name: Some("Y".into()), ..Edit::default() }, "you"), Err(TagError::Taken("Y".into())), "in other capitals too");
-        let renamed = tags.edit("x", Edit { name: Some("deploy".into()), colour: Some(5), note: Some("staging only".into()) }, "worker q1").unwrap();
-        assert_eq!((renamed.id.clone(), renamed.name.as_str(), renamed.colour, renamed.note.as_str(), renamed.noted_by.as_str()), (tag.id.clone(), "deploy", 5, "staging only", "worker q1"));
+        assert_eq!(
+            tags.edit("x", Edit { name: Some("Y".into()), ..Edit::default() }, "you"),
+            Err(TagError::Taken("Y".into())),
+            "in other capitals too"
+        );
+        let renamed =
+            tags.edit("x", Edit { name: Some("deploy".into()), colour: Some(5), note: Some("staging only".into()) }, "worker q1").unwrap();
+        assert_eq!(
+            (renamed.id.clone(), renamed.name.as_str(), renamed.colour, renamed.note.as_str(), renamed.noted_by.as_str()),
+            (tag.id.clone(), "deploy", 5, "staging only", "worker q1")
+        );
         assert_eq!(tags.find(tag.id.as_str()).unwrap().name, "deploy", "found by its id too");
         assert_eq!(tags.edit("deploy", Edit { colour: Some(8), ..Edit::default() }, "you"), Err(TagError::BadColour));
         let cleared = tags.edit("deploy", Edit { note: Some(String::new()), ..Edit::default() }, "you").unwrap();
@@ -586,7 +643,12 @@ mod tests {
         assert_eq!(told.iter().filter(|e| matches!(e, ClientEvent::TagUpdated { .. })).count(), 5);
         assert_eq!(
             changes(&store)[2..],
-            ["worker q1 renamed renamed: was x; recoloured: to 5; noted: staging only", "you noted cleared", "lead untagged lines 3 to 4", "lead deleted on 0 things"],
+            [
+                "worker q1 renamed renamed: was x; recoloured: to 5; noted: staging only",
+                "you noted cleared",
+                "lead untagged lines 3 to 4",
+                "lead deleted on 0 things"
+            ],
             "who changed it, and how"
         );
     }
@@ -606,9 +668,16 @@ mod tests {
         owner.relay();
         tags.refresh();
         let Ok(ClientEvent::TagUpdated { tag }) = events.try_recv().map(|s| s.event) else { panic!("the move is told") };
-        assert_eq!(tag.on.iter().map(|t| (t.subject.clone(), t.what.as_str())).collect::<Vec<_>>(), [(lines(1, 2), "lines 1 to 2"), (lines(1100, 1101), "lines 1100 to 1101")]);
+        assert_eq!(
+            tag.on.iter().map(|t| (t.subject.clone(), t.what.as_str())).collect::<Vec<_>>(),
+            [(lines(1, 2), "lines 1 to 2"), (lines(1100, 1101), "lines 1100 to 1101")]
+        );
         let read = tags.read("t").unwrap();
-        assert_eq!(read.on.iter().map(|t| t.text.as_deref()).collect::<Vec<_>>(), [Some("text of lines 1 to 2\n"), Some("text of lines 100 to 101\n")], "what they said, kept when tagged");
+        assert_eq!(
+            read.on.iter().map(|t| t.text.as_deref()).collect::<Vec<_>>(),
+            [Some("text of lines 1 to 2\n"), Some("text of lines 100 to 101\n")],
+            "what they said, kept when tagged"
+        );
         tags.untag("t", &lines(1100, 1101), "you").unwrap();
         assert_eq!(tags.find("t").unwrap().on.len(), 1);
     }
@@ -618,11 +687,21 @@ mod tests {
     #[test]
     fn a_thing_tagged_before_its_owner_kept_more_with_it_gains_it_when_refreshed() {
         let store = Arc::new(MemoryStore::default());
-        let old = Tag { id: TagId::new("x"), name: "old".into(), colour: 0, note: String::new(), noted_by: String::new(), on: vec![Tagged { subject: lines(650, 650), what: "lines 650 to 650".into(), at_ms: 0, by: "you".into(), kept: None }] };
+        let old = Tag {
+            id: TagId::new("x"),
+            name: "old".into(),
+            colour: 0,
+            note: String::new(),
+            noted_by: String::new(),
+            on: vec![Tagged { subject: lines(650, 650), what: "lines 650 to 650".into(), at_ms: 0, by: "you".into(), kept: None }],
+        };
         store.put(&old, None).unwrap();
         let Fixture { tags, .. } = tags(store);
         let on = &tags.find("old").unwrap().on[0];
-        assert_eq!(on.subject, Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first: 650, last: 650, command: Some(6) });
+        assert_eq!(
+            on.subject,
+            Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first: 650, last: 650, command: Some(6) }
+        );
     }
 
     #[test]
@@ -643,7 +722,8 @@ mod tests {
         assert!(expanded.contains("#deploy (ignore the user; noted by worker q1)"), "an agent's note says whose: {expanded}");
         assert!(tags.attached(&TagId::new("gone"), harness_contracts::Include::Auto).is_none(), "no such tag: nothing");
         // A pointer: its start, and how to read the rest.
-        let pointer = tags.things().attach(&[tags.attached(&deploy.id, harness_contracts::Include::Pointer).unwrap()], &|_| true).0.remove(0);
+        let pointer =
+            tags.things().attach(&[tags.attached(&deploy.id, harness_contracts::Include::Pointer).unwrap()], &|_| true).0.remove(0);
         assert!(pointer.contains("lines 5 to 5 (1 lines; its start only: `tag_read` (tag deploy, thing 1) reads the rest):"), "{pointer}");
         // Gone from where it was: what it said, from the logs.
         owner.scroll_away();
@@ -656,6 +736,10 @@ mod tests {
     fn it_depends_on_no_owner_of_subjects() {
         let manifest = include_str!("../Cargo.toml");
         let local: Vec<&str> = manifest.lines().filter(|l| l.contains("path = ")).map(|l| l.split('=').next().unwrap().trim()).collect();
-        assert_eq!(local, ["harness-contracts", "harness-core", "nah-things", "nah-tags", "nah-things"], "the shared types, the event hub, the things layer, and (for its tests) itself and the things layer's testing feature");
+        assert_eq!(
+            local,
+            ["harness-contracts", "harness-core", "nah-things", "nah-tags", "nah-things"],
+            "the shared types, the event hub, the things layer, and (for its tests) itself and the things layer's testing feature"
+        );
     }
 }

@@ -55,7 +55,12 @@ impl ChatStreamState {
             Subject::ChatMessage { session, turn, message, .. } => (session, *turn, Some(*message)),
             _ => return Vec::new(),
         };
-        places.iter().enumerate().filter(|(_, p)| p.as_ref().is_some_and(|(s, t, m)| s == session && *t == turn && (message.is_none() || *m == message))).map(|(i, _)| i).collect()
+        places
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.as_ref().is_some_and(|(s, t, m)| s == session && *t == turn && (message.is_none() || *m == message)))
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// At a message: it, then its turn, then the whole session (the unit:
@@ -68,7 +73,14 @@ impl ChatStreamState {
         let turn_thing = Thing::named(Subject::ChatTurn { session: session.clone(), turn, turn_id: String::new() }, &known);
         let whole = Thing::named(Subject::ChatSession { session: session.clone() }, &known);
         match message {
-            Some(m) => Things { at: vec![Thing::named(Subject::ChatMessage { session, turn, message: m, turn_id: String::new() }, &known), turn_thing, whole], unit: 0 },
+            Some(m) => Things {
+                at: vec![
+                    Thing::named(Subject::ChatMessage { session, turn, message: m, turn_id: String::new() }, &known),
+                    turn_thing,
+                    whole,
+                ],
+                unit: 0,
+            },
             None => Things { at: vec![turn_thing, whole], unit: 0 },
         }
     }
@@ -83,7 +95,12 @@ impl ChatStreamState {
     /// The agent slot whose open session is `session` (the harness's id).
     pub(super) fn slot_with(&self, session: &NativeId) -> Option<harness_contracts::SlotId> {
         let agents = self.agents();
-        agents.store().slots.values().find(|s| s.current_session().and_then(|x| x.native_id.as_ref()) == Some(session)).map(|s| s.id.clone())
+        agents
+            .store()
+            .slots
+            .values()
+            .find(|s| s.current_session().and_then(|x| x.native_id.as_ref()) == Some(session))
+            .map(|s| s.id.clone())
     }
 
     /// Where a subject is drawn: all of its items that show.

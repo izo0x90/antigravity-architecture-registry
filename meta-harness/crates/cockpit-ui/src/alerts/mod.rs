@@ -107,7 +107,11 @@ impl Alerts {
     pub fn arrival(&self) -> impl Fn(&str) + Send + Sync + 'static {
         let (on, clicked, backend) = (self.on.clone(), self.clicked.clone(), self.backend.clone());
         move |text: &str| {
-            if !on.load(Ordering::Relaxed) || !text.contains("notification_updated") || backend.permission() != Permission::Granted || !backend.out_of_sight() {
+            if !on.load(Ordering::Relaxed)
+                || !text.contains("notification_updated")
+                || backend.permission() != Permission::Granted
+                || !backend.out_of_sight()
+            {
                 return;
             }
             let Ok(HomeEvent::Event { server, event }) = serde_json::from_str::<HomeEvent>(text) else { return };
@@ -151,7 +155,9 @@ pub(crate) mod tests {
     }
 
     fn waiting(state: &str) -> String {
-        format!(r#"{{"type":"event","server":"cloud","event":{{"atMs":5,"type":"notification_updated","notification":{{"id":"req:1","level":"waiting","kind":"approval","slot":null,"thread":null,"request":null,"title":"Run it","detail":null,"atMs":1,"state":"{state}"}}}}}}"#)
+        format!(
+            r#"{{"type":"event","server":"cloud","event":{{"atMs":5,"type":"notification_updated","notification":{{"id":"req:1","level":"waiting","kind":"approval","slot":null,"thread":null,"request":null,"title":"Run it","detail":null,"atMs":1,"state":"{state}"}}}}}}"#
+        )
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! Drawing the chat: controls, banners, the stream, items, the input.
 
 use super::*;
-use crate::hosted::{Status, Tone};
 use crate::comparer::Compared;
+use crate::hosted::{Status, Tone};
 
 /// The banners' name as a place (`here`).
 pub(crate) const BANNERS: &str = "banners";
@@ -124,7 +124,8 @@ fn draw_folded_output(ui: &mut egui::Ui, open: bool, changes: &[(usize, &harness
     let words = |ui: &mut egui::Ui, text: String| ui.label(RichText::new(text).size(look.text_small).color(colors().muted));
     ui.horizontal_wrapped(|ui| {
         words(ui, crate::nav::fold_mark(open).to_owned());
-        let compared: Vec<&Compared> = changes.iter().filter_map(|(.., c)| if let Change::Compared(c) = c { Some(c.as_ref()) } else { None }).collect();
+        let compared: Vec<&Compared> =
+            changes.iter().filter_map(|(.., c)| if let Change::Compared(c) = c { Some(c.as_ref()) } else { None }).collect();
         match changes {
             [] => {}
             [(_, diff, Change::Written)] => {
@@ -139,10 +140,13 @@ fn draw_folded_output(ui: &mut egui::Ui, open: bool, changes: &[(usize, &harness
             _ if compared.len() == changes.len() => {
                 let (added, removed) = compared.iter().fold((0, 0), |(a, r), c| (a + c.added, r + c.removed));
                 crate::diff::draw_counts(ui, added, removed);
-                words(ui, match changes {
-                    [(_, diff, _)] => diff.path.clone(),
-                    _ => format!("in {} files", changes.len()),
-                });
+                words(
+                    ui,
+                    match changes {
+                        [(_, diff, _)] => diff.path.clone(),
+                        _ => format!("in {} files", changes.len()),
+                    },
+                );
             }
             _ => {
                 words(ui, format!("{} files changed", changes.len()));
@@ -172,7 +176,11 @@ fn draw_change(ui: &mut egui::Ui, diff: &harness_contracts::Diff, change: &Chang
             ui.label(RichText::new("Comparing…").size(look.text_small).color(colors().muted));
         }
         Change::TooBig => {
-            ui.label(RichText::new("Too big to compare here: the Changes view shows the turn's changes.").size(look.text_small).color(colors().muted));
+            ui.label(
+                RichText::new("Too big to compare here: the Changes view shows the turn's changes.")
+                    .size(look.text_small)
+                    .color(colors().muted),
+            );
         }
         Change::Written => {
             ui.label(RichText::new(&diff.new_text).monospace().size(look.text_small).color(colors().muted));
@@ -207,7 +215,11 @@ impl ChatStreamState {
             self.ui.drawing.clear();
             self.ui.item_rects.clear();
             self.ui.live_at = None;
-            let area = egui::ScrollArea::vertical().id_salt(("chat_stream", cx.at)).auto_shrink([false, false]).stick_to_bottom(self.ui.cursor.is_none()).max_height(scroll_height);
+            let area = egui::ScrollArea::vertical()
+                .id_salt(("chat_stream", cx.at))
+                .auto_shrink([false, false])
+                .stick_to_bottom(self.ui.cursor.is_none())
+                .max_height(scroll_height);
             // Where the shared rules say (following the latest, nothing's
             // asked: the newest stays in view); each frame's messages are
             // measured either way, for the first move from it.
@@ -248,19 +260,24 @@ impl ChatStreamState {
             if !pending.is_empty() {
                 // (At least a card's title and its row of answers.)
                 let most = (whole * WAITING_SHARE).max(4.0 * ui.spacing().interact_size.y);
-                egui::ScrollArea::vertical().id_salt(("chat_waiting", cx.at)).max_height(most).min_scrolled_height(most).auto_shrink([false, true]).show(ui, |ui| {
-                    for (index, request) in &pending {
-                        let on = index.is_some() && self.ui.cursor == *index;
-                        let rect = self.item_frame(ui, on, 0, |chat, ui| {
-                            crate::request_card::render_request(ui, request, &mut chat.drafts);
-                        });
-                        if let Some(index) = index {
-                            self.ui.spots.push(Spot { key: index.to_string(), rect });
+                egui::ScrollArea::vertical()
+                    .id_salt(("chat_waiting", cx.at))
+                    .max_height(most)
+                    .min_scrolled_height(most)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for (index, request) in &pending {
+                            let on = index.is_some() && self.ui.cursor == *index;
+                            let rect = self.item_frame(ui, on, 0, |chat, ui| {
+                                crate::request_card::render_request(ui, request, &mut chat.drafts);
+                            });
+                            if let Some(index) = index {
+                                self.ui.spots.push(Spot { key: index.to_string(), rect });
+                            }
+                            // (Room for its answers, its host's to draw.)
+                            ui.add_space(self.ui.room_under_waiting);
                         }
-                        // (Room for its answers, its host's to draw.)
-                        ui.add_space(self.ui.room_under_waiting);
-                    }
-                });
+                    });
             }
             if alone {
                 self.ui.typing = None;
@@ -385,8 +402,12 @@ impl ChatStreamState {
             let state = self.agents().state(&self.ui.slot);
             let said = match (&state, &instance) {
                 (_, None) => "Waiting for the server…".to_owned(),
-                (crate::agents::AgentState::NoSession { resume: Some(_) }, Some(s)) => format!("No session running with {}: type below to start one, or resume the last.", s.display_name),
-                (crate::agents::AgentState::NoSession { resume: None }, Some(s)) => format!("No session yet with {}: type below to start one.", s.display_name),
+                (crate::agents::AgentState::NoSession { resume: Some(_) }, Some(s)) => {
+                    format!("No session running with {}: type below to start one, or resume the last.", s.display_name)
+                }
+                (crate::agents::AgentState::NoSession { resume: None }, Some(s)) => {
+                    format!("No session yet with {}: type below to start one.", s.display_name)
+                }
                 (other, Some(s)) => format!("{}: {}", s.display_name, other.words()),
             };
             banner(ui, colors().info_bg, colors().focus, |ui| {
@@ -404,8 +425,13 @@ impl ChatStreamState {
                     let ended = self.agents().sign_in_ended(instance).map(|e| e.how.clone());
                     let said = match ended {
                         _ if self.agents().signing_in(instance) => format!("{} Starting the sign-in to {name}…", icon::HOURGLASS),
-                        Some(harness_contracts::SignInEnd::RanOut) => format!("{} The sign-in to {name} stopped waiting: its time ran out. Sign in again for a new link.", icon::CLOCK),
-                        Some(harness_contracts::SignInEnd::Failed { reason }) => format!("{} The sign-in to {name} failed: {reason}. Sign in again.", icon::X_CIRCLE),
+                        Some(harness_contracts::SignInEnd::RanOut) => format!(
+                            "{} The sign-in to {name} stopped waiting: its time ran out. Sign in again for a new link.",
+                            icon::CLOCK
+                        ),
+                        Some(harness_contracts::SignInEnd::Failed { reason }) => {
+                            format!("{} The sign-in to {name} failed: {reason}. Sign in again.", icon::X_CIRCLE)
+                        }
                         _ => format!("{} Sign in to {name}", icon::KEY),
                     };
                     ui.label(RichText::new(said).strong().size(look.text_label));
@@ -462,7 +488,11 @@ impl ChatStreamState {
     /// A banner shows (what `render_banners` draws).
     pub(super) fn banners_shown(&self) -> bool {
         let refused = self.sign_in_now().and_then(|n| n.pasted).is_some_and(|p| p.refused.is_some());
-        self.agents().notice().is_some() || self.error().is_some() || refused || self.thread().is_none() || (self.signing_in_said() && self.instance().is_some())
+        self.agents().notice().is_some()
+            || self.error().is_some()
+            || refused
+            || self.thread().is_none()
+            || (self.signing_in_said() && self.instance().is_some())
     }
 
     /// The banners are where you are (their ways out are under them).
@@ -473,9 +503,7 @@ impl ChatStreamState {
     /// The harness offers sign-in and isn't signed in (a session refused
     /// for it says so too).
     pub(super) fn needs_login(&self) -> bool {
-        self.instance().is_some_and(|s| {
-            !s.auth.methods.is_empty() && s.auth.status == harness_contracts::AuthStatus::SignedOut
-        })
+        self.instance().is_some_and(|s| !s.auth.methods.is_empty() && s.auth.status == harness_contracts::AuthStatus::SignedOut)
     }
 
     pub(super) fn render_plan(&mut self, ui: &mut egui::Ui) {
@@ -484,9 +512,11 @@ impl ChatStreamState {
             return;
         };
         let done = steps.iter().filter(|s| s.status == StepStatus::Completed).count();
-        egui::CollapsingHeader::new(RichText::new(format!("{} Plan ({done}/{})", icon::CLIPBOARD_TEXT, steps.len())).size(crate::theme::look().text_body))
-            .default_open(true)
-            .show(ui, |ui| render_steps(ui, &steps));
+        egui::CollapsingHeader::new(
+            RichText::new(format!("{} Plan ({done}/{})", icon::CLIPBOARD_TEXT, steps.len())).size(crate::theme::look().text_body),
+        )
+        .default_open(true)
+        .show(ui, |ui| render_steps(ui, &steps));
     }
 
     /// The stream, row by row, each turn under its line. Only the rows in
@@ -572,9 +602,20 @@ impl ChatStreamState {
                 ItemBody::Request { request_id } => view.request(request_id).map(|r| (r.status, self.agents().waits(r))),
                 _ => None,
             };
-            let measure = Measure { heads: rows_at.heads[at], span: row.last - row.first, folded: row.folded, open: opens && self.ui.folds.item_open(item), changed: (row.first..=row.last).map(|i| view.changed(i)).max().unwrap_or(0), asks, width, text };
+            let measure = Measure {
+                heads: rows_at.heads[at],
+                span: row.last - row.first,
+                folded: row.folded,
+                open: opens && self.ui.folds.item_open(item),
+                changed: (row.first..=row.last).map(|i| view.changed(i)).max().unwrap_or(0),
+                asks,
+                width,
+                text,
+            };
             let on = self.ui.cursor.is_some_and(|c| row.holds(c));
-            let rect = self.item_frame(ui, on, row.depth, |chat, ui| if row.folded { chat.render_run(ui, view, row) } else { chat.render_item(ui, view, item, row) });
+            let rect = self.item_frame(ui, on, row.depth, |chat, ui| {
+                if row.folded { chat.render_run(ui, view, row) } else { chat.render_item(ui, view, item, row) }
+            });
             ui.add_space(look.space_xs);
             // (As tall as it's drawn, its line too: the rows after it move
             // by what it grew, kept so: nothing's worked out again.)
@@ -656,7 +697,12 @@ impl ChatStreamState {
     /// failed, or running (`live`: the running one's, its live line;
     /// another not ended, RUNNING), in the column's width. Where it was
     /// drawn; the live line's spot.
-    pub(super) fn render_turn_line(&self, ui: &mut egui::Ui, turn: &harness_contracts::Turn, live: Option<&crate::indicator::Activity>) -> (Rect, Option<Rect>) {
+    pub(super) fn render_turn_line(
+        &self,
+        ui: &mut egui::Ui,
+        turn: &harness_contracts::Turn,
+        live: Option<&crate::indicator::Activity>,
+    ) -> (Rect, Option<Rect>) {
         let look = crate::theme::look();
         let mut spot = None;
         let line = ui.horizontal(|ui| {
@@ -675,7 +721,10 @@ impl ChatStreamState {
                 }
                 _ => {
                     if let Some(f) = &turn.failure {
-                        ui.add(egui::Label::new(RichText::new(format!("failed: {}", f.message)).size(look.text_tiny).color(colors().error)).truncate());
+                        ui.add(
+                            egui::Label::new(RichText::new(format!("failed: {}", f.message)).size(look.text_tiny).color(colors().error))
+                                .truncate(),
+                        );
                     }
                 }
             }
@@ -774,13 +823,21 @@ impl ChatStreamState {
             // to what each is), what they handed on with it folded under it.
             ItemBody::UserMessage { text, pieces } => {
                 let links = harness_contracts::links_of(pieces);
-                let drawn = self.ui.messages.draw(ui, egui::Id::new(&item.id), &crate::conversation::Message { links: &links, ..crate::conversation::Message::new("user", text) });
+                let drawn = self.ui.messages.draw(
+                    ui,
+                    egui::Id::new(&item.id),
+                    &crate::conversation::Message { links: &links, ..crate::conversation::Message::new("user", text) },
+                );
                 for (n, rect) in drawn.chips.iter().enumerate() {
                     self.ui.drawing.push(Spot { key: Pick::Chip(n).key(index), rect: *rect });
                 }
                 if !pieces.is_empty() {
                     let open = self.ui.folds.item_open(item);
-                    ui.label(RichText::new(format!("{} what went with it", crate::nav::fold_mark(open))).size(crate::theme::look().text_small).color(colors().muted));
+                    ui.label(
+                        RichText::new(format!("{} what went with it", crate::nav::fold_mark(open)))
+                            .size(crate::theme::look().text_small)
+                            .color(colors().muted),
+                    );
                     if open {
                         for piece in pieces {
                             ui.label(RichText::new(&piece.text).monospace().size(crate::theme::look().text_small).color(colors().muted));
@@ -794,7 +851,11 @@ impl ChatStreamState {
                 let text = item.body.said().unwrap_or_default();
                 let by = self.slot().map(|s| s.name.clone()).unwrap_or_else(|| "the agent".into());
                 let under = content.iter().filter(|b| !matches!(b, ContentBlock::Text { .. })).map(block_summary).collect();
-                let drawn = self.ui.messages.draw(ui, egui::Id::new(&item.id), &crate::conversation::Message { markdown: true, under, ..crate::conversation::Message::new(&by, &text) });
+                let drawn = self.ui.messages.draw(
+                    ui,
+                    egui::Id::new(&item.id),
+                    &crate::conversation::Message { markdown: true, under, ..crate::conversation::Message::new(&by, &text) },
+                );
                 self.code_spots(index, &drawn.codes);
                 // The files its words name, as a call's places are.
                 let places = nav::links_of(item, nav::folder_of(view));
@@ -806,8 +867,16 @@ impl ChatStreamState {
             // keys, or its control under it while you're on it).
             ItemBody::Reasoning { text, streaming } => {
                 let open = self.ui.folds.item_open(item);
-                let label = if *streaming { format!("{} Thinking… ({} chars)", icon::BRAIN, text.len()) } else { format!("{} Reasoning ({} chars)", icon::BRAIN, text.len()) };
-                ui.label(RichText::new(format!("{} {label}", crate::nav::fold_mark(open))).size(crate::theme::look().text_body).color(colors().special));
+                let label = if *streaming {
+                    format!("{} Thinking… ({} chars)", icon::BRAIN, text.len())
+                } else {
+                    format!("{} Reasoning ({} chars)", icon::BRAIN, text.len())
+                };
+                ui.label(
+                    RichText::new(format!("{} {label}", crate::nav::fold_mark(open)))
+                        .size(crate::theme::look().text_body)
+                        .color(colors().special),
+                );
                 if open {
                     ui.label(RichText::new(text).monospace().size(crate::theme::look().text_body).color(colors().muted));
                 }
@@ -825,8 +894,12 @@ impl ChatStreamState {
                 // opened.
                 let open = self.ui.folds.item_open(item);
                 // (Each change: its block's place in the output, its file, as compared.)
-                let changes: Vec<(usize, &harness_contracts::Diff, Change)> =
-                    output.iter().enumerate().filter_map(|(n, b)| if let ContentBlock::Diff(diff) = b { Some((n, diff)) } else { None }).map(|(n, diff)| (n, diff, self.change_of(diff))).collect();
+                let changes: Vec<(usize, &harness_contracts::Diff, Change)> = output
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(n, b)| if let ContentBlock::Diff(diff) = b { Some((n, diff)) } else { None })
+                    .map(|(n, diff)| (n, diff, self.change_of(diff)))
+                    .collect();
                 match (row.nested, output.is_empty()) {
                     (0, true) => {}
                     (0, false) => draw_folded_output(ui, open, &changes, output.len()),
@@ -837,7 +910,12 @@ impl ChatStreamState {
                         match changes.iter().find(|(at, ..)| *at == n) {
                             Some((_, diff, change)) => draw_change(ui, diff, change),
                             None => {
-                                ui.label(RichText::new(block_detail(block)).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                                ui.label(
+                                    RichText::new(block_detail(block))
+                                        .monospace()
+                                        .size(crate::theme::look().text_small)
+                                        .color(colors().muted),
+                                );
                             }
                         }
                     }
@@ -863,7 +941,11 @@ impl ChatStreamState {
                 ui.label(RichText::new(format!("$ {command}")).monospace().size(crate::theme::look().text_body));
                 if let Some(out) = output {
                     let open = self.ui.folds.item_open(item);
-                    ui.label(RichText::new(format!("{} output", crate::nav::fold_mark(open))).size(crate::theme::look().text_small).color(colors().muted));
+                    ui.label(
+                        RichText::new(format!("{} output", crate::nav::fold_mark(open)))
+                            .size(crate::theme::look().text_small)
+                            .color(colors().muted),
+                    );
                     if open {
                         ui.label(RichText::new(out).monospace().size(crate::theme::look().text_small).color(colors().muted));
                     }
@@ -874,10 +956,12 @@ impl ChatStreamState {
             }
             ItemBody::ProposedPlan { markdown, .. } => {
                 Frame::NONE.fill(colors().surface).inner_margin(crate::theme::margin(crate::theme::look().space_sm)).show(ui, |ui| {
-                    ui.label(RichText::new(format!("{} Proposed plan", icon::CLIPBOARD_TEXT)).strong().size(crate::theme::look().text_body));
+                    ui.label(
+                        RichText::new(format!("{} Proposed plan", icon::CLIPBOARD_TEXT)).strong().size(crate::theme::look().text_body),
+                    );
                     let drawn = self.ui.messages.markdown(ui, egui::Id::new(&item.id), markdown);
                     self.code_spots(index, &drawn);
-                    });
+                });
             }
             ItemBody::TodoList { steps, .. } => render_steps(ui, steps),
             // Waiting on you: kept in sight under the stream (this says it
@@ -910,7 +994,10 @@ impl ChatStreamState {
                 }
             }
             ItemBody::Notice { level, text } => {
-                let color = match level { NoticeLevel::Info => colors().muted, NoticeLevel::Warning => colors().warn };
+                let color = match level {
+                    NoticeLevel::Info => colors().muted,
+                    NoticeLevel::Warning => colors().warn,
+                };
                 ui.label(RichText::new(text).size(crate::theme::look().text_body).color(color));
             }
             ItemBody::Error { message } => {
@@ -918,10 +1005,17 @@ impl ChatStreamState {
             }
             ItemBody::Unknown { native_kind, display } => {
                 let shown: String = display.chars().take(300).collect();
-                ui.label(RichText::new(format!("[{native_kind}] {shown}")).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                ui.label(
+                    RichText::new(format!("[{native_kind}] {shown}"))
+                        .monospace()
+                        .size(crate::theme::look().text_small)
+                        .color(colors().muted),
+                );
             }
             ItemBody::Unsupported => {
-                ui.label(RichText::new("(item type not supported by this client)").size(crate::theme::look().text_small).color(colors().muted));
+                ui.label(
+                    RichText::new("(item type not supported by this client)").size(crate::theme::look().text_small).color(colors().muted),
+                );
             }
         }
     }
@@ -965,8 +1059,13 @@ impl crate::hosted::Hosted for ChatStreamState {
     /// The agent slot it shows (its role on hover).
     fn title(&self) -> Status {
         match self.slot() {
-            Some(slot) if self.ui.alone.is_some() => Status::new(format!("{} Sub-agent of {}", icon::ROBOT, slot.name), Tone::Info).detail(format!("agent slot ({})", slot.role)),
-            Some(slot) => Status::new(format!("{} {}", icon::USER_FOCUS, slot.name), if slot.is_lead() { Tone::Accent } else { Tone::Info }).detail(format!("agent slot ({})", slot.role)),
+            Some(slot) if self.ui.alone.is_some() => {
+                Status::new(format!("{} Sub-agent of {}", icon::ROBOT, slot.name), Tone::Info).detail(format!("agent slot ({})", slot.role))
+            }
+            Some(slot) => {
+                Status::new(format!("{} {}", icon::USER_FOCUS, slot.name), if slot.is_lead() { Tone::Accent } else { Tone::Info })
+                    .detail(format!("agent slot ({})", slot.role))
+            }
             None => Status::new("No agent slot", Tone::Muted),
         }
     }
@@ -1004,18 +1103,28 @@ impl crate::hosted::Hosted for ChatStreamState {
         let mut out = vec![Status::new(s.display_name.clone(), Tone::Plain)];
         out.extend(working);
         if let Some(account) = &s.auth.account {
-            let detail = [account.email.clone(), account.organization.clone(), account.plan.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            let detail = [account.email.clone(), account.organization.clone(), account.plan.clone()]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
             let status = Status::new(format!("{} {}", icon::USER_CIRCLE, account.label), Tone::Muted);
             out.push(if detail.is_empty() { status } else { status.detail(detail) });
         }
         match s.auth.status {
-            harness_contracts::AuthStatus::SignedOut if !s.auth.methods.is_empty() => out.push(Status::new(format!("{} Not signed in", icon::KEY), Tone::Warn)),
-            harness_contracts::AuthStatus::SignedIn if s.auth.account.is_none() => out.push(Status::new(format!("{} Signed in", icon::KEY), Tone::Muted)),
+            harness_contracts::AuthStatus::SignedOut if !s.auth.methods.is_empty() => {
+                out.push(Status::new(format!("{} Not signed in", icon::KEY), Tone::Warn))
+            }
+            harness_contracts::AuthStatus::SignedIn if s.auth.account.is_none() => {
+                out.push(Status::new(format!("{} Signed in", icon::KEY), Tone::Muted))
+            }
             _ => {}
         }
         if let Some(home) = &s.home {
             let whose = if home.kept { "set for this project" } else { "its own" };
-            out.push(Status::new(icon::HOUSE, Tone::Muted).detail(format!("Its home (sign-in, settings, sessions), {whose}: {}", home.path)));
+            out.push(
+                Status::new(icon::HOUSE, Tone::Muted).detail(format!("Its home (sign-in, settings, sessions), {whose}: {}", home.path)),
+            );
         }
         if !s.problems.is_empty() {
             out.push(Status::new(icon::WARNING, Tone::Warn).detail(s.problems.join("\n")));

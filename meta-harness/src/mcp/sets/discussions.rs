@@ -119,7 +119,8 @@ impl ToolSet for Discussions {
 
     async fn call(&self, name: &str, args: Value, caller: &crate::mcp::McpCaller) -> Result<String, ServiceError> {
         let text = |key: &str| args[key].as_str().map(str::to_owned);
-        let id = text("id").map(DiscussionId::new).ok_or_else(|| ServiceError::InvalidOp("`id` (the discussion, e.g. d3) is needed".into()));
+        let id =
+            text("id").map(DiscussionId::new).ok_or_else(|| ServiceError::InvalidOp("`id` (the discussion, e.g. d3) is needed".into()));
         let (discussions, things, slots) = (self.discussions.clone(), self.things.clone(), self.slots.clone());
         let reach = Reach::of(&self.slots, &self.access, &self.discussions, caller);
         // Who an agent's writing is by, and whose move is its: its slot (by
@@ -129,7 +130,9 @@ impl ToolSet for Discussions {
         let mine = move |d: &Discussion| matches!(d.whose_move(), Move::Agent(slot) if Some(&slot) == me.as_ref());
         // Owners say where things are and what they say, and discussions
         // are kept in the state database: off the async threads.
-        let blocking = |f: Box<dyn FnOnce() -> Result<String, ServiceError> + Send>| async move { tokio::task::spawn_blocking(f).await.map_err(|e| ServiceError::InvalidOp(e.to_string()))? };
+        let blocking = |f: Box<dyn FnOnce() -> Result<String, ServiceError> + Send>| async move {
+            tokio::task::spawn_blocking(f).await.map_err(|e| ServiceError::InvalidOp(e.to_string()))?
+        };
         match name {
             "discussions" if text("find").is_some() => {
                 let find = text("find").unwrap_or_default();
@@ -160,7 +163,12 @@ impl ToolSet for Discussions {
                     };
                     list.retain(|d| (all || d.status != DiscussionStatus::Settled) && reach.reaches(&d.on.subject));
                     if list.is_empty() {
-                        return Ok(if all { "No discussions here." } else { "Nothing here waits on anyone (`all` lists settled ones too)." }.into());
+                        return Ok(if all {
+                            "No discussions here."
+                        } else {
+                            "Nothing here waits on anyone (`all` lists settled ones too)."
+                        }
+                        .into());
                     }
                     let (yours, rest): (Vec<&Discussion>, Vec<&Discussion>) = list.iter().partition(|d| mine(d));
                     let mut out = String::new();
@@ -206,11 +214,22 @@ impl ToolSet for Discussions {
                     }
                     if let Some(kept) = &d.kept {
                         let (_, was) = things.glimpse(&d.on.subject, Some(kept), READ_MOST);
-                        let _ = writeln!(out, "\nAs it was when the discussion started:\n{}", was.map_or_else(|| "  (what was kept couldn't be read)".to_owned(), some_of));
+                        let _ = writeln!(
+                            out,
+                            "\nAs it was when the discussion started:\n{}",
+                            was.map_or_else(|| "  (what was kept couldn't be read)".to_owned(), some_of)
+                        );
                     }
                     out.push_str("\nSaid:\n");
                     for said in &d.said {
-                        let _ = writeln!(out, "- {} {} ({}): {}", harness_contracts::by_to_agent(&said.by), said.kind.words(), when::written(said.at_ms), said.text);
+                        let _ = writeln!(
+                            out,
+                            "- {} {} ({}): {}",
+                            harness_contracts::by_to_agent(&said.by),
+                            said.kind.words(),
+                            when::written(said.at_ms),
+                            said.text
+                        );
                         for changed in &said.changed {
                             let _ = writeln!(out, "    changed {}", changed.what);
                         }
@@ -224,7 +243,8 @@ impl ToolSet for Discussions {
                 let body = text("text").unwrap_or_default();
                 let kind = match text("kind") {
                     None => DiscussionKind::Question,
-                    Some(kind) => serde_json::from_value::<DiscussionKind>(Value::String(kind.clone())).map_err(|_| ServiceError::InvalidOp(format!("{kind:?} isn't a kind: question or change_request")))?,
+                    Some(kind) => serde_json::from_value::<DiscussionKind>(Value::String(kind.clone()))
+                        .map_err(|_| ServiceError::InvalidOp(format!("{kind:?} isn't a kind: question or change_request")))?,
                 };
                 let ask = text("ask");
                 blocking(Box::new(move || {
@@ -242,7 +262,9 @@ impl ToolSet for Discussions {
                         return Err(ServiceError::Forbidden("asking the user tells them, which this session can't (user.notify)".into()));
                     }
                     if asked != lead && asked != nah_discussions::USER && !may(nah_access::Capability::SlotsMessage) {
-                        return Err(ServiceError::Forbidden(format!("asking {asked} is messaging it, which this session can't (slots.message): ask the lead")));
+                        return Err(ServiceError::Forbidden(format!(
+                            "asking {asked} is messaging it, which this session can't (slots.message): ask the lead"
+                        )));
                     }
                     if !crate::discussing::may_read(&reach.slots, &reach.access, &reach.discussions, &asked, &subject) {
                         return Err(ServiceError::Forbidden(format!("{asked} can't read that (another slot's chat): ask one that can")));
@@ -254,7 +276,10 @@ impl ToolSet for Discussions {
             }
             "discussion_reply" | "discussion_answer" => {
                 let (id, body) = (id?, text("text").unwrap_or_default());
-                let changed: Vec<String> = args["changed"].as_array().map(|a| a.iter().filter_map(|c| c.as_str().map(str::to_owned)).collect()).unwrap_or_default();
+                let changed: Vec<String> = args["changed"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|c| c.as_str().map(str::to_owned)).collect())
+                    .unwrap_or_default();
                 let answering = name == "discussion_answer";
                 blocking(Box::new(move || {
                     let d = discussions.get(&id).map_err(refused)?;

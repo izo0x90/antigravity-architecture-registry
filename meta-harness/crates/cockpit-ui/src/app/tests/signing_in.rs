@@ -26,7 +26,11 @@ fn instance(app: &mut CockpitApp, waiting: Option<harness_contracts::SignInWaiti
 fn leader(ctx: &egui::Context, app: &mut CockpitApp, keys_after: &str) {
     // A tap: pressed, then let go (held, it's a modifier).
     frame(ctx, app, press(egui::Key::Space, false));
-    frame(ctx, app, vec![egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed: false, repeat: false, modifiers: Default::default() }]);
+    frame(
+        ctx,
+        app,
+        vec![egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed: false, repeat: false, modifiers: Default::default() }],
+    );
     keys(ctx, app, keys_after);
 }
 
@@ -62,7 +66,10 @@ fn a_sign_in_has_the_typing_box_while_it_waits_enter_and_keys_included() {
     assert!(calls.iter().any(|c| c == "POST /api/instances/i/auth/complete"), "{calls:?}");
     assert!(!calls.iter().any(|c| c.ends_with("/prompt")), "nothing typed went to the agent: {calls:?}");
     let body = bodies(&app, "POST /api/instances/i/auth/complete").pop().unwrap();
-    assert_eq!((body["id"].clone(), body["response"].clone()), (serde_json::json!(7), serde_json::json!("http://127.0.0.1:4000/?code=4/abc")));
+    assert_eq!(
+        (body["id"].clone(), body["response"].clone()),
+        (serde_json::json!(7), serde_json::json!("http://127.0.0.1:4000/?code=4/abc"))
+    );
     // Nothing typed for it was ever saved as a draft.
     assert_eq!(saved(&app).as_deref(), Some("half a message "));
 

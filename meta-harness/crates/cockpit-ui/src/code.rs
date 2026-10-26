@@ -8,12 +8,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use arch_graph::{Alignment, Component, ComponentId, FileView, RelationKind};
-use harness_contracts::changes::{Comparison, FileChanges, Group as ChangeGroup, LineKind};
 use egui::{Frame, Pos2, Rect, RichText, Stroke, Vec2};
+use harness_contracts::changes::{Comparison, FileChanges, Group as ChangeGroup, LineKind};
 
 use crate::actions::{Action, ActionProvider, Group, MINOR, Param, RunCx, Style};
-use crate::hosted::{Status, Tone};
 use crate::feedback::FeedbackInspectorState;
+use crate::hosted::{Status, Tone};
 use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 use crate::viewport::{Go, Show, Stop, Viewport};
 
@@ -84,7 +84,8 @@ pub enum Mark {
 /// The components defined in the file, without the file itself (whose span
 /// holds every other one).
 fn definitions(view: &FileView) -> Vec<&Component> {
-    let in_file: Vec<&Component> = view.components.iter().map(|(c, _)| c).filter(|c| c.anchor.as_ref().is_some_and(|a| a.file.as_str() == view.file)).collect();
+    let in_file: Vec<&Component> =
+        view.components.iter().map(|(c, _)| c).filter(|c| c.anchor.as_ref().is_some_and(|a| a.file.as_str() == view.file)).collect();
     let whole_file = in_file.iter().find(|c| {
         let span = c.anchor.as_ref().map(|a| a.span).unwrap_or_default();
         in_file.iter().all(|o| o.anchor.as_ref().is_some_and(|a| span.contains(&a.span)))
@@ -121,7 +122,9 @@ fn mark_look(mark: &Mark) -> (&'static str, egui::Color32, String, &ComponentId)
     match mark {
         Mark::Starts(id, name) => (egui_phosphor::regular::DIAMOND, colors().accent, format!("{name}: show in the graph"), id),
         Mark::Placeholder(id) => (egui_phosphor::regular::HOURGLASS, colors().warn, "placeholder body (skeleton)".to_owned(), id),
-        Mark::MissingCall(id, target) => (egui_phosphor::regular::WARNING, colors().error, format!("planned call to {target} is missing"), id),
+        Mark::MissingCall(id, target) => {
+            (egui_phosphor::regular::WARNING, colors().error, format!("planned call to {target} is missing"), id)
+        }
     }
 }
 
@@ -348,7 +351,11 @@ impl CodeViewerState {
     /// A name (or its gutter mark) clicked: the user is on its component
     /// now; with the go-to modifier, its code.
     pub(crate) fn name_clicked(&mut self, id: ComponentId, go_to: bool) {
-        self.asks.push(if go_to { Ask::Show { target: Target::Component(id), in_: Some(crate::kind::BufferKind::Code) } } else { Ask::Follow(id) });
+        self.asks.push(if go_to {
+            Ask::Show { target: Target::Component(id), in_: Some(crate::kind::BufferKind::Code) }
+        } else {
+            Ask::Follow(id)
+        });
     }
 
     /// Opens `path` with lines `start..=end` highlighted and scrolled to.
@@ -438,10 +445,22 @@ impl CodeViewerState {
     /// A line drawn with its syntax colours (base color where nothing says).
     fn coloured(&self, idx: usize, base: egui::Color32, background: Option<egui::Color32>) -> egui::text::LayoutJob {
         let font = egui::FontId::monospace(crate::theme::look().text_body);
-        let format = |color: egui::Color32| egui::TextFormat { font_id: font.clone(), color, background: background.unwrap_or(egui::Color32::TRANSPARENT), ..Default::default() };
+        let format = |color: egui::Color32| egui::TextFormat {
+            font_id: font.clone(),
+            color,
+            background: background.unwrap_or(egui::Color32::TRANSPARENT),
+            ..Default::default()
+        };
         let start = line_starts(&self.content).get(idx).copied().unwrap_or(0);
         let highlights = self.analysis.as_ref().filter(|a| !a.stale).map(|a| &a.highlights);
-        crate::highlighter::coloured(&self.content, start..start + self.lines[idx].len(), highlights, |n| self.ui.token(n).and_then(|t| colors().token(t)), base, format)
+        crate::highlighter::coloured(
+            &self.content,
+            start..start + self.lines[idx].len(),
+            highlights,
+            |n| self.ui.token(n).and_then(|t| colors().token(t)),
+            base,
+            format,
+        )
     }
 
     /// Takes what the index knows about the file: marks, definitions, calls.
@@ -450,7 +469,14 @@ impl CodeViewerState {
         self.marks = gutter_marks(&view);
         let mut defs: Vec<Def> = definitions(&view)
             .into_iter()
-            .filter_map(|c| c.anchor.as_ref().map(|a| Def { id: c.id.clone(), name: c.name.clone(), start: a.span.start_line as usize, end: a.span.end_line.max(a.span.start_line) as usize }))
+            .filter_map(|c| {
+                c.anchor.as_ref().map(|a| Def {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    start: a.span.start_line as usize,
+                    end: a.span.end_line.max(a.span.start_line) as usize,
+                })
+            })
             .collect();
         defs.sort_by_key(|d| (d.start, std::cmp::Reverse(d.end)));
         self.defs = defs;
@@ -591,7 +617,11 @@ impl CodeViewerState {
     /// lines shown in place take a row, not a stop); and which line each is.
     fn stops(&self) -> (Vec<Stop>, Vec<usize>) {
         let pitch = self.pitch;
-        self.rows().iter().enumerate().filter_map(|(r, row)| if let Row::Line(l) = row { Some((Stop::new(r as f32 * pitch, pitch), *l)) } else { None }).unzip()
+        self.rows()
+            .iter()
+            .enumerate()
+            .filter_map(|(r, row)| if let Row::Line(l) = row { Some((Stop::new(r as f32 * pitch, pitch), *l)) } else { None })
+            .unzip()
     }
 
     /// Moves by the shared rules from where the cursor is.
@@ -611,7 +641,9 @@ impl CodeViewerState {
     /// can't.
     fn step_def(&mut self, forward: bool, count: usize, same_level: bool) -> Result<(), String> {
         let line = self.target_line.unwrap_or(1);
-        let parent_of = |d: &Def| self.defs.iter().filter(|o| o.start <= d.start && d.end <= o.end && *o != d).min_by_key(|o| o.end - o.start).map(|o| o.start);
+        let parent_of = |d: &Def| {
+            self.defs.iter().filter(|o| o.start <= d.start && d.end <= o.end && *o != d).min_by_key(|o| o.end - o.start).map(|o| o.start)
+        };
         let level = if same_level { self.def_at(line).map(parent_of) } else { None };
         let mut starts: Vec<usize> = self.defs.iter().filter(|d| level.is_none_or(|l| parent_of(d) == l)).map(|d| d.start).collect();
         starts.dedup();
@@ -667,7 +699,13 @@ impl CodeViewerState {
                     self.load_file(&path_edit, None);
                 }
                 if let Some(target) = self.target_line {
-                    ui.label(RichText::new(format!(":{}", target)).monospace().strong().size(crate::theme::look().text_body).color(colors().warn));
+                    ui.label(
+                        RichText::new(format!(":{}", target))
+                            .monospace()
+                            .strong()
+                            .size(crate::theme::look().text_body)
+                            .color(colors().warn),
+                    );
                 }
             });
             let end_y = ui.cursor().min.y;
@@ -678,25 +716,43 @@ impl CodeViewerState {
             // Out of date: the marks and spans below come from an older read.
             if self.out_of_date && !self.lines.is_empty() {
                 let (_, _, color) = crate::status::look("stale");
-                Frame::NONE.fill(color.gamma_multiply(0.12)).stroke(Stroke::new(crate::theme::look().line_thin, color.gamma_multiply(0.5))).corner_radius(crate::theme::look().radius_m).inner_margin(crate::theme::margin2(crate::theme::look().space_m, crate::theme::look().space_s)).show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        crate::status::chip(ui, "stale", None);
-                        ui.label(RichText::new("This file changed since it was indexed: marks and spans may be off.").size(crate::theme::look().text_body).color(colors().text));
+                Frame::NONE
+                    .fill(color.gamma_multiply(0.12))
+                    .stroke(Stroke::new(crate::theme::look().line_thin, color.gamma_multiply(0.5)))
+                    .corner_radius(crate::theme::look().radius_m)
+                    .inner_margin(crate::theme::margin2(crate::theme::look().space_m, crate::theme::look().space_s))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            crate::status::chip(ui, "stale", None);
+                            ui.label(
+                                RichText::new("This file changed since it was indexed: marks and spans may be off.")
+                                    .size(crate::theme::look().text_body)
+                                    .color(colors().text),
+                            );
+                        });
                     });
-                });
             }
 
             if let Some(err) = &self.error_message {
-                Frame::NONE.fill(colors().error_bg).stroke(Stroke::new(crate::theme::look().line_thin, colors().error)).corner_radius(crate::theme::look().radius_m).inner_margin(crate::theme::margin(crate::theme::look().space_m)).show(ui, |ui| {
-                    ui.label(RichText::new(format!("Error: {}", err)).color(colors().error).size(crate::theme::look().text_body));
-                });
+                Frame::NONE
+                    .fill(colors().error_bg)
+                    .stroke(Stroke::new(crate::theme::look().line_thin, colors().error))
+                    .corner_radius(crate::theme::look().radius_m)
+                    .inner_margin(crate::theme::margin(crate::theme::look().space_m))
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(format!("Error: {}", err)).color(colors().error).size(crate::theme::look().text_body));
+                    });
                 return;
             }
 
             if self.lines.is_empty() && !self.is_loading {
                 ui.vertical_centered(|ui| {
                     ui.add_space(crate::theme::look().space_xxxl);
-                    ui.label(RichText::new("No file open: type a path above, or go to one from the graph.").size(crate::theme::look().text_label).color(colors().muted));
+                    ui.label(
+                        RichText::new("No file open: type a path above, or go to one from the graph.")
+                            .size(crate::theme::look().text_label)
+                            .color(colors().muted),
+                    );
                 });
                 return;
             }
@@ -705,7 +761,9 @@ impl CodeViewerState {
             // code share the row, so marks always sit next to their line.
             let row_height = ui.text_style_height(&egui::TextStyle::Monospace).max(14.0).max(self.row_h);
             let mut measured: f32 = 0.0;
-            let gutter_w = ui.fonts_mut(|f| f.layout_no_wrap("00000".into(), egui::FontId::monospace(crate::theme::look().text_body), colors().faint).size().x) + 3.0 * 16.0;
+            let gutter_w = ui.fonts_mut(|f| {
+                f.layout_no_wrap("00000".into(), egui::FontId::monospace(crate::theme::look().text_body), colors().faint).size().x
+            }) + 3.0 * 16.0;
             self.char_w = ui.fonts_mut(|f| f.glyph_width(&egui::FontId::monospace(crate::theme::look().text_body), 'x'));
             let mut clicked: Option<ComponentId> = None;
             let mut put_cursor: Option<usize> = None;
@@ -760,41 +818,71 @@ impl CodeViewerState {
                     let idx = line_no - 1;
                     let highlighted = self.in_highlight(line_no);
                     let on_cursor = self.target_line == Some(line_no);
-                    let folded = self.defs.iter().filter(|d| d.start == line_no && self.folds.contains(&d.start)).map(|d| d.end - d.start).max();
+                    let folded =
+                        self.defs.iter().filter(|d| d.start == line_no && self.folds.contains(&d.start)).map(|d| d.end - d.start).max();
                     let row = ui.horizontal(|ui| {
                         ui.set_min_height(row_height);
                         ui.spacing_mut().item_spacing.x = 2.0;
-                        ui.allocate_ui_with_layout(Vec2::new(gutter_w, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.set_min_width(gutter_w);
-                            self.change_marks(ui, line_no, last, row_height);
-                            let color = if on_cursor || highlighted { colors().warn } else { colors().faint };
-                            let sense = if self.fingers { egui::Sense::click() } else { egui::Sense::click_and_drag() };
-                            let number = ui.add(egui::Label::new(RichText::new(format!("{line_no:>4}")).monospace().size(crate::theme::look().text_body).color(color)).sense(sense));
-                            if number.drag_started() {
-                                drag_from = Some(line_no);
-                            }
-                            if number.clicked() {
-                                put_cursor = Some(line_no);
-                            }
-                            if pointer.is_some_and(|p| number.rect.y_range().contains(p.y)) {
-                                drag_to = Some(line_no);
-                            }
-                            for mark in self.marks.get(&line_no).into_iter().flatten() {
-                                let (icon, color, tip, id) = mark_look(mark);
-                                if ui.add(egui::Label::new(RichText::new(icon).size(crate::theme::look().text_body).color(color)).sense(egui::Sense::click())).on_hover_text(tip).clicked() {
-                                    clicked = Some(id.clone());
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(gutter_w, row_height),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_min_width(gutter_w);
+                                self.change_marks(ui, line_no, last, row_height);
+                                let color = if on_cursor || highlighted { colors().warn } else { colors().faint };
+                                let sense = if self.fingers { egui::Sense::click() } else { egui::Sense::click_and_drag() };
+                                let number = ui.add(
+                                    egui::Label::new(
+                                        RichText::new(format!("{line_no:>4}"))
+                                            .monospace()
+                                            .size(crate::theme::look().text_body)
+                                            .color(color),
+                                    )
+                                    .sense(sense),
+                                );
+                                if number.drag_started() {
+                                    drag_from = Some(line_no);
                                 }
-                            }
-                        });
+                                if number.clicked() {
+                                    put_cursor = Some(line_no);
+                                }
+                                if pointer.is_some_and(|p| number.rect.y_range().contains(p.y)) {
+                                    drag_to = Some(line_no);
+                                }
+                                for mark in self.marks.get(&line_no).into_iter().flatten() {
+                                    let (icon, color, tip, id) = mark_look(mark);
+                                    if ui
+                                        .add(
+                                            egui::Label::new(RichText::new(icon).size(crate::theme::look().text_body).color(color))
+                                                .sense(egui::Sense::click()),
+                                        )
+                                        .on_hover_text(tip)
+                                        .clicked()
+                                    {
+                                        clicked = Some(id.clone());
+                                    }
+                                }
+                            },
+                        );
                         ui.separator();
                         let in_selection = selected.is_some_and(|(a, b)| a <= line_no && line_no <= b);
-                        let background = if highlighted { Some(colors().warn_bg) } else if on_cursor || in_selection { Some(colors().selection) } else { None };
+                        let background = if highlighted {
+                            Some(colors().warn_bg)
+                        } else if on_cursor || in_selection {
+                            Some(colors().selection)
+                        } else {
+                            None
+                        };
                         let job = self.coloured(idx, if highlighted { colors().warn } else { colors().text }, background);
                         let label = ui.add(egui::Label::new(job).sense(egui::Sense::click()));
                         drawn.push((line_no, label.rect.left_top()));
                         // The name under the pointer: what it is; ctrl+click goes to it.
                         let col_at = |x: f32| ((x - label.rect.left()) / self.char_w.max(1.0)).floor().max(0.0) as usize;
-                        let hovered = label.hover_pos().and_then(|p| self.name_at(line_no, col_at(p.x))).filter(|n| !n.definition).map(|n| n.target.clone());
+                        let hovered = label
+                            .hover_pos()
+                            .and_then(|p| self.name_at(line_no, col_at(p.x)))
+                            .filter(|n| !n.definition)
+                            .map(|n| n.target.clone());
                         let label = match &hovered {
                             Some(id) => label.on_hover_text(self.describe(id)),
                             None => label,
@@ -812,7 +900,18 @@ impl CodeViewerState {
                             opened = true;
                         }
                         if let Some(hidden) = folded
-                            && ui.add(egui::Label::new(RichText::new(format!("  … {hidden} lines")).monospace().size(crate::theme::look().text_small).color(colors().muted)).sense(egui::Sense::click())).on_hover_text("Unfold").clicked()
+                            && ui
+                                .add(
+                                    egui::Label::new(
+                                        RichText::new(format!("  … {hidden} lines"))
+                                            .monospace()
+                                            .size(crate::theme::look().text_small)
+                                            .color(colors().muted),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                )
+                                .on_hover_text("Unfold")
+                                .clicked()
                         {
                             unfold = Some(line_no);
                         }
@@ -936,13 +1035,57 @@ impl ActionProvider for CodeViewerState {
     fn actions(&self) -> Vec<Action> {
         let mut out = self.moves();
         if !self.defs.is_empty() {
-            out.push(Action::new("code.next_def", "Next definition", "The next function, type or module in this file", CodeCommand::Def { forward: true }).focused().group(Group::Navigate));
-            out.push(Action::new("code.prev_def", "Previous definition", "The function, type or module before, in this file", CodeCommand::Def { forward: false }).focused().group(Group::Navigate));
+            out.push(
+                Action::new(
+                    "code.next_def",
+                    "Next definition",
+                    "The next function, type or module in this file",
+                    CodeCommand::Def { forward: true },
+                )
+                .focused()
+                .group(Group::Navigate),
+            );
+            out.push(
+                Action::new(
+                    "code.prev_def",
+                    "Previous definition",
+                    "The function, type or module before, in this file",
+                    CodeCommand::Def { forward: false },
+                )
+                .focused()
+                .group(Group::Navigate),
+            );
         }
-        out.push(Action::new("code.deleted", "Show deleted lines in place", "Lines the comparison removed, struck through where they were", CodeCommand::Deleted).focused().param(Param::Toggle { on: self.show_deleted }).setting("Deleted lines", None).group(Group::View).importance(MINOR));
-        out.push(Action::new("code.reload", "Load the file again", "Reads the file from disk again (it changed outside)", CodeCommand::Reload).focused().group(Group::View).importance(MINOR));
+        out.push(
+            Action::new(
+                "code.deleted",
+                "Show deleted lines in place",
+                "Lines the comparison removed, struck through where they were",
+                CodeCommand::Deleted,
+            )
+            .focused()
+            .param(Param::Toggle { on: self.show_deleted })
+            .setting("Deleted lines", None)
+            .group(Group::View)
+            .importance(MINOR),
+        );
+        out.push(
+            Action::new("code.reload", "Load the file again", "Reads the file from disk again (it changed outside)", CodeCommand::Reload)
+                .focused()
+                .group(Group::View)
+                .importance(MINOR),
+        );
         // Its file, read into the index again (from anywhere).
-        out.push(Action::new("index.file", format!("Re-read {}", self.current_file), "The index reads this file again (what it says of it is out of date)", CodeCommand::Reread).group(Group::Act).importance(MINOR));
+        out.push(
+            Action::new(
+                "index.file",
+                format!("Re-read {}", self.current_file),
+                "The index reads this file again (what it says of it is out of date)",
+                CodeCommand::Reread,
+            )
+            .group(Group::Act)
+            .importance(MINOR),
+        );
         out
     }
 
@@ -999,7 +1142,11 @@ impl crate::buffer::Buffer for CodeViewerState {
     /// A definition in its file: its name and lines.
     fn knows(&self, id: &ComponentId) -> Option<crate::buffer::Known> {
         let def = self.defs.iter().find(|d| &d.id == id)?;
-        Some(crate::buffer::Known { name: Some(def.name.clone()), code: Some(Some((self.current_file.clone(), def.start as u32, def.end as u32))), ..Default::default() })
+        Some(crate::buffer::Known {
+            name: Some(def.name.clone()),
+            code: Some(Some((self.current_file.clone(), def.start as u32, def.end as u32))),
+            ..Default::default()
+        })
     }
 
     fn describe(&self) -> String {
@@ -1039,13 +1186,19 @@ impl crate::nav::DrawsThings for CodeViewerState {
     /// is drawn.
     fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<Rect> {
         let (first, last) = match subject {
-            harness_contracts::Subject::CodeLines { path, first, last, .. } if *path == self.current_file => (*first as usize, *last as usize),
+            harness_contracts::Subject::CodeLines { path, first, last, .. } if *path == self.current_file => {
+                (*first as usize, *last as usize)
+            }
             harness_contracts::Subject::CodeFile { path } if *path == self.current_file => (1, self.lines.len()),
             harness_contracts::Subject::Component { id, .. } => self.defs.iter().find(|d| d.id == *id).map(|d| (d.start, d.end))?,
             _ => return None,
         };
         let pitch = if self.row_h > 0.0 { self.row_h } else { 16.0 };
-        self.drawn.iter().filter(|(line, _)| (first..=last).contains(line)).map(|(_, at)| Rect::from_min_size(*at, Vec2::new(1.0, pitch))).reduce(|a, b| a.union(b))
+        self.drawn
+            .iter()
+            .filter(|(line, _)| (first..=last).contains(line))
+            .map(|(_, at)| Rect::from_min_size(*at, Vec2::new(1.0, pitch)))
+            .reduce(|a, b| a.union(b))
     }
 }
 
@@ -1126,9 +1279,26 @@ impl Navigable for CodeViewerState {
         let file = Thing::named(harness_contracts::Subject::CodeFile { path: self.current_file.clone() }, &known);
         // Lines selected, the cursor in them: those lines, then the file.
         if let Some((first, last)) = self.selected().filter(|(a, b)| (*a..=*b).contains(&(line as usize))) {
-            return Things { at: vec![Thing::named(harness_contracts::Subject::CodeLines { path: self.current_file.clone(), first: first as u32, last: last as u32, snapshot: String::new() }, &known), file], unit: 0 };
+            return Things {
+                at: vec![
+                    Thing::named(
+                        harness_contracts::Subject::CodeLines {
+                            path: self.current_file.clone(),
+                            first: first as u32,
+                            last: last as u32,
+                            snapshot: String::new(),
+                        },
+                        &known,
+                    ),
+                    file,
+                ],
+                unit: 0,
+            };
         }
-        let mut at = vec![Thing::named(harness_contracts::Subject::CodeLines { path: self.current_file.clone(), first: line, last: line, snapshot: String::new() }, &known)];
+        let mut at = vec![Thing::named(
+            harness_contracts::Subject::CodeLines { path: self.current_file.clone(), first: line, last: line, snapshot: String::new() },
+            &known,
+        )];
         let mut around: Vec<&Def> = self.defs.iter().filter(|d| d.start <= line as usize && line as usize <= d.end).collect();
         around.sort_by_key(|d| d.end - d.start);
         at.extend(around.iter().map(|d| Thing::named(harness_contracts::Subject::Component { id: d.id.clone(), was: None }, &known)));
@@ -1143,7 +1313,12 @@ impl Navigable for CodeViewerState {
 
     fn target(&self) -> Option<Target> {
         let line = self.target_line?;
-        Some(Target::Line { file: self.current_file.clone(), line, within: self.def_at(line).map(|d| d.id.clone()), refs: self.refs_at(line) })
+        Some(Target::Line {
+            file: self.current_file.clone(),
+            line,
+            within: self.def_at(line).map(|d| d.id.clone()),
+            refs: self.refs_at(line),
+        })
     }
 
     /// By the shared rules (a line a jump goes to is put in the middle).
@@ -1202,11 +1377,26 @@ impl Navigable for CodeViewerState {
             Fold::OpenAll => self.folds.clear(),
             Fold::CloseAll => {
                 // Outermost definitions (folding them hides the rest).
-                self.folds = self.defs.iter().filter(|d| d.end > d.start && !self.defs.iter().any(|o| o != *d && o.start <= d.start && d.end <= o.end && o.end > o.start)).map(|d| d.start).collect();
+                self.folds = self
+                    .defs
+                    .iter()
+                    .filter(|d| {
+                        d.end > d.start && !self.defs.iter().any(|o| o != *d && o.start <= d.start && d.end <= o.end && o.end > o.start)
+                    })
+                    .map(|d| d.start)
+                    .collect();
             }
             Fold::Open | Fold::Close | Fold::Toggle => {
                 let line = self.target_line.unwrap_or(1);
-                let Some(def) = self.defs.iter().filter(|d| d.start <= line && line <= d.end && d.end > d.start).min_by_key(|d| d.end - d.start).cloned() else { return };
+                let Some(def) = self
+                    .defs
+                    .iter()
+                    .filter(|d| d.start <= line && line <= d.end && d.end > d.start)
+                    .min_by_key(|d| d.end - d.start)
+                    .cloned()
+                else {
+                    return;
+                };
                 let open = match fold {
                     Fold::Open => true,
                     Fold::Close => false,
@@ -1241,7 +1431,10 @@ impl Navigable for CodeViewerState {
             .flat_map(|(line, at)| {
                 self.symbols_on(*line).into_iter().map(move |s| {
                     let min = *at + Vec2::new(s.col as f32 * self.char_w, 0.0);
-                    Spot { key: format!("{}:{}", s.line, s.col), rect: Rect::from_min_size(min, Vec2::new(s.len.max(1) as f32 * self.char_w, pitch)) }
+                    Spot {
+                        key: format!("{}:{}", s.line, s.col),
+                        rect: Rect::from_min_size(min, Vec2::new(s.len.max(1) as f32 * self.char_w, pitch)),
+                    }
                 })
             })
             .collect()
@@ -1293,13 +1486,27 @@ pub(crate) mod tests {
     fn render(ctx: &egui::Context, code: &mut CodeViewerState, h: f32) -> Vec<(String, egui::Rect)> {
         let net = NetClient::new("http://localhost:0");
         let mut feedback = FeedbackInspectorState::default();
-        let output = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, h))), ..Default::default() }, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
-                code.tick(&net, ctx);
-                code.draw(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut asked });
-            });
-        });
+        let output = ctx.run(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, h))), ..Default::default() },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
+                    code.tick(&net, ctx);
+                    code.draw(
+                        ui,
+                        &mut feedback,
+                        &mut RunCx {
+                            net: &net,
+                            ctx,
+                            input_mode: &mut mode,
+                            at: crate::keymap::Host::Panel(0),
+                            note: &mut note,
+                            asked: &mut asked,
+                        },
+                    );
+                });
+            },
+        );
         placed(&output)
     }
 
@@ -1309,7 +1516,9 @@ pub(crate) mod tests {
         ctx.set_fonts(crate::theme::font_definitions(&Default::default()));
         let mut code = CodeViewerState::default();
         // Lines of different heights' worth of content, marks deep in the file.
-        let text: String = (1..=40).map(|i| if i % 3 == 0 { format!("    let value_{i} = compute({i}); // a longer line\n") } else { format!("fn f{i}() {{}}\n") }).collect();
+        let text: String = (1..=40)
+            .map(|i| if i % 3 == 0 { format!("    let value_{i} = compute({i}); // a longer line\n") } else { format!("fn f{i}() {{}}\n") })
+            .collect();
         code.set_content(text);
         let id = ComponentId::new("rust:x::f29");
         code.marks.insert(29, vec![Mark::Starts(id.clone(), "f29".into()), Mark::Placeholder(id)]);
@@ -1317,9 +1526,15 @@ pub(crate) mod tests {
         for _ in 0..2 {
             shapes = render(&ctx, &mut code, 2000.0);
         }
-        let row_of = |needle: &str| shapes.iter().find(|(t, _)| t == needle).map(|(_, r)| r.center().y).unwrap_or_else(|| panic!("{needle} not drawn"));
+        let row_of = |needle: &str| {
+            shapes.iter().find(|(t, _)| t == needle).map(|(_, r)| r.center().y).unwrap_or_else(|| panic!("{needle} not drawn"))
+        };
         let line = row_of("fn f29() {}");
-        for (what, needle) in [("line number", "  29"), ("component mark", egui_phosphor::regular::DIAMOND), ("placeholder mark", egui_phosphor::regular::HOURGLASS)] {
+        for (what, needle) in [
+            ("line number", "  29"),
+            ("component mark", egui_phosphor::regular::DIAMOND),
+            ("placeholder mark", egui_phosphor::regular::HOURGLASS),
+        ] {
             assert!((row_of(needle) - line).abs() < 4.0, "{what} is on line 29's row ({} vs {line})", row_of(needle));
         }
         assert_eq!(row_marks(&code.marks, 29).len(), 2);
@@ -1340,7 +1555,15 @@ pub(crate) mod tests {
         // (as load_file leaves it; no network in tests). An earlier load's
         // reply arriving late for another file must not use up the scroll.
         code.current_file = "src/big.rs".into();
-        *code.analysis_inbox.lock().unwrap() = Some(("Cargo.toml".into(), Ok(arch_graph::code::CodeAnalysis { file: "Cargo.toml".into(), text: "[package]\nname = \"x\"\n".into(), stale: true, ..Default::default() })));
+        *code.analysis_inbox.lock().unwrap() = Some((
+            "Cargo.toml".into(),
+            Ok(arch_graph::code::CodeAnalysis {
+                file: "Cargo.toml".into(),
+                text: "[package]\nname = \"x\"\n".into(),
+                stale: true,
+                ..Default::default()
+            }),
+        ));
         code.target_line = Some(700);
         code.highlight = Some((700, 700));
         code.show = Some(Show::Middle);
@@ -1401,7 +1624,14 @@ pub(crate) mod tests {
             description: String::new(),
             status: Status::Existing,
             stage: Stage::Implemented,
-            anchor: Some(CodeAnchor { language: "rust".into(), file: RepoPath::new("src/a.rs").unwrap(), symbol: name.into(), syntax_kind: "function_item".into(), span: Span { start_line: start, end_line: end, start_byte: start_byte as u32, end_byte: end_byte as u32 }, content_hash: String::new() }),
+            anchor: Some(CodeAnchor {
+                language: "rust".into(),
+                file: RepoPath::new("src/a.rs").unwrap(),
+                symbol: name.into(),
+                syntax_kind: "function_item".into(),
+                span: Span { start_line: start, end_line: end, start_byte: start_byte as u32, end_byte: end_byte as u32 },
+                content_hash: String::new(),
+            }),
             proposed: None,
             signature: None,
             schemas: Default::default(),
@@ -1417,9 +1647,19 @@ pub(crate) mod tests {
         let mut code = CodeViewerState { current_file: "src/a.rs".into(), ..Default::default() };
         code.set_content(text.into());
         let starts = line_starts(text);
-        let mut call = Relation::new(RelationKind::Calls, ComponentId::new("rust:a::run"), ComponentId::new("rust:a::step"), arch_graph::Provenance::OBSERVED);
+        let mut call = Relation::new(
+            RelationKind::Calls,
+            ComponentId::new("rust:a::run"),
+            ComponentId::new("rust:a::step"),
+            arch_graph::Provenance::OBSERVED,
+        );
         call.sites = vec![Span { start_line: 3, end_line: 3, start_byte: (starts[2] + 8) as u32, end_byte: (starts[2] + 12) as u32 }];
-        let mut log = Relation::new(RelationKind::Calls, ComponentId::new("rust:a::run"), ComponentId::new("rust:x::log"), arch_graph::Provenance::OBSERVED);
+        let mut log = Relation::new(
+            RelationKind::Calls,
+            ComponentId::new("rust:a::run"),
+            ComponentId::new("rust:x::log"),
+            arch_graph::Provenance::OBSERVED,
+        );
         log.sites = vec![Span { start_line: 4, end_line: 4, start_byte: (starts[3] + 8) as u32, end_byte: (starts[3] + 11) as u32 }];
         let view = FileView {
             file: "src/a.rs".into(),
@@ -1434,15 +1674,31 @@ pub(crate) mod tests {
         code.set_file_view(view);
         // The analysis: where each name is and what it refers to.
         let at = |line: usize, col: usize| (starts[line - 1] + col) as u32;
-        let named = |line, col, len: u32, id: &str, definition| arch_graph::code::Occurrence { start: at(line, col), end: at(line, col) + len, target: Some(ComponentId::new(id)), definition };
+        let named = |line, col, len: u32, id: &str, definition| arch_graph::code::Occurrence {
+            start: at(line, col),
+            end: at(line, col) + len,
+            target: Some(ComponentId::new(id)),
+            definition,
+        };
         code.set_analysis(arch_graph::code::CodeAnalysis {
             file: "src/a.rs".into(),
             text: code.content.clone(),
             content_hash: String::new(),
             stale: false,
             highlights: arch_graph::code::Highlights { names: vec!["keyword".into()], runs: vec![[at(2, 4), at(2, 6), 0]] },
-            occurrences: vec![named(2, 7, 3, "rust:a::run", true), named(3, 8, 4, "rust:a::step", false), named(4, 8, 3, "rust:x::log", false), named(6, 7, 4, "rust:a::step", true)],
-            targets: vec![arch_graph::code::CodeTarget { id: ComponentId::new("rust:a::step"), name: "step".into(), type_name: "function".into(), at: Some(("src/a.rs".into(), 6)), signature: Some("step()".into()) }],
+            occurrences: vec![
+                named(2, 7, 3, "rust:a::run", true),
+                named(3, 8, 4, "rust:a::step", false),
+                named(4, 8, 3, "rust:x::log", false),
+                named(6, 7, 4, "rust:a::step", true),
+            ],
+            targets: vec![arch_graph::code::CodeTarget {
+                id: ComponentId::new("rust:a::step"),
+                name: "step".into(),
+                type_name: "function".into(),
+                at: Some(("src/a.rs".into(), 6)),
+                signature: Some("step()".into()),
+            }],
             view: FileView::default(),
         });
         code
@@ -1452,7 +1708,8 @@ pub(crate) mod tests {
     fn the_cursor_knows_its_definition_and_calls_and_steps_between_definitions() {
         let mut code = sample();
         assert_eq!(code.defs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["run", "step"], "the file itself isn't a definition");
-        let refs: Vec<(usize, usize, usize, &str)> = code.names.iter().filter(|n| !n.definition).map(|n| (n.line, n.col, n.len, n.target.as_str())).collect();
+        let refs: Vec<(usize, usize, usize, &str)> =
+            code.names.iter().filter(|n| !n.definition).map(|n| (n.line, n.col, n.len, n.target.as_str())).collect();
         assert_eq!(refs, [(3, 8, 4, "rust:a::step"), (4, 8, 3, "rust:x::log")], "where each name is, from the analysis");
         code.motion(Motion::Line(3), 1);
         let Some(Target::Line { within, refs, .. }) = code.target() else { panic!() };
@@ -1490,7 +1747,10 @@ pub(crate) mod tests {
         code.ui = crate::config::UiConfig::with_overrides("").unwrap().code;
         let job = code.coloured(1, egui::Color32::WHITE, None);
         let keyword = colors().token(code.ui.token("keyword").unwrap()).unwrap();
-        assert!(job.sections.iter().any(|s| s.format.color == keyword && &job.text[s.byte_range.clone()] == "fn"), "fn is coloured as a keyword");
+        assert!(
+            job.sections.iter().any(|s| s.format.color == keyword && &job.text[s.byte_range.clone()] == "fn"),
+            "fn is coloured as a keyword"
+        );
     }
 
     #[test]
@@ -1524,8 +1784,17 @@ pub(crate) mod tests {
         assert_eq!(code.target_line, Some(3));
     }
 
-    fn hunk(old_start: u32, old_lines: u32, new_start: u32, new_lines: u32, lines: &[(LineKind, Option<u32>, &str)]) -> harness_contracts::changes::Hunk {
-        let lines = lines.iter().map(|(kind, new, text)| harness_contracts::changes::DiffLine { kind: *kind, old: None, new: *new, text: (*text).to_owned() }).collect();
+    fn hunk(
+        old_start: u32,
+        old_lines: u32,
+        new_start: u32,
+        new_lines: u32,
+        lines: &[(LineKind, Option<u32>, &str)],
+    ) -> harness_contracts::changes::Hunk {
+        let lines = lines
+            .iter()
+            .map(|(kind, new, text)| harness_contracts::changes::DiffLine { kind: *kind, old: None, new: *new, text: (*text).to_owned() })
+            .collect();
         harness_contracts::changes::Hunk { old_start, old_lines, new_start, new_lines, lines }
     }
 
@@ -1570,13 +1839,17 @@ pub(crate) mod tests {
             texts = render(&ctx, &mut code, 400.0);
         }
         let y = |text: &str| texts.iter().find(|(t, _)| t == text).map(|(_, r)| r.top()).unwrap_or_else(|| panic!("{text} isn't drawn"));
-        assert!(y("// gone from the top") < y("let a = 1;") && y("let a = 1;") < y("let b = 1;") && y("let b = 1;") < y("let b = 2;") && y("let e = 5;") < y("// gone from the end"));
+        assert!(
+            y("// gone from the top") < y("let a = 1;")
+                && y("let a = 1;") < y("let b = 1;")
+                && y("let b = 1;") < y("let b = 2;")
+                && y("let e = 5;") < y("// gone from the end")
+        );
         // The cursor walks the file's lines only.
         code.motion(Motion::First, 1);
         code.motion(Motion::Down, 1);
         assert_eq!(code.target_line, Some(2));
     }
-
 
     #[test]
     fn its_changes_are_asked_for_the_files_against_the_comparison_and_again_when_the_list_is_read_again() {
@@ -1585,8 +1858,13 @@ pub(crate) mod tests {
         code.current_file = "a.rs".into();
         code.comparing = (Comparison::default(), 1);
         code.follow_changes(&net, &ctx);
-        let on_files = Comparison { from: harness_contracts::changes::Point::Rev("HEAD".into()), to: harness_contracts::changes::Point::Files };
-        assert_eq!(code.changes_asked, Some((on_files.clone(), "a.rs".into(), 1)), "staged and unstaged together: the files against the last commit");
+        let on_files =
+            Comparison { from: harness_contracts::changes::Point::Rev("HEAD".into()), to: harness_contracts::changes::Point::Files };
+        assert_eq!(
+            code.changes_asked,
+            Some((on_files.clone(), "a.rs".into(), 1)),
+            "staged and unstaged together: the files against the last commit"
+        );
         code.changes_asked = Some((on_files.clone(), "a.rs".into(), 0));
         code.comparing = (Comparison::default(), 1);
         code.follow_changes(&net, &ctx);
@@ -1594,5 +1872,4 @@ pub(crate) mod tests {
         code.set_content("let a = 1;\n".into());
         assert_eq!(code.changes_asked, None, "new text: asked again");
     }
-
 }

@@ -210,7 +210,21 @@ mod tests {
     #[test]
     fn the_shipped_roles_are_as_agreed() {
         let access = Access::defaults();
-        assert_eq!(access.role("lead"), Some(set(&["view.read", "view.drive", "plan.edit", "code.check", "slots.observe", "slots.manage", "slots.message", "user.notify", "tags.edit", "discuss"])));
+        assert_eq!(
+            access.role("lead"),
+            Some(set(&[
+                "view.read",
+                "view.drive",
+                "plan.edit",
+                "code.check",
+                "slots.observe",
+                "slots.manage",
+                "slots.message",
+                "user.notify",
+                "tags.edit",
+                "discuss"
+            ]))
+        );
         assert_eq!(access.role("sub"), Some(set(&["view.read", "slots.report", "user.notify", "tags.edit", "discuss"])));
         assert_eq!(access.role("worker"), Some(set(&["view.read", "plan.edit", "code.check", "user.notify", "tags.edit", "discuss"])));
         assert_eq!(access.role("external"), Some(set(&[])), "an agent with no key gets nothing unless a project grants it");

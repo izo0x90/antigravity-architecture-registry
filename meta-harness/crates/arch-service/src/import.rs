@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use arch_graph::{
-    Component, ComponentId, Graph, ImplementationSpec, Invariant, InvariantKind, LogicStep, Plan, PlanId, ProposedLocation, Provenance, Relation,
-    RelationKind, RepoPath, Schemas, SideEffect, Stage, Status, Task, ToolRef, TypeSystem, Workflow,
+    Component, ComponentId, Graph, ImplementationSpec, Invariant, InvariantKind, LogicStep, Plan, PlanId, ProposedLocation, Provenance,
+    Relation, RelationKind, RepoPath, Schemas, SideEffect, Stage, Status, Task, ToolRef, TypeSystem, Workflow,
 };
 use code_analyzer::{PackSet, module_symbol};
 use serde::{Deserialize, Serialize};
@@ -218,7 +218,12 @@ fn normalize(text: &str) -> String {
 /// The old id without its parent's prefix (`math_validator_validate` under
 /// `math_validator` is `validate`).
 fn leaf(old_id: &str, parent: Option<&str>) -> String {
-    parent.and_then(|p| old_id.strip_prefix(p)).and_then(|rest| rest.strip_prefix('_')).filter(|rest| !rest.is_empty()).unwrap_or(old_id).to_owned()
+    parent
+        .and_then(|p| old_id.strip_prefix(p))
+        .and_then(|rest| rest.strip_prefix('_'))
+        .filter(|rest| !rest.is_empty())
+        .unwrap_or(old_id)
+        .to_owned()
 }
 
 /// Parents before children; parent loops are broken (and reported).
@@ -234,7 +239,10 @@ fn parent_order(components: &BTreeMap<String, OldComponent>, unmapped: &mut Vec<
                 break;
             }
             if chain.contains(&id) {
-                unmapped.push(Unmapped { item: format!("component {id}"), reason: format!("parent loop {} -> {id}; imported without a parent", chain.join(" -> ")) });
+                unmapped.push(Unmapped {
+                    item: format!("component {id}"),
+                    reason: format!("parent loop {} -> {id}; imported without a parent", chain.join(" -> ")),
+                });
                 broken.insert(id.clone());
                 break;
             }
@@ -268,7 +276,11 @@ fn closest_type(types: &TypeSystem, rule: &OldTypeRule) -> Option<String> {
             }
         })
         .map(|t| {
-            let agree = [t.allows_signature == rule.allows_signature, t.executable == rule.is_executable_caller, t.allows_properties == rule.allows_properties];
+            let agree = [
+                t.allows_signature == rule.allows_signature,
+                t.executable == rule.is_executable_caller,
+                t.allows_properties == rule.allows_properties,
+            ];
             (agree.iter().filter(|a| **a).count() as u8, t.lineage.len(), t.name)
         })
         .collect();
@@ -276,8 +288,15 @@ fn closest_type(types: &TypeSystem, rule: &OldTypeRule) -> Option<String> {
     candidates.into_iter().next().map(|(_, _, name)| name)
 }
 
-pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &PackSet, types: &TypeSystem) -> Result<(Plan, ImportReport), ServiceError> {
-    let old: OldRegistry = serde_json::from_str(input.json).map_err(|e| ServiceError::InvalidOp(format!("not an old registry document: {e}")))?;
+pub fn import(
+    input: ImportInput<'_>,
+    observed: &Graph,
+    root: &Path,
+    packs: &PackSet,
+    types: &TypeSystem,
+) -> Result<(Plan, ImportReport), ServiceError> {
+    let old: OldRegistry =
+        serde_json::from_str(input.json).map_err(|e| ServiceError::InvalidOp(format!("not an old registry document: {e}")))?;
     let mut plan = Plan::new(input.plan.0.as_str(), &input.title);
     plan.description = "Imported from the old registry document.".into();
     let mut report = ImportReport { plan: input.plan.clone(), components: Vec::new(), unmapped: Vec::new(), tools: ToolCatalog::default() };
@@ -293,13 +312,21 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
         let generic = closest_type(types, rule);
         match (generic, used.contains(name.as_str())) {
             (Some(g), true) => {
-                report.unmapped.push(Unmapped { item: format!("type {name}"), reason: format!("not a known type; its components are imported as '{g}' (add a specialization to keep the name)") });
+                report.unmapped.push(Unmapped {
+                    item: format!("type {name}"),
+                    reason: format!("not a known type; its components are imported as '{g}' (add a specialization to keep the name)"),
+                });
                 type_map.insert(name.clone(), g);
             }
-            (Some(_), false) => report.unmapped.push(Unmapped { item: format!("type {name}"), reason: "not a known type and unused; its rules aren't imported".into() }),
+            (Some(_), false) => report
+                .unmapped
+                .push(Unmapped { item: format!("type {name}"), reason: "not a known type and unused; its rules aren't imported".into() }),
             (None, used_here) => report.unmapped.push(Unmapped {
                 item: format!("type {name}"),
-                reason: format!("no type here has its rules (signature/executable or properties){}", if used_here { "; its components aren't imported" } else { "" }),
+                reason: format!(
+                    "no type here has its rules (signature/executable or properties){}",
+                    if used_here { "; its components aren't imported" } else { "" }
+                ),
             }),
         }
     }
@@ -325,7 +352,11 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
         if let Some(p) = parent_old
             && !placed.contains_key(p)
         {
-            let reason = if old.components.contains_key(p) { format!("its parent {p} wasn't imported") } else { format!("its parent {p} doesn't exist") };
+            let reason = if old.components.contains_key(p) {
+                format!("its parent {p} wasn't imported")
+            } else {
+                format!("its parent {p} doesn't exist")
+            };
             report.unmapped.push(Unmapped { item: format!("component {old_id}"), reason });
             continue;
         }
@@ -347,7 +378,11 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
             (a.is_a(&type_name) || b.is_a(&code.type_name)) && wanted.contains(&normalize(&code.name))
         };
         let candidates: Vec<&Component> = match parent {
-            Some(p) if p.matched => observed.outgoing(&p.id, Some(RelationKind::Contains)).filter_map(|r| observed.component(&r.target)).filter(|code| fits(code)).collect(),
+            Some(p) if p.matched => observed
+                .outgoing(&p.id, Some(RelationKind::Contains))
+                .filter_map(|r| observed.component(&r.target))
+                .filter(|code| fits(code))
+                .collect(),
             Some(_) => Vec::new(),
             None => observed
                 .components()
@@ -358,12 +393,22 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
         let candidates: Vec<&Component> = candidates.into_iter().filter(|code| !taken.contains(&code.id)).collect();
         if candidates.len() > 1 {
             let ids: Vec<String> = candidates.iter().map(|c| c.id.to_string()).collect();
-            report.unmapped.push(Unmapped { item: format!("component {old_id}"), reason: format!("matches several components in the code ({}); imported as new", ids.join(", ")) });
+            report.unmapped.push(Unmapped {
+                item: format!("component {old_id}"),
+                reason: format!("matches several components in the code ({}); imported as new", ids.join(", ")),
+            });
         }
         let place = match candidates.as_slice() {
             [code] => {
                 let anchor = code.anchor.as_ref().ok_or_else(|| ServiceError::Corrupt(format!("{} matched without an anchor", code.id)))?;
-                Placed { id: code.id.clone(), symbol: anchor.symbol.clone(), language: anchor.language.clone(), file: Some(anchor.file.clone()), name: code.name.clone(), matched: true }
+                Placed {
+                    id: code.id.clone(),
+                    symbol: anchor.symbol.clone(),
+                    language: anchor.language.clone(),
+                    file: Some(anchor.file.clone()),
+                    name: code.name.clone(),
+                    matched: true,
+                }
             }
             _ => {
                 let (language, file, base) = match (parent, &file_hint) {
@@ -371,7 +416,10 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
                     (None, Some(f)) => match packs.for_path(Path::new(f.as_str())) {
                         Some(pack) => (Some(pack.name().to_owned()), Some(f.clone()), Some(module_symbol(root, f, pack))),
                         None => {
-                            report.unmapped.push(Unmapped { item: format!("component {old_id} location"), reason: format!("no language pack handles {f}") });
+                            report.unmapped.push(Unmapped {
+                                item: format!("component {old_id} location"),
+                                reason: format!("no language pack handles {f}"),
+                            });
                             (input.language.clone(), None, None)
                         }
                     },
@@ -393,7 +441,10 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
             }
         };
         if !taken.insert(place.id.clone()) {
-            report.unmapped.push(Unmapped { item: format!("component {old_id}"), reason: format!("maps to {}, which another component already took", place.id) });
+            report.unmapped.push(Unmapped {
+                item: format!("component {old_id}"),
+                reason: format!("maps to {}, which another component already took", place.id),
+            });
             continue;
         }
         placed.insert(old_id.clone(), place);
@@ -406,12 +457,18 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
         let Some(place) = placed.get(old_id) else { continue };
         let c = &old.components[old_id];
         let type_name = type_map[&c.type_name].clone();
-        let mut schema = |value: &Option<Value>, what: &str| value.as_ref().map(|v| convert_refs(v, &names, &format!("component {old_id} {what}"), &mut report.unmapped));
+        let mut schema = |value: &Option<Value>, what: &str| {
+            value.as_ref().map(|v| convert_refs(v, &names, &format!("component {old_id} {what}"), &mut report.unmapped))
+        };
         let schemas = Schemas {
             properties: schema(&c.properties, "properties"),
             inputs: schema(&c.inputs, "inputs"),
             outputs: schema(&c.outputs, "outputs"),
-            side_effects: c.side_effects.iter().map(|s| SideEffect { target: s.target.clone(), description: s.description.clone() }).collect(),
+            side_effects: c
+                .side_effects
+                .iter()
+                .map(|s| SideEffect { target: s.target.clone(), description: s.description.clone() })
+                .collect(),
         };
         let spec = spec(old_id, c, &mut report.unmapped);
         let old_stage = c.stage.as_deref().unwrap_or("declared");
@@ -427,12 +484,18 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
             }
         } else {
             if old_status != "new" {
-                report.unmapped.push(Unmapped { item: format!("component {old_id} status"), reason: format!("was '{old_status}' but no matching code was found; imported as new") });
+                report.unmapped.push(Unmapped {
+                    item: format!("component {old_id} status"),
+                    reason: format!("was '{old_status}' but no matching code was found; imported as new"),
+                });
             }
             (Status::New, Stage::Declared)
         };
         if old_stage != "declared" && stage == Stage::Declared {
-            report.unmapped.push(Unmapped { item: format!("component {old_id} stage"), reason: format!("was '{old_stage}'; approvals aren't imported, so it starts at declared (approve it in the cockpit)") });
+            report.unmapped.push(Unmapped {
+                item: format!("component {old_id} stage"),
+                reason: format!("was '{old_stage}'; approvals aren't imported, so it starts at declared (approve it in the cockpit)"),
+            });
         }
         let description = if normalize(&c.name) == normalize(&place.name) || c.name.trim().is_empty() {
             c.description.clone()
@@ -443,7 +506,12 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
         };
         let parent = c.parent_id.as_ref().and_then(|p| placed.get(p)).map(|p| p.id.clone());
         let proposed = match (&place.file, place.matched) {
-            (Some(file), false) => Some(ProposedLocation { language: place.language.clone(), file: file.clone(), parent: parent.clone(), symbol: place.symbol.clone() }),
+            (Some(file), false) => Some(ProposedLocation {
+                language: place.language.clone(),
+                file: file.clone(),
+                parent: parent.clone(),
+                symbol: place.symbol.clone(),
+            }),
             _ => None,
         };
         plan.components.push(Component {
@@ -466,8 +534,12 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
         }
         if let Some(target) = &c.implements_id {
             match placed.get(target) {
-                Some(t) => plan.relations.push(Relation::new(RelationKind::Implements, place.id.clone(), t.id.clone(), Provenance::PLANNED)),
-                None => report.unmapped.push(Unmapped { item: format!("component {old_id} implements"), reason: format!("{target} wasn't imported") }),
+                Some(t) => {
+                    plan.relations.push(Relation::new(RelationKind::Implements, place.id.clone(), t.id.clone(), Provenance::PLANNED))
+                }
+                None => report
+                    .unmapped
+                    .push(Unmapped { item: format!("component {old_id} implements"), reason: format!("{target} wasn't imported") }),
             }
         }
     }
@@ -477,8 +549,13 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
     for (tree, root_node) in &old.usage_trees {
         let entry = placed.get(&root_node.caller_id).map(|p| p.id.clone());
         match entry {
-            Some(entry) => plan.workflows.push(Workflow { name: tree.clone(), entry, description: root_node.description.clone().unwrap_or_default() }),
-            None => report.unmapped.push(Unmapped { item: format!("usage tree {tree}"), reason: format!("its caller {} wasn't imported", root_node.caller_id) }),
+            Some(entry) => {
+                plan.workflows.push(Workflow { name: tree.clone(), entry, description: root_node.description.clone().unwrap_or_default() })
+            }
+            None => report.unmapped.push(Unmapped {
+                item: format!("usage tree {tree}"),
+                reason: format!("its caller {} wasn't imported", root_node.caller_id),
+            }),
         }
         calls(root_node, 0, &lookup, &mut plan, &mut report.unmapped);
     }
@@ -486,7 +563,13 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
     for (name, tool) in &old.validation_tools {
         report.tools.tools.insert(
             name.clone(),
-            ToolDef { description: String::new(), executable: tool.executable.clone(), default_args: tool.default_args.clone(), applies_to: Vec::new(), timeout_secs: 300 },
+            ToolDef {
+                description: String::new(),
+                executable: tool.executable.clone(),
+                default_args: tool.default_args.clone(),
+                applies_to: Vec::new(),
+                timeout_secs: 300,
+            },
         );
     }
     let mut seen = BTreeSet::new();
@@ -516,12 +599,18 @@ fn calls(node: &OldUsageNode, order: u32, cx: &Lookup<'_>, plan: &mut Plan, unma
                 call.order = Some(order);
                 call.note = node.description.clone().unwrap_or_default();
                 // What the call site expects travels with the call.
-                let mut schema = |value: &Option<Value>, what: &str| value.as_ref().map(|v| convert_refs(v, cx.names, &format!("{item} {what}"), unmapped));
+                let mut schema = |value: &Option<Value>, what: &str| {
+                    value.as_ref().map(|v| convert_refs(v, cx.names, &format!("{item} {what}"), unmapped))
+                };
                 let expects = Schemas {
                     properties: None,
                     inputs: schema(&node.expected_inputs, "expected_inputs"),
                     outputs: schema(&node.expected_outputs, "expected_outputs"),
-                    side_effects: node.expected_side_effects.iter().map(|s| SideEffect { target: s.target.clone(), description: s.description.clone() }).collect(),
+                    side_effects: node
+                        .expected_side_effects
+                        .iter()
+                        .map(|s| SideEffect { target: s.target.clone(), description: s.description.clone() })
+                        .collect(),
                 };
                 call.expects = (!expects.is_empty()).then_some(expects);
                 plan.relations.push(call);
@@ -530,7 +619,11 @@ fn calls(node: &OldUsageNode, order: u32, cx: &Lookup<'_>, plan: &mut Plan, unma
             }
         }
         (caller, callee) => {
-            let missing: Vec<&str> = [(caller.is_none(), node.caller_id.as_str()), (callee.is_none(), node.component_id.as_str())].into_iter().filter(|(gone, _)| *gone).map(|(_, id)| id).collect();
+            let missing: Vec<&str> = [(caller.is_none(), node.caller_id.as_str()), (callee.is_none(), node.component_id.as_str())]
+                .into_iter()
+                .filter(|(gone, _)| *gone)
+                .map(|(_, id)| id)
+                .collect();
             unmapped.push(Unmapped { item: item.clone(), reason: format!("{} wasn't imported", missing.join(" and ")) });
         }
     }
@@ -553,7 +646,10 @@ fn spec(old_id: &str, c: &OldComponent, unmapped: &mut Vec<Unmapped>) -> Option<
                 Some(k) => match serde_json::from_value(Value::String(k.to_owned())) {
                     Ok(kind) => kind,
                     Err(_) => {
-                        unmapped.push(Unmapped { item: format!("component {old_id} invariant {}", i.name), reason: format!("unknown kind '{k}'; imported as {}", InvariantKind::default()) });
+                        unmapped.push(Unmapped {
+                            item: format!("component {old_id} invariant {}", i.name),
+                            reason: format!("unknown kind '{k}'; imported as {}", InvariantKind::default()),
+                        });
                         InvariantKind::default()
                     }
                 },
@@ -566,11 +662,22 @@ fn spec(old_id: &str, c: &OldComponent, unmapped: &mut Vec<Unmapped>) -> Option<
         logic_steps: old
             .logic_steps
             .iter()
-            .map(|s| LogicStep { sequence: s.sequence, name: s.name.clone(), description: s.description.clone(), algorithm: s.algorithm.clone(), complexity: s.complexity.clone(), check: None })
+            .map(|s| LogicStep {
+                sequence: s.sequence,
+                name: s.name.clone(),
+                description: s.description.clone(),
+                algorithm: s.algorithm.clone(),
+                complexity: s.complexity.clone(),
+                check: None,
+            })
             .collect(),
         invariants,
         tasks,
-        validation: old.validation.iter().map(|v| ToolRef { tool: v.tool_id.clone(), targets: v.targets.clone(), args: v.args.clone() }).collect(),
+        validation: old
+            .validation
+            .iter()
+            .map(|v| ToolRef { tool: v.tool_id.clone(), targets: v.targets.clone(), args: v.args.clone() })
+            .collect(),
     })
 }
 
@@ -584,7 +691,10 @@ fn convert_refs(schema: &Value, names: &BTreeMap<String, String>, at: &str, unma
             {
                 match names.get(title) {
                     Some(name) => return serde_json::json!({ "$ref": name }),
-                    None => unmapped.push(Unmapped { item: at.to_owned(), reason: format!("refers to '{title}', which wasn't imported; kept as written") }),
+                    None => unmapped.push(Unmapped {
+                        item: at.to_owned(),
+                        reason: format!("refers to '{title}', which wasn't imported; kept as written"),
+                    }),
                 }
             }
             Value::Object(map.iter().map(|(k, v)| (k.clone(), convert_refs(v, names, at, unmapped))).collect())
@@ -649,9 +759,17 @@ mod tests {
         .to_string();
         let input = ImportInput { plan: PlanId::new("mapped").unwrap(), title: "Mapped".into(), json: &old, language: Some("rust".into()) };
         let (plan, report) = import(input, &Graph::default(), dir.path(), &crate::shipped_packs(), &types).unwrap();
-        let type_of = |old: &str| plan.component(&report.components.iter().find(|c| c.old_id == old).unwrap().id).unwrap().type_name.clone();
-        assert_eq!((type_of("act"), type_of("spec_op"), type_of("dto")), ("routine".to_owned(), "contract_op".to_owned(), "record".to_owned()), "the most general type with the same rules");
+        let type_of =
+            |old: &str| plan.component(&report.components.iter().find(|c| c.old_id == old).unwrap().id).unwrap().type_name.clone();
+        assert_eq!(
+            (type_of("act"), type_of("spec_op"), type_of("dto")),
+            ("routine".to_owned(), "contract_op".to_owned(), "record".to_owned()),
+            "the most general type with the same rules"
+        );
         let reasons: Vec<String> = report.unmapped.iter().map(|u| format!("{}: {}", u.item, u.reason)).collect();
-        assert!(reasons.iter().any(|r| r.starts_with("type function:") && r.contains("'routine'")), "each mapping is reported: {reasons:#?}");
+        assert!(
+            reasons.iter().any(|r| r.starts_with("type function:") && r.contains("'routine'")),
+            "each mapping is reported: {reasons:#?}"
+        );
     }
 }

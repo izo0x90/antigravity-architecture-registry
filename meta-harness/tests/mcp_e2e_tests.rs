@@ -14,7 +14,24 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     assert_eq!(init["result"]["serverInfo"]["name"], "nah-architecture");
     let tools = mcp.rpc("tools/list", json!({})).await;
     let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    for expected in ["ingest", "list_types", "search", "inspect", "view", "changes", "navigate", "plan_list", "plan_create", "plan_import", "plan_edit", "plan_validate", "contract", "verify", "run_tools", "review"] {
+    for expected in [
+        "ingest",
+        "list_types",
+        "search",
+        "inspect",
+        "view",
+        "changes",
+        "navigate",
+        "plan_list",
+        "plan_create",
+        "plan_import",
+        "plan_edit",
+        "plan_validate",
+        "contract",
+        "verify",
+        "run_tools",
+        "review",
+    ] {
         assert!(names.contains(&expected), "{expected} in {names:?}");
     }
     assert!(!names.iter().any(|n| n.contains("approve")), "agents can't approve");
@@ -30,7 +47,10 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     let (err, text) = mcp.tool("search", json!({ "query": "save" })).await;
     assert!(!err && text.contains("rust:sample::store::Store::save [function · src/store.rs:10 Existing/Implemented] save"), "{text}");
     let (err, text) = mcp.tool("search", json!({ "query": "to_uppercase", "kind": "text" })).await;
-    assert!(!err && text.contains("src/util.rs:2 · in shout: s.to_uppercase()  (card rust:sample::util::shout Existing/Implemented)"), "{text}");
+    assert!(
+        !err && text.contains("src/util.rs:2 · in shout: s.to_uppercase()  (card rust:sample::util::shout Existing/Implemented)"),
+        "{text}"
+    );
     let (err, text) = mcp.tool("search", json!({ "query": "util", "kind": "files" })).await;
     assert!(!err && text.contains("src/util.rs"), "{text}");
     let (err, text) = mcp.tool("search", json!({ "query": "zzz" })).await;
@@ -50,7 +70,12 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     let (err, _) = mcp.tool("navigate", json!({ "view": "calls", "select": "rust:sample::run" })).await;
     assert!(!err);
     let event = events.recv().await.unwrap().event;
-    assert!(matches!(event, harness_contracts::ClientEvent::Architecture { event: arch_graph::ArchEvent::ViewRequested { by: arch_graph::Requester::Agent, .. } }));
+    assert!(matches!(
+        event,
+        harness_contracts::ClientEvent::Architecture {
+            event: arch_graph::ArchEvent::ViewRequested { by: arch_graph::Requester::Agent, .. }
+        }
+    ));
     let (err, _) = mcp.tool("navigate", json!({ "select": "rust:ghost" })).await;
     assert!(err);
 
@@ -80,7 +105,16 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     assert!(err, "not a plan component");
 
     // The user approves in the cockpit; then the agent lays a skeleton and verifies.
-    state.project.arch.approve(&arch_graph::PlanId::new("val").unwrap(), &arch_graph::ComponentId::new("rust:sample::validate"), arch_graph::Stage::ArchApproved, &arch_service::Actor::User { name: "izo".into() }).unwrap();
+    state
+        .project
+        .arch
+        .approve(
+            &arch_graph::PlanId::new("val").unwrap(),
+            &arch_graph::ComponentId::new("rust:sample::validate"),
+            arch_graph::Stage::ArchApproved,
+            &arch_service::Actor::User { name: "izo".into() },
+        )
+        .unwrap();
     let (err, text) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "skeleton" })).await;
     assert!(!err && text.contains("Not yet") && text.contains("isn't in the code"), "{text}");
     let lib = state.project.arch.root().join("src/lib.rs");
@@ -93,7 +127,16 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     // Implementing needs the user's plan approval (after the skeleton is fine).
     let (err, text) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "implemented" })).await;
     assert!(!err && text.contains("approves its plan"), "{text}");
-    state.project.arch.approve(&arch_graph::PlanId::new("val").unwrap(), &arch_graph::ComponentId::new("rust:sample::validate"), arch_graph::Stage::PlanApproved, &arch_service::Actor::User { name: "izo".into() }).unwrap();
+    state
+        .project
+        .arch
+        .approve(
+            &arch_graph::PlanId::new("val").unwrap(),
+            &arch_graph::ComponentId::new("rust:sample::validate"),
+            arch_graph::Stage::PlanApproved,
+            &arch_service::Actor::User { name: "izo".into() },
+        )
+        .unwrap();
     let (err, text) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "implemented" })).await;
     assert!(!err && text.contains("is now Implemented") && text.contains("nothing pending"), "{text}");
     let (err, _) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "declared" })).await;
@@ -106,7 +149,9 @@ async fn every_tool_works_through_the_mcp_endpoint() {
 async fn tool_results_end_with_stage_specific_next_steps() {
     use arch_graph::{Component, ComponentId, Plan, ProposedLocation, RepoPath, Stage, Status};
     let mut plan = Plan::new("p", "P");
-    for (name, stage) in [("a", Stage::Declared), ("b", Stage::ArchApproved), ("c", Stage::PlanApproved), ("d", Stage::Skeleton), ("e", Stage::Implemented)] {
+    for (name, stage) in
+        [("a", Stage::Declared), ("b", Stage::ArchApproved), ("c", Stage::PlanApproved), ("d", Stage::Skeleton), ("e", Stage::Implemented)]
+    {
         plan.components.push(Component {
             id: ComponentId::new(format!("rust:x::{name}")),
             name: name.into(),
@@ -115,7 +160,12 @@ async fn tool_results_end_with_stage_specific_next_steps() {
             status: Status::New,
             stage,
             anchor: None,
-            proposed: Some(ProposedLocation { language: "rust".into(), file: RepoPath::new("src/x.rs").unwrap(), parent: None, symbol: format!("x::{name}") }),
+            proposed: Some(ProposedLocation {
+                language: "rust".into(),
+                file: RepoPath::new("src/x.rs").unwrap(),
+                parent: None,
+                symbol: format!("x::{name}"),
+            }),
             signature: None,
             schemas: Default::default(),
             spec: None,
@@ -123,7 +173,14 @@ async fn tool_results_end_with_stage_specific_next_steps() {
         });
     }
     let types = arch_graph::TypeSystem::defaults().unwrap();
-    let steps = |plan: &Plan, only: Option<&ComponentId>| meta_harness::mcp::text::next_steps(plan, &arch_graph::Graph::merge(arch_graph::Graph::default(), std::slice::from_ref(plan)), &types, only);
+    let steps = |plan: &Plan, only: Option<&ComponentId>| {
+        meta_harness::mcp::text::next_steps(
+            plan,
+            &arch_graph::Graph::merge(arch_graph::Graph::default(), std::slice::from_ref(plan)),
+            &types,
+            only,
+        )
+    };
     let text = steps(&plan, None);
     assert!(text.contains("rust:x::a (Declared): write its spec") && text.contains("let the user approve the architecture in the cockpit"));
     assert!(text.contains("rust:x::b (ArchApproved): either lay the skeleton in src/x.rs"));
@@ -133,7 +190,12 @@ async fn tool_results_end_with_stage_specific_next_steps() {
     let only = steps(&plan, Some(&ComponentId::new("rust:x::e")));
     assert!(only.contains("nothing pending"));
     // Dependencies first; work that depends on unfinished parts waits.
-    plan.relations.push(arch_graph::Relation::new(arch_graph::RelationKind::Calls, ComponentId::new("rust:x::c"), ComponentId::new("rust:x::a"), arch_graph::Provenance::PLANNED));
+    plan.relations.push(arch_graph::Relation::new(
+        arch_graph::RelationKind::Calls,
+        ComponentId::new("rust:x::c"),
+        ComponentId::new("rust:x::a"),
+        arch_graph::Provenance::PLANNED,
+    ));
     let text = steps(&plan, None);
     assert!(text.contains("rust:x::c (PlanApproved): waits: Implemented needs rust:x::a at Skeleton or later; it is Declared"), "{text}");
     assert!(text.find("rust:x::a").unwrap() < text.find("rust:x::c").unwrap(), "what c calls comes first");
@@ -196,7 +258,9 @@ async fn inspect_opens_any_card_a_view_shows_and_says_how_links_are_known() {
 /// The next view request the server sends the user.
 async fn next_view(events: &mut tokio::sync::broadcast::Receiver<harness_contracts::Stamped>) -> arch_graph::ArchEvent {
     loop {
-        if let harness_contracts::ClientEvent::Architecture { event: event @ arch_graph::ArchEvent::ViewRequested { .. } } = events.recv().await.unwrap().event {
+        if let harness_contracts::ClientEvent::Architecture { event: event @ arch_graph::ArchEvent::ViewRequested { .. } } =
+            events.recv().await.unwrap().event
+        {
             return event;
         }
     }
@@ -221,7 +285,11 @@ async fn the_agent_moves_the_users_view_to_a_plan_and_back_to_code() {
     assert!(!err, "{text}");
     graph.on_event(&next_view(&mut events).await);
     let request = graph.nav.request();
-    assert_eq!((request.source, request.view), (arch_graph::Source::Code, arch_graph::tree::ViewKind::Calls), "back to the code, in the same view");
+    assert_eq!(
+        (request.source, request.view),
+        (arch_graph::Source::Code, arch_graph::tree::ViewKind::Calls),
+        "back to the code, in the same view"
+    );
 }
 
 #[tokio::test]
@@ -255,7 +323,12 @@ async fn reads_take_a_source_over_rest_and_mcp() {
     let (status, body) = common::http(addr, "GET", "/api/search?q=validate&source=plan:val", None).await;
     assert!(status == 200 && body.contains("rust:sample::validate"), "{status} {body}");
     // The old argument is refused over REST too, never quietly ignored.
-    for old in ["/api/arch/components/rust:sample::validate?plan=val", "/api/graph/details/rust:sample::validate?plan=val", "/api/search?q=validate&plan=val", "/api/arch/file?path=src/lib.rs&plan=val"] {
+    for old in [
+        "/api/arch/components/rust:sample::validate?plan=val",
+        "/api/graph/details/rust:sample::validate?plan=val",
+        "/api/search?q=validate&plan=val",
+        "/api/arch/file?path=src/lib.rs&plan=val",
+    ] {
         let (status, body) = common::http(addr, "GET", old, None).await;
         assert!(status == 400 && body.contains("plan"), "{old}: {status} {body}");
     }
@@ -271,16 +344,38 @@ async fn each_role_sees_and_may_use_only_its_tools() {
     let service = &state.project.mcp_state.service;
     let as_role = |role: &str| McpCaller { principal: Principal::agent(role), slot: None, label: role.into() };
     let names = |who: &Principal| service.tools_for(who).iter().map(|t| t.name.clone()).collect::<Vec<_>>();
-    let reads = ["ingest", "list_types", "search", "inspect", "view", "changes", "plan_list", "contract", "cockpit_read", "cockpit_actions", "terminals", "terminal_read", "tags", "tag_read", "tag_find"];
+    let reads = [
+        "ingest",
+        "list_types",
+        "search",
+        "inspect",
+        "view",
+        "changes",
+        "plan_list",
+        "contract",
+        "cockpit_read",
+        "cockpit_actions",
+        "terminals",
+        "terminal_read",
+        "tags",
+        "tag_read",
+        "tag_find",
+    ];
     assert!(names(&Principal::agent("external")).is_empty(), "an agent with no key: nothing, unless a project grants it");
     // The slots' tools come before the terminals', the tags' after them,
     // then the discussions'.
     let mut sub = reads.map(String::from).to_vec();
     sub.splice(10..10, ["tell_lead".into(), "tell_user".into()]);
-    sub.extend(["tag", "untag", "tag_edit", "thing_read", "discussions", "discussion_read", "discuss", "discussion_reply", "discussion_answer"].map(String::from));
+    sub.extend(
+        ["tag", "untag", "tag_edit", "thing_read", "discussions", "discussion_read", "discuss", "discussion_reply", "discussion_answer"]
+            .map(String::from),
+    );
     assert_eq!(names(&Principal::agent("sub")), sub, "a sub-slot reads, reports to the lead and the user, tags and discusses");
     let lead = names(&Principal::agent("lead"));
-    assert!(lead.len() == 42 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself and typing into terminals: {lead:?}");
+    assert!(
+        lead.len() == 42 && !lead.contains(&"tell_lead".to_owned()),
+        "the lead has every tool but reporting to itself and typing into terminals: {lead:?}"
+    );
     assert!(!lead.contains(&"terminal_type".to_owned()), "typing into the user's terminals is no role's unless granted");
     assert!(names(&Principal::Anonymous).is_empty());
 
@@ -313,7 +408,11 @@ async fn the_lead_runs_sub_slots_and_a_sub_slot_reports_back() {
     let (err, text) = lead.tool("slot_send", json!({ "slot": "lead", "text": "hi" })).await;
     assert!(err && text.contains("that's you"), "{text}");
 
-    let thread = sub.current_thread().cloned().or_else(|| state.harness.slots.get(&sub.id).and_then(|s| s.current_thread().cloned())).expect("its session runs");
+    let thread = sub
+        .current_thread()
+        .cloned()
+        .or_else(|| state.harness.slots.get(&sub.id).and_then(|s| s.current_thread().cloned()))
+        .expect("its session runs");
     let mut helper = Mcp::as_session(addr, &thread).await;
     let (err, text) = helper.tool("tell_lead", json!({ "text": "done: 3 files" })).await;
     assert!(!err && text.starts_with("Delivered"), "{text}");

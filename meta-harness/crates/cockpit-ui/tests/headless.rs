@@ -22,7 +22,8 @@ fn frames_render_and_leader_opens() {
     let ctx = egui::Context::default();
     let mut app = CockpitApp::new("http://127.0.0.1:9", std::sync::Arc::new(NoAlerts));
     let input = |events: Vec<egui::Event>| egui::RawInput { events, ..Default::default() };
-    let space = |pressed| egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed, repeat: false, modifiers: Default::default() };
+    let space =
+        |pressed| egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed, repeat: false, modifiers: Default::default() };
     for _ in 0..3 {
         let _ = ctx.run(input(Vec::new()), |ctx| app.frame(ctx));
     }

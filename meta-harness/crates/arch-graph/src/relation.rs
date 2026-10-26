@@ -94,7 +94,20 @@ pub struct Relation {
 
 impl Relation {
     pub fn new(kind: RelationKind, source: ComponentId, target: ComponentId, provenance: Provenance) -> Self {
-        Self { kind, source, target, provenance, order: None, sites: Vec::new(), ports: None, note: String::new(), expects: None, deferred: false, data: None, proven_by: None }
+        Self {
+            kind,
+            source,
+            target,
+            provenance,
+            order: None,
+            sites: Vec::new(),
+            ports: None,
+            note: String::new(),
+            expects: None,
+            deferred: false,
+            data: None,
+            proven_by: None,
+        }
     }
 
     /// One relation per kind and endpoint pair (data flows also per port pair).
@@ -136,7 +149,6 @@ impl Relation {
             self.proven_by = other.proven_by.clone();
         }
     }
-
 }
 
 #[cfg(test)]

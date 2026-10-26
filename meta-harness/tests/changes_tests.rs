@@ -10,7 +10,12 @@ use common::{Mcp, fixture_architecture, http, spawn_app_with};
 use harness_contracts::changes::{ChangeList, ComponentChangeList, FileChanges, Group, LineKind};
 
 fn git(root: &Path, args: &[&str]) {
-    let ok = std::process::Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).current_dir(root).output().unwrap();
+    let ok = std::process::Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(args)
+        .current_dir(root)
+        .output()
+        .unwrap();
     assert!(ok.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&ok.stderr));
 }
 
@@ -54,11 +59,13 @@ async fn a_project_outside_git_says_so_and_still_compares_two_texts() {
     let (status, body) = http(addr, "GET", "/api/changes", None).await;
     assert_eq!(status, 404, "{body}");
     assert!(body.contains("git repository"), "{body}");
-    let pairs = serde_json::json!({ "pairs": [{ "old": "a\nb\n", "new": "a\nB\n", "context": 1 }, { "old": "", "new": "x\n" }] }).to_string();
+    let pairs =
+        serde_json::json!({ "pairs": [{ "old": "a\nb\n", "new": "a\nB\n", "context": 1 }, { "old": "", "new": "x\n" }] }).to_string();
     let (status, body) = http(addr, "POST", "/api/changes/texts", Some(&pairs)).await;
     assert_eq!(status, 200, "{body}");
     let compared: Vec<Vec<harness_contracts::changes::Hunk>> = serde_json::from_str(&body).unwrap();
-    let kinds: Vec<Vec<(LineKind, &str)>> = compared.iter().map(|hunks| hunks.iter().flat_map(|h| &h.lines).map(|l| (l.kind, l.text.as_str())).collect()).collect();
+    let kinds: Vec<Vec<(LineKind, &str)>> =
+        compared.iter().map(|hunks| hunks.iter().flat_map(|h| &h.lines).map(|l| (l.kind, l.text.as_str())).collect()).collect();
     assert_eq!(kinds, [vec![(LineKind::Context, "a"), (LineKind::Removed, "b"), (LineKind::Added, "B")], vec![(LineKind::Added, "x")]]);
     let big = serde_json::json!({ "pairs": [{ "old": "x".repeat(3 * 1024 * 1024), "new": "" }] }).to_string();
     let (status, _) = http(addr, "POST", "/api/changes/texts", Some(&big)).await;
@@ -75,7 +82,8 @@ async fn changes_land_on_the_components_whose_lines_they_touch_and_out_of_date_f
     let (status, body) = http(addr, "GET", "/api/changes/components", None).await;
     assert_eq!(status, 200, "{body}");
     let list: ComponentChangeList = serde_json::from_str(&body).unwrap();
-    let changed: Vec<(&str, u32, u32)> = list.components.iter().map(|c| (c.component.rsplit("::").next().unwrap(), c.added, c.removed)).collect();
+    let changed: Vec<(&str, u32, u32)> =
+        list.components.iter().map(|c| (c.component.rsplit("::").next().unwrap(), c.added, c.removed)).collect();
     assert!(changed.contains(&("shout", 1, 1)), "{changed:?}");
     let direct: Vec<&str> = list.components.iter().filter(|c| c.direct).map(|c| c.component.rsplit("::").next().unwrap()).collect();
     assert_eq!(direct, ["shout"], "what holds it changed only in it: {:?}", list.components);
@@ -115,7 +123,11 @@ async fn the_timeline_has_a_window_per_turn_boundary_and_each_turns_changes() {
     let arch = committed();
     let root = arch.root().to_path_buf();
     let (addr, state) = spawn_app_with(arch).await;
-    let turn = |status| ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("u1"), thread_id: ThreadId::new("t1"), ordinal: 1, status, failure: None, usage: None } } };
+    let turn = |status| ClientEvent::Session {
+        event: AdapterEvent::TurnUpdated {
+            turn: Turn { id: TurnId::new("u1"), thread_id: ThreadId::new("t1"), ordinal: 1, status, failure: None, usage: None },
+        },
+    };
     let timeline = |addr| async move {
         let (status, body) = http(addr, "GET", "/api/changes/timeline", None).await;
         assert_eq!(status, 200, "{body}");
@@ -156,14 +168,17 @@ async fn the_user_stages_and_unstages_and_agents_read_changes_but_cannot_stage()
     std::fs::write(&util, "pub fn shout(s: &str) -> String {\n    s.trim().to_uppercase()\n}\n\npub fn helper() {}\n").unwrap();
     arch.refresh(std::slice::from_ref(&util)).unwrap();
     let (addr, _) = spawn_app_with(arch).await;
-    let groups = |body: String| serde_json::from_str::<ChangeList>(&body).unwrap().files.into_iter().map(|f| (f.group, f.path)).collect::<Vec<_>>();
+    let groups =
+        |body: String| serde_json::from_str::<ChangeList>(&body).unwrap().files.into_iter().map(|f| (f.group, f.path)).collect::<Vec<_>>();
     let (status, body) = http(addr, "POST", "/api/changes/stage", Some(r#"{"path":"src/util.rs"}"#)).await;
     assert_eq!(status, 204, "{body}");
     assert_eq!(groups(http(addr, "GET", "/api/changes", None).await.1), [(Group::Staged, "src/util.rs".into())]);
     let (status, _) = http(addr, "POST", "/api/changes/unstage", Some(r#"{"path":"src/util.rs"}"#)).await;
     assert_eq!(status, 204);
     assert_eq!(groups(http(addr, "GET", "/api/changes", None).await.1), [(Group::Unstaged, "src/util.rs".into())]);
-    let (status, body) = http(addr, "POST", "/api/changes/stage", Some(r#"{"path":"src/util.rs","hunk":{"old_start":90,"new_start":90,"context":3}}"#)).await;
+    let (status, body) =
+        http(addr, "POST", "/api/changes/stage", Some(r#"{"path":"src/util.rs","hunk":{"old_start":90,"new_start":90,"context":3}}"#))
+            .await;
     assert_eq!(status, 400, "a change that isn't there: {body}");
     // No agent role may stage; every one may read.
     let access = nah_access::Access::defaults();
@@ -194,7 +209,13 @@ async fn tagged_code_follows_the_saved_file_and_reads_as_it_was_once_changed_or_
     let root = arch.root().to_path_buf();
     let util = root.join("src/util.rs");
     let before = std::fs::read_to_string(&util).unwrap();
-    let shout = arch.graph(&arch_graph::Source::Code).unwrap().components().find(|c| c.name == "shout" && c.anchor.as_ref().is_some_and(|a| a.file.as_str() == "src/util.rs")).map(|c| c.id.clone()).expect("shout in util.rs");
+    let shout = arch
+        .graph(&arch_graph::Source::Code)
+        .unwrap()
+        .components()
+        .find(|c| c.name == "shout" && c.anchor.as_ref().is_some_and(|a| a.file.as_str() == "src/util.rs"))
+        .map(|c| c.id.clone())
+        .expect("shout in util.rs");
     let (addr, state) = spawn_app_with(arch.clone()).await;
     let mut lead = Mcp::lead(addr).await;
     let (error, said) = lead.tool("tag", serde_json::json!({ "tag": "here", "subject": "src/util.rs lines 2-3" })).await;
@@ -204,7 +225,10 @@ async fn tagged_code_follows_the_saved_file_and_reads_as_it_was_once_changed_or_
     let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
     let lines: Vec<&str> = before.lines().collect();
     assert!(read.contains(&format!("1. src/util.rs lines 2-3 (tagged by lead; as it is now):\n{}\n{}", lines[1], lines[2])), "{read}");
-    assert!(read.contains(&format!("2. component {shout} (tagged by lead; as it is now):\n{}", lines[0])), "the component, by its id: {read}");
+    assert!(
+        read.contains(&format!("2. component {shout} (tagged by lead; as it is now):\n{}", lines[0])),
+        "the component, by its id: {read}"
+    );
     // Saved with two lines added before them: tagged where they are now
     // before the index has caught up, they're the same lines (not twice).
     std::fs::write(&util, format!("// one\n// two\n{before}")).unwrap();
@@ -223,11 +247,23 @@ async fn tagged_code_follows_the_saved_file_and_reads_as_it_was_once_changed_or_
     // A change among them: as they were, said so.
     saved(std::fs::read_to_string(&util).unwrap().replacen(lines[1], "    s.trim().to_uppercase()", 1));
     let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
-    assert!(read.contains(&format!("1. src/util.rs lines 4-5 (tagged by lead; as it was when noted: changed or gone since):\n{}\n{}", lines[1], lines[2])), "{read}");
+    assert!(
+        read.contains(&format!(
+            "1. src/util.rs lines 4-5 (tagged by lead; as it was when noted: changed or gone since):\n{}\n{}",
+            lines[1], lines[2]
+        )),
+        "{read}"
+    );
     // The definition deleted: what it was, from where it was when tagged.
     saved("// one\n// two\npub fn helper() {}\n".into());
     let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
-    assert!(read.contains(&format!("2. component {shout} (tagged by lead; as it was when noted: changed or gone since):\n{}\n{}\n{}", lines[0], lines[1], lines[2])), "{read}");
+    assert!(
+        read.contains(&format!(
+            "2. component {shout} (tagged by lead; as it was when noted: changed or gone since):\n{}\n{}\n{}",
+            lines[0], lines[1], lines[2]
+        )),
+        "{read}"
+    );
     // Lines a file doesn't have can't be tagged.
     let (error, said) = lead.tool("tag", serde_json::json!({ "tag": "peek", "subject": "src/util.rs lines 900-901" })).await;
     assert!(error && said.contains("isn't there"), "{said}");

@@ -65,7 +65,10 @@ pub enum Swipe {
 pub enum Gesture {
     LongPress(Pos2),
     /// One finger flicked sideways, starting at `from`.
-    Swipe { way: Swipe, from: Pos2 },
+    Swipe {
+        way: Swipe,
+        from: Pos2,
+    },
 }
 
 impl Swipe {
@@ -216,11 +219,20 @@ mod tests {
         // A quick horizontal flick swipes; a slow drag doesn't.
         g.feed(3, Phase::Start, p(100.0, 300.0), 1.0, &cfg);
         g.feed(3, Phase::Move, p(100.0 + cfg.swipe_min, 305.0), 1.1, &cfg);
-        assert_eq!(g.feed(3, Phase::End, p(100.0 + cfg.swipe_min + 10.0, 305.0), 1.15, &cfg), vec![Gesture::Swipe { way: Swipe::Right, from: p(100.0, 300.0) }]);
+        assert_eq!(
+            g.feed(3, Phase::End, p(100.0 + cfg.swipe_min + 10.0, 305.0), 1.15, &cfg),
+            vec![Gesture::Swipe { way: Swipe::Right, from: p(100.0, 300.0) }]
+        );
         g.feed(4, Phase::Start, p(300.0, 300.0), 2.0, &cfg);
-        assert_eq!(g.feed(4, Phase::End, p(300.0 - cfg.swipe_min - 5.0, 300.0), 2.1, &cfg), vec![Gesture::Swipe { way: Swipe::Left, from: p(300.0, 300.0) }]);
+        assert_eq!(
+            g.feed(4, Phase::End, p(300.0 - cfg.swipe_min - 5.0, 300.0), 2.1, &cfg),
+            vec![Gesture::Swipe { way: Swipe::Left, from: p(300.0, 300.0) }]
+        );
         g.feed(5, Phase::Start, p(300.0, 300.0), 3.0, &cfg);
-        assert!(g.feed(5, Phase::End, p(300.0 - cfg.swipe_min - 5.0, 300.0), 3.0 + cfg.swipe_max_ms / 1000.0 + 0.5, &cfg).is_empty(), "too slow");
+        assert!(
+            g.feed(5, Phase::End, p(300.0 - cfg.swipe_min - 5.0, 300.0), 3.0 + cfg.swipe_max_ms / 1000.0 + 0.5, &cfg).is_empty(),
+            "too slow"
+        );
         assert!(!g.active());
     }
 }

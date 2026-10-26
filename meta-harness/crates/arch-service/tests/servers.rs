@@ -82,14 +82,32 @@ request_timeout_s = 30
     let catalog = nah_packs::Catalog::load(&nah_packs::Distribution::from_dir(&packs_dir).unwrap(), &places).unwrap();
     let mut lock = nah_packs::Lock::default();
     let platform = catalog.platforms.current().unwrap().name.clone();
-    lock.packs.insert("fake-lsp".into(), nah_packs::Installed { pack_version: "1.0.0".into(), tool_version: None, platform, dest: dir.path().join("dest"), sha256: vec![], installed_at: 0 });
+    lock.packs.insert(
+        "fake-lsp".into(),
+        nah_packs::Installed {
+            pack_version: "1.0.0".into(),
+            tool_version: None,
+            platform,
+            dest: dir.path().join("dest"),
+            sha256: vec![],
+            installed_at: 0,
+        },
+    );
     lock.write(&catalog.lock_path).unwrap();
     Setup { root, log, catalog, _dir: dir }
 }
 
 fn open(s: &Setup) -> ArchitectureService {
     let facts = arch_service::open_facts(&s.root, &arch_service::Limits::defaults().unwrap()).unwrap();
-    ArchitectureService::open(&s.root, code_analyzer::PackSet::from_catalog(&s.catalog).unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap().with_servers(&s.catalog)
+    ArchitectureService::open(
+        &s.root,
+        code_analyzer::PackSet::from_catalog(&s.catalog).unwrap(),
+        TypeSystem::defaults().unwrap(),
+        Box::new(MemoryPlans::default()),
+        facts,
+    )
+    .unwrap()
+    .with_servers(&s.catalog)
 }
 
 fn id(s: &str) -> ComponentId {
@@ -111,7 +129,12 @@ fn wait_until(what: &str, mut ok: impl FnMut() -> bool) {
 }
 
 fn asked(log: &Path) -> Vec<String> {
-    std::fs::read_to_string(log).unwrap_or_default().lines().filter_map(|l| l.strip_prefix("definition ")).map(|l| l.split(' ').next().unwrap().to_owned()).collect()
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.strip_prefix("definition "))
+        .map(|l| l.split(' ').next().unwrap().to_owned())
+        .collect()
 }
 
 #[test]
@@ -119,7 +142,9 @@ fn the_server_confirms_links_and_is_asked_only_about_the_changed_and_relinked_fi
     let s = setup(&["--prefer", "src/util.rs"]);
     let service = open(&s);
     service.ingest(&s.root).unwrap();
-    wait_until("run's call to Store::save is confirmed", || proven(&service, "sample::run", "sample::store::Store::save") == Some(Some("fake-lsp 9.9.9".into())));
+    wait_until("run's call to Store::save is confirmed", || {
+        proven(&service, "sample::run", "sample::store::Store::save") == Some(Some("fake-lsp 9.9.9".into()))
+    });
     // What names couldn't settle, the server does: two helpers share the name.
     wait_until("ambiguous() calls util::helper", || proven(&service, "sample::ambiguous", "sample::util::helper").is_some());
     assert!(service.ambiguous_calls().unwrap().iter().all(|c| c.callee != "helper"), "no longer ambiguous");
@@ -128,7 +153,9 @@ fn the_server_confirms_links_and_is_asked_only_about_the_changed_and_relinked_fi
     let util = s.root.join("src/util.rs");
     std::fs::write(&util, std::fs::read_to_string(&util).unwrap().replace("s.to_uppercase()", "s.to_lowercase()")).unwrap();
     let report = service.refresh(std::slice::from_ref(&util)).unwrap();
-    wait_until("the change is confirmed", || !asked(&s.log).is_empty() && proven(&service, "sample::Upper::apply", "sample::util::shout") == Some(Some("fake-lsp 9.9.9".into())));
+    wait_until("the change is confirmed", || {
+        !asked(&s.log).is_empty() && proven(&service, "sample::Upper::apply", "sample::util::shout") == Some(Some("fake-lsp 9.9.9".into()))
+    });
     std::thread::sleep(Duration::from_millis(300));
     let files: std::collections::BTreeSet<String> = asked(&s.log).into_iter().collect();
     assert!(files.contains("src/util.rs"), "{files:?}");
@@ -165,13 +192,17 @@ fn a_link_into_a_changed_file_stays_unconfirmed_until_the_server_answers_again()
     assert_eq!(proven(&service, "sample::run", "sample::store::Store::save"), Some(None), "kept, unconfirmed, while it's asked again");
     assert_eq!(only_the_server(), Some(None), "the server's link is kept, unconfirmed");
     assert!(service.ambiguous_calls().unwrap().iter().all(|c| c.callee != "helper"), "not ambiguous again");
-    wait_until("confirmed again", || proven(&service, "sample::run", "sample::store::Store::save") == Some(Some("fake-lsp 9.9.9".into())) && only_the_server() == Some(Some("fake-lsp 9.9.9".into())));
+    wait_until("confirmed again", || {
+        proven(&service, "sample::run", "sample::store::Store::save") == Some(Some("fake-lsp 9.9.9".into()))
+            && only_the_server() == Some(Some("fake-lsp 9.9.9".into()))
+    });
 }
 
 #[test]
 fn an_answer_in_the_repo_at_no_component_says_local() {
     let s = setup(&[]);
-    std::fs::write(s.root.join("src/generic.rs"), "pub fn first<Item: Clone>(items: &[Item]) -> Item {\n    items[0].clone()\n}\n").unwrap();
+    std::fs::write(s.root.join("src/generic.rs"), "pub fn first<Item: Clone>(items: &[Item]) -> Item {\n    items[0].clone()\n}\n")
+        .unwrap();
     let service = open(&s);
     service.ingest(&s.root).unwrap();
     let item = || {
@@ -179,7 +210,11 @@ fn an_answer_in_the_repo_at_no_component_says_local() {
         rows.refs.iter().filter(|r| r.name == "Item").map(|r| (r.evidence, r.prover.clone(), r.target.clone())).collect::<Vec<_>>()
     };
     wait_until("the server answered for Item", || !item().is_empty() && item().iter().all(|(_, prover, _)| prover.is_some()));
-    assert!(item().iter().all(|r| *r == (code_analyzer::rows::Evidence::Local, Some("fake-lsp 9.9.9".into()), None)), "a generic in the repo: local, not \"not found\": {:?}", item());
+    assert!(
+        item().iter().all(|r| *r == (code_analyzer::rows::Evidence::Local, Some("fake-lsp 9.9.9".into()), None)),
+        "a generic in the repo: local, not \"not found\": {:?}",
+        item()
+    );
 }
 
 #[test]
@@ -199,7 +234,14 @@ fn each_languages_server_state_is_kept_with_why_and_unreadable_places_are_counte
     drop(service);
     // Kept: a restart shows them before any server has started.
     let facts = arch_service::open_facts(&s.root, &arch_service::Limits::defaults().unwrap()).unwrap();
-    let again = ArchitectureService::open(&s.root, code_analyzer::PackSet::from_catalog(&s.catalog).unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap();
+    let again = ArchitectureService::open(
+        &s.root,
+        code_analyzer::PackSet::from_catalog(&s.catalog).unwrap(),
+        TypeSystem::defaults().unwrap(),
+        Box::new(MemoryPlans::default()),
+        facts,
+    )
+    .unwrap();
     let kept = again.index_status().servers;
     assert!(kept.iter().any(|v| v.language == "rust" && v.state == ServerState::Ready), "{kept:?}");
     assert!(kept.iter().any(|v| v.language == "python" && v.state == ServerState::NotInstalled && v.reason.is_some()), "{kept:?}");
@@ -213,9 +255,14 @@ fn a_full_reindex_asks_the_servers_again() {
     wait_until("confirmed", || proven(&service, "sample::run", "sample::store::Store::save") == Some(Some("fake-lsp 9.9.9".into())));
     std::fs::write(&s.log, "").unwrap();
     service.reindex().unwrap();
-    wait_until("confirmed again after the re-index", || proven(&service, "sample::run", "sample::store::Store::save") == Some(Some("fake-lsp 9.9.9".into())));
+    wait_until("confirmed again after the re-index", || {
+        proven(&service, "sample::run", "sample::store::Store::save") == Some(Some("fake-lsp 9.9.9".into()))
+    });
     let files: std::collections::BTreeSet<String> = asked(&s.log).into_iter().collect();
-    assert!(files.contains("src/lib.rs") && files.contains("src/store.rs") && files.contains("src/util.rs"), "every file asked again: {files:?}");
+    assert!(
+        files.contains("src/lib.rs") && files.contains("src/store.rs") && files.contains("src/util.rs"),
+        "every file asked again: {files:?}"
+    );
 }
 
 #[test]
@@ -230,12 +277,23 @@ fn a_full_reindex_with_no_server_running_keeps_what_servers_said_until_they_can_
     // No server this time: the re-index keeps the answer, unconfirmed.
     {
         let facts = arch_service::open_facts(&s.root, &arch_service::Limits::defaults().unwrap()).unwrap();
-        let service = ArchitectureService::open(&s.root, code_analyzer::PackSet::from_catalog(&s.catalog).unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap();
+        let service = ArchitectureService::open(
+            &s.root,
+            code_analyzer::PackSet::from_catalog(&s.catalog).unwrap(),
+            TypeSystem::defaults().unwrap(),
+            Box::new(MemoryPlans::default()),
+            facts,
+        )
+        .unwrap();
         service.reindex().unwrap();
         assert_eq!(proven(&service, "sample::run", "sample::store::Store::save"), Some(None), "kept, not wiped");
         let lib = service.file_rows().into_iter().find(|r| r.file.path.as_str() == "src/lib.rs").unwrap();
         let save = lib.refs.iter().find(|r| r.name == "save" && r.detail.call.is_some()).unwrap();
-        assert_eq!((save.prover.as_deref(), save.evidence), (Some("fake-lsp 9.9.9"), code_analyzer::rows::Evidence::Name), "the server's answer, waiting to be asked again");
+        assert_eq!(
+            (save.prover.as_deref(), save.evidence),
+            (Some("fake-lsp 9.9.9"), code_analyzer::rows::Evidence::Name),
+            "the server's answer, waiting to be asked again"
+        );
     }
     // With the server again: asked, and proven.
     let service = open(&s);
@@ -266,7 +324,9 @@ fn what_waited_at_shutdown_is_asked_after_a_restart_and_a_restart_with_nothing_l
     let service = open(&s);
     let report = service.ingest(&s.root).unwrap();
     assert!(report.linked.is_empty(), "{report:?}");
-    wait_until("run's call is confirmed after the restart", || proven(&service, "sample::run", "sample::store::Store::save") == Some(Some("fake-lsp 9.9.9".into())));
+    wait_until("run's call is confirmed after the restart", || {
+        proven(&service, "sample::run", "sample::store::Store::save") == Some(Some("fake-lsp 9.9.9".into()))
+    });
     assert!(service.wait_for_servers(Duration::from_secs(30)).unwrap());
     drop(service);
     // Everything answered: a restart with nothing changed asks nothing.
@@ -283,7 +343,9 @@ fn a_refused_answer_is_asked_again_until_it_is_answered() {
     let s = setup(&["--prefer", "src/util.rs", "--refuse-first", "3"]);
     let service = open(&s);
     service.ingest(&s.root).unwrap();
-    wait_until("confirmed after the refusals", || proven(&service, "sample::run", "sample::store::Store::save") == Some(Some("fake-lsp 9.9.9".into())));
+    wait_until("confirmed after the refusals", || {
+        proven(&service, "sample::run", "sample::store::Store::save") == Some(Some("fake-lsp 9.9.9".into()))
+    });
 }
 
 #[test]
@@ -314,7 +376,8 @@ fn a_warm_server_confirms_a_change_within_confirm_ms_asking_only_its_refs_and_th
             matches!(x.kind, RefKind::Type | RefKind::Field | RefKind::Import | RefKind::Path)
         }
     };
-    let names: usize = rows.iter().filter(|r| report.linked.contains(&r.file.path)).map(|r| r.refs.iter().filter(|x| asked(x)).count()).sum();
+    let names: usize =
+        rows.iter().filter(|r| report.linked.contains(&r.file.path)).map(|r| r.refs.iter().filter(|x| asked(x)).count()).sum();
     assert_eq!(requests_since(&s.log, from), names, "requests for {:?}", report.linked);
     // The language's files and proven links, live and as kept.
     let live = service.index_status().servers.into_iter().find(|x| x.language == "rust").unwrap();
@@ -361,18 +424,27 @@ fn the_server_confirms_field_reads_and_writes_and_the_types_data_carries() {
     wait_until("bump's write is confirmed", || flow_proven(&service, "sample::counter::Counter::bump", "sample::counter::Counter") == by);
     wait_until("total's read is confirmed", || flow_proven(&service, "sample::counter::Counter", "sample::counter::Counter::total") == by);
     // The type a value is made of, as the server says.
-    wait_until("fresh's Counter is confirmed", || flow_proven(&service, "sample::counter::Counter::fresh", "sample::counter::Counter") == by);
+    wait_until("fresh's Counter is confirmed", || {
+        flow_proven(&service, "sample::counter::Counter::fresh", "sample::counter::Counter") == by
+    });
     let log = std::fs::read_to_string(&s.log).unwrap();
     assert!(log.lines().any(|l| l.starts_with("highlight src/counter.rs")), "fields are asked how they're used:\n{log}");
     // The type named in a signature is the server's too.
     let refs = service.references(&id("sample::counter::Counter")).unwrap();
-    assert!(refs.iter().any(|r| r.file == "src/counter.rs" && r.line == 14 && r.evidence == "server"), "the return type names Counter, as the server says: {refs:?}");
+    assert!(
+        refs.iter().any(|r| r.file == "src/counter.rs" && r.line == 14 && r.evidence == "server"),
+        "the return type names Counter, as the server says: {refs:?}"
+    );
     // Its answer decides how a field is used: a `&mut` borrow writes, though
     // the reader alone would say it reads.
-    wait_until("drain's write is the server's", || flow_proven(&service, "sample::counter::Counter::drain", "sample::counter::Counter") == by);
+    wait_until("drain's write is the server's", || {
+        flow_proven(&service, "sample::counter::Counter::drain", "sample::counter::Counter") == by
+    });
     assert_eq!(flow_proven(&service, "sample::counter::Counter", "sample::counter::Counter::drain"), None, "not a read");
     // A field of a parameter: which type it's on, only the server says.
-    wait_until("reset's write through `c` is confirmed", || flow_proven(&service, "sample::counter::reset", "sample::counter::Counter") == by);
+    wait_until("reset's write through `c` is confirmed", || {
+        flow_proven(&service, "sample::counter::reset", "sample::counter::Counter") == by
+    });
 }
 
 #[test]
@@ -381,13 +453,27 @@ fn a_field_use_the_server_gives_no_kind_for_stays_unconfirmed() {
     let service = with_counter(&s);
     // The server says which field (the type is confirmed), not how it's
     // used: the read or write is the reader's guess, so it isn't proven.
-    wait_until("the types are confirmed", || flow_proven(&service, "sample::counter::Counter::fresh", "sample::counter::Counter") == Some(Some("fake-lsp 9.9.9".into())));
+    wait_until("the types are confirmed", || {
+        flow_proven(&service, "sample::counter::Counter::fresh", "sample::counter::Counter") == Some(Some("fake-lsp 9.9.9".into()))
+    });
     // `c`'s type comes only from the server: the link appears once it has answered.
     wait_until("reset's field is the server's", || flow_proven(&service, "sample::counter::reset", "sample::counter::Counter").is_some());
     std::thread::sleep(Duration::from_millis(300));
-    assert_eq!(flow_proven(&service, "sample::counter::reset", "sample::counter::Counter"), Some(None), "reset's write: the field's type is the server's, how it's used isn't");
-    assert_eq!(flow_proven(&service, "sample::counter::Counter::bump", "sample::counter::Counter"), Some(None), "bump's write is the reader's");
-    assert_eq!(flow_proven(&service, "sample::counter::Counter", "sample::counter::Counter::total"), Some(None), "total's read is the reader's");
+    assert_eq!(
+        flow_proven(&service, "sample::counter::reset", "sample::counter::Counter"),
+        Some(None),
+        "reset's write: the field's type is the server's, how it's used isn't"
+    );
+    assert_eq!(
+        flow_proven(&service, "sample::counter::Counter::bump", "sample::counter::Counter"),
+        Some(None),
+        "bump's write is the reader's"
+    );
+    assert_eq!(
+        flow_proven(&service, "sample::counter::Counter", "sample::counter::Counter::total"),
+        Some(None),
+        "total's read is the reader's"
+    );
     // The ref keeps the guess for display, and that the server said nothing
     // of it: linking again from the rows can't take the guess for the server's.
     let rows = service.file_rows().into_iter().find(|r| r.file.path.as_str() == "src/counter.rs").unwrap();
@@ -405,7 +491,9 @@ fn a_file_pointing_into_an_ignored_file_is_settled_and_neither_a_change_elsewher
     std::fs::write(s.root.join("src/lonely.rs"), "pub fn alone() {}\n").unwrap();
     let service = open(&s);
     service.ingest(&s.root).unwrap();
-    wait_until("run's call is confirmed", || proven(&service, "sample::run", "sample::store::Store::save") == Some(Some("fake-lsp 9.9.9".into())));
+    wait_until("run's call is confirmed", || {
+        proven(&service, "sample::run", "sample::store::Store::save") == Some(Some("fake-lsp 9.9.9".into()))
+    });
     std::thread::sleep(Duration::from_millis(500));
     // A change to a file nothing else depends on: only it is linked again,
     // and only it may be asked about.
@@ -413,13 +501,19 @@ fn a_file_pointing_into_an_ignored_file_is_settled_and_neither_a_change_elsewher
     let lonely = s.root.join("src/lonely.rs");
     std::fs::write(&lonely, "pub fn alone() {}\n\npub fn apart() {\n    alone();\n}\n").unwrap();
     service.refresh(std::slice::from_ref(&lonely)).unwrap();
-    wait_until("the change is confirmed", || proven(&service, "sample::lonely::apart", "sample::lonely::alone") == Some(Some("fake-lsp 9.9.9".into())));
+    wait_until("the change is confirmed", || {
+        proven(&service, "sample::lonely::apart", "sample::lonely::alone") == Some(Some("fake-lsp 9.9.9".into()))
+    });
     std::thread::sleep(Duration::from_millis(500));
     let files: std::collections::BTreeSet<String> = asked(&s.log).into_iter().collect();
     assert_eq!(files, std::collections::BTreeSet::from(["src/lonely.rs".to_owned()]), "only the changed file");
     let lib = service.file_rows().into_iter().find(|r| r.file.path.as_str() == "src/lib.rs").unwrap();
     let into_util = lib.refs.iter().find(|r| r.name == "shout" && r.detail.call.is_some()).unwrap();
-    assert_eq!((into_util.evidence, into_util.prover.as_deref()), (code_analyzer::rows::Evidence::Local, Some("fake-lsp 9.9.9")), "an answer into a file that isn't read");
+    assert_eq!(
+        (into_util.evidence, into_util.prover.as_deref()),
+        (code_analyzer::rows::Evidence::Local, Some("fake-lsp 9.9.9")),
+        "an answer into a file that isn't read"
+    );
     // A restart with nothing changed asks nothing.
     assert!(service.wait_for_servers(Duration::from_secs(30)).unwrap());
     drop(service);
@@ -455,6 +549,13 @@ fn an_implementation_the_server_confirms_is_kept_as_proven() {
     let s = setup(&[]);
     let service = open(&s);
     service.ingest(&s.root).unwrap();
-    let implements = || service.observed().unwrap().outgoing(&id("sample::Upper"), Some(RelationKind::Implements)).find(|r| r.target == id("sample::Step")).map(|r| r.proven_by.clone());
+    let implements = || {
+        service
+            .observed()
+            .unwrap()
+            .outgoing(&id("sample::Upper"), Some(RelationKind::Implements))
+            .find(|r| r.target == id("sample::Step"))
+            .map(|r| r.proven_by.clone())
+    };
     wait_until("Upper implements Step, as the server says", || implements() == Some(Some("fake-lsp 9.9.9".into())));
 }

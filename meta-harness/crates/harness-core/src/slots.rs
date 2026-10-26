@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use harness_contracts::{
-    AdapterEvent, ClientEvent, InstanceId, ItemBody, McpServer, ModelSelection, NativeId, ProviderStatus, RuntimePolicy, SessionKey, Slot, SlotId,
-    SlotSession, SlotStatus, Starter, ThreadId, ThreadStatus, TurnId, TurnInput, TurnItem, LEAD, Message, Piece,
+    AdapterEvent, ClientEvent, InstanceId, ItemBody, LEAD, McpServer, Message, ModelSelection, NativeId, Piece, ProviderStatus,
+    RuntimePolicy, SessionKey, Slot, SlotId, SlotSession, SlotStatus, Starter, ThreadId, ThreadStatus, TurnId, TurnInput, TurnItem,
 };
 
 use crate::{EventHub, HarnessError, InstanceRegistry, OpenThread, Result, SessionManager};
@@ -415,13 +415,19 @@ impl SlotManager {
     async fn open_held(&self, id: &SlotId, open: Open) -> Result<Opened> {
         let slot = self.slot(id)?;
         if let SlotStatus::Unavailable { reason, fix } = &slot.status {
-            return Err(HarnessError::InvalidConfig { reason: format!("{}: {reason}{}", slot.name, fix.as_ref().map(|f| format!(" ({f})")).unwrap_or_default()) });
+            return Err(HarnessError::InvalidConfig {
+                reason: format!("{}: {reason}{}", slot.name, fix.as_ref().map(|f| format!(" ({f})")).unwrap_or_default()),
+            });
         }
-        let instance = slot.instance_id.clone().ok_or_else(|| HarnessError::InvalidConfig { reason: format!("{} has no harness: choose one first", slot.name) })?;
+        let instance = slot
+            .instance_id
+            .clone()
+            .ok_or_else(|| HarnessError::InvalidConfig { reason: format!("{} has no harness: choose one first", slot.name) })?;
         let (session_key, resume) = match &open {
             Open::New { resume } => (SessionKey::new(uuid::Uuid::new_v4().simple().to_string()), resume.clone()),
             Open::Again(key) => {
-                let session = slot.session(key).ok_or_else(|| HarnessError::NotFound { what: format!("session {key} of {}", slot.name) })?;
+                let session =
+                    slot.session(key).ok_or_else(|| HarnessError::NotFound { what: format!("session {key} of {}", slot.name) })?;
                 if let Some(thread) = &session.thread {
                     return Ok(Opened { thread: thread.clone(), session: key.clone(), note: None, delivered_reports: 0 });
                 }
@@ -435,7 +441,13 @@ impl SlotManager {
         let ours = (self.ours)(&secret);
         servers.retain(|s| s.name != ours.name);
         servers.insert(0, ours);
-        let request = |resume: Option<NativeId>| OpenThread { instance_id: instance.clone(), policy: slot.policy.clone(), model: slot.model.clone(), resume, mcp_servers: servers.clone() };
+        let request = |resume: Option<NativeId>| OpenThread {
+            instance_id: instance.clone(),
+            policy: slot.policy.clone(),
+            model: slot.model.clone(),
+            resume,
+            mcp_servers: servers.clone(),
+        };
         let (thread, note) = match self.open_thread(request(resume.clone())).await {
             Ok(thread) => (thread, None),
             Err(e) if resume.is_some() && matches!(open, Open::Again(_)) => {
@@ -478,7 +490,9 @@ impl SlotManager {
     async fn open_thread(&self, request: OpenThread) -> Result<ThreadId> {
         match tokio::time::timeout(self.open_within, self.sessions.open(request)).await {
             Ok(opened) => opened,
-            Err(_) => Err(HarnessError::Provider { reason: format!("the harness didn't open a session within {}s", self.open_within.as_secs()) }),
+            Err(_) => {
+                Err(HarnessError::Provider { reason: format!("the harness didn't open a session within {}s", self.open_within.as_secs()) })
+            }
         }
     }
 
@@ -497,7 +511,8 @@ impl SlotManager {
     pub async fn close_session(&self, id: &SlotId, session: &SessionKey) -> Result<()> {
         let _held = self.hold(id).await;
         let slot = self.slot(id)?;
-        let entry = slot.session(session).cloned().ok_or_else(|| HarnessError::NotFound { what: format!("session {session} of {}", slot.name) })?;
+        let entry =
+            slot.session(session).cloned().ok_or_else(|| HarnessError::NotFound { what: format!("session {session} of {}", slot.name) })?;
         let mut next = slot.clone();
         next.sessions.retain(|s| &s.key != session);
         if next.current.as_ref() == Some(session) {
@@ -573,10 +588,14 @@ impl SlotManager {
     /// links is read where it's kept). Without links, its text alone.
     pub async fn expanded(&self, message: Message, reader: Option<SlotId>) -> Expanded {
         let message = message.valid();
-        let Some(expand) = self.expand.get().cloned().filter(|_| !message.links.is_empty()) else { return Expanded { message, ..Expanded::default() } };
+        let Some(expand) = self.expand.get().cloned().filter(|_| !message.links.is_empty()) else {
+            return Expanded { message, ..Expanded::default() };
+        };
         // (Its words kept if the reading fails: sent without what it links.)
         let words = Message::text(message.text.clone());
-        tokio::task::spawn_blocking(move || expand(message, reader.as_ref())).await.unwrap_or(Expanded { message: words, ..Expanded::default() })
+        tokio::task::spawn_blocking(move || expand(message, reader.as_ref()))
+            .await
+            .unwrap_or(Expanded { message: words, ..Expanded::default() })
     }
 
     /// `message` as the input of a turn: its text and its pieces.
@@ -594,7 +613,8 @@ impl SlotManager {
         let session = self.sessions.get(&thread)?;
         let message = match &from {
             Origin::User => message,
-            Origin::Lead => Message::text(message.text).after(&format!("From the lead ({}):\n\n", self.slot(&self.lead()).map(|s| s.name).unwrap_or_else(|_| LEAD.into()))),
+            Origin::Lead => Message::text(message.text)
+                .after(&format!("From the lead ({}):\n\n", self.slot(&self.lead()).map(|s| s.name).unwrap_or_else(|_| LEAD.into()))),
         };
         let input = self.input(message, to).await;
         // Listening first, when its answer is waited for: a quick turn's
@@ -647,7 +667,9 @@ impl SlotManager {
                 Ok(Reported::Delivered)
             }
             None => {
-                self.store.hold_report(&HeldReport { to: to.clone(), from: from.to_owned(), message: message.valid(), at_ms: crate::now_ms() }).map_err(store_error)?;
+                self.store
+                    .hold_report(&HeldReport { to: to.clone(), from: from.to_owned(), message: message.valid(), at_ms: crate::now_ms() })
+                    .map_err(store_error)?;
                 Ok(Reported::Held)
             }
         }
@@ -715,7 +737,10 @@ impl SlotManager {
         let Some(instance) = instance else { return SlotStatus::Ready };
         let snapshot = self.registry.snapshots().into_iter().find(|s| &s.instance_id == instance);
         match snapshot.map(|s| s.status) {
-            None => SlotStatus::Unavailable { reason: format!("the harness {instance} isn't set up"), fix: Some(format!("install its pack: meta-harness pack install {instance}")) },
+            None => SlotStatus::Unavailable {
+                reason: format!("the harness {instance} isn't set up"),
+                fix: Some(format!("install its pack: meta-harness pack install {instance}")),
+            },
             Some(ProviderStatus::Unavailable { reason }) => SlotStatus::Unavailable { reason, fix: None },
             Some(ProviderStatus::Error { message }) => SlotStatus::Unavailable { reason: message, fix: None },
             Some(ProviderStatus::Ready | ProviderStatus::Starting | ProviderStatus::NeedsAuth) => SlotStatus::Ready,
@@ -759,7 +784,13 @@ impl SlotManager {
     fn apply(&self, event: &ClientEvent) {
         match event {
             ClientEvent::InstanceUpdated { snapshot } => {
-                let ids: Vec<SlotId> = self.lock().slots.values().filter(|s| s.instance_id.as_ref() == Some(&snapshot.instance_id)).map(|s| s.id.clone()).collect();
+                let ids: Vec<SlotId> = self
+                    .lock()
+                    .slots
+                    .values()
+                    .filter(|s| s.instance_id.as_ref() == Some(&snapshot.instance_id))
+                    .map(|s| s.id.clone())
+                    .collect();
                 for id in ids {
                     self.refresh_status(&id);
                 }
@@ -769,7 +800,9 @@ impl SlotManager {
                 let Some((slot, key)) = self.of_thread(&thread.id) else { return };
                 let Some(current) = self.get(&slot) else { return };
                 let Some(session) = current.session(&key) else { return };
-                if thread.title.is_some() && session.title != thread.title || thread.native_id.is_some() && session.native_id != thread.native_id {
+                if thread.title.is_some() && session.title != thread.title
+                    || thread.native_id.is_some() && session.native_id != thread.native_id
+                {
                     let mut next = current.clone();
                     if let Some(s) = next.sessions.iter_mut().find(|s| s.key == key) {
                         s.title = thread.title.clone().or(s.title.take());
@@ -831,7 +864,11 @@ fn upsert(items: &mut Vec<TurnItem>, item: TurnItem) {
 pub fn turn_reply(items: &[TurnItem], turn: &TurnId) -> String {
     let mut mine: Vec<&TurnItem> = items.iter().filter(|i| &i.turn_id == turn).collect();
     mine.sort_by_key(|i| i.ordinal);
-    mine.iter().filter(|i| matches!(i.body, ItemBody::AssistantMessage { .. })).filter_map(|i| i.body.said()).collect::<Vec<_>>().join("\n\n")
+    mine.iter()
+        .filter(|i| matches!(i.body, ItemBody::AssistantMessage { .. }))
+        .filter_map(|i| i.body.said())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 #[cfg(test)]
@@ -840,7 +877,17 @@ mod tests {
     use harness_contracts::{ContentBlock, ItemId, ItemStatus};
 
     fn item(turn: &str, ordinal: u32, body: ItemBody) -> TurnItem {
-        TurnItem { id: ItemId::new(format!("{turn}-{ordinal}")), thread_id: ThreadId::new("t"), turn_id: TurnId::new(turn), native_id: None, parent_id: None, ordinal, status: ItemStatus::Completed, title: None, body }
+        TurnItem {
+            id: ItemId::new(format!("{turn}-{ordinal}")),
+            thread_id: ThreadId::new("t"),
+            turn_id: TurnId::new(turn),
+            native_id: None,
+            parent_id: None,
+            ordinal,
+            status: ItemStatus::Completed,
+            title: None,
+            body,
+        }
     }
 
     fn says(text: &str) -> ItemBody {

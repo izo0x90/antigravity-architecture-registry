@@ -13,14 +13,22 @@ pub(super) fn loops(plan: &Plan, graph: &Graph, set: &SchemaSet, report: &mut Re
         for cycle in graph.cycles(kind) {
             if cycle.iter().any(|id| planned.contains(id)) {
                 let path: Vec<&str> = cycle.iter().map(ComponentId::as_str).collect();
-                report.push(Finding::error(FindingCode::Cycle, component(&cycle[0]), format!("{} loop: {}", kind.name(), path.join(" -> "))));
+                report.push(Finding::error(
+                    FindingCode::Cycle,
+                    component(&cycle[0]),
+                    format!("{} loop: {}", kind.name(), path.join(" -> ")),
+                ));
             }
         }
     }
     let planned_names: BTreeSet<&str> = plan.components.iter().map(|c| c.name.as_str()).collect();
     for cycle in set.cycles() {
         if cycle.iter().any(|t| planned_names.contains(t.as_str())) {
-            report.push(Finding::error(FindingCode::Cycle, Target::Plan { plan: plan.id.clone() }, format!("schema reference loop: {}", cycle.join(" -> "))));
+            report.push(Finding::error(
+                FindingCode::Cycle,
+                Target::Plan { plan: plan.id.clone() },
+                format!("schema reference loop: {}", cycle.join(" -> ")),
+            ));
         }
     }
     for planned in &plan.components {
@@ -28,8 +36,12 @@ pub(super) fn loops(plan: &Plan, graph: &Graph, set: &SchemaSet, report: &mut Re
         for (field, schema) in [("properties", &c.schemas.properties), ("inputs", &c.schemas.inputs), ("outputs", &c.schemas.outputs)] {
             for missing in schema.as_ref().map(|s| set.missing(s)).unwrap_or_default() {
                 report.push(
-                    Finding::error(FindingCode::MissingSchemaRef, component(&c.id), format!("its {field} reference {missing}, which isn't a data type here"))
-                        .suggest("add the data type to the plan, or reference an existing one by name"),
+                    Finding::error(
+                        FindingCode::MissingSchemaRef,
+                        component(&c.id),
+                        format!("its {field} reference {missing}, which isn't a data type here"),
+                    )
+                    .suggest("add the data type to the plan, or reference an existing one by name"),
                 );
             }
         }
@@ -37,7 +49,12 @@ pub(super) fn loops(plan: &Plan, graph: &Graph, set: &SchemaSet, report: &mut Re
 }
 
 /// References to a name more than one data type has.
-pub(super) fn ambiguous_refs(plan: &Plan, graph: &Graph, ambiguous: &std::collections::BTreeMap<String, Vec<ComponentId>>, report: &mut Report) {
+pub(super) fn ambiguous_refs(
+    plan: &Plan,
+    graph: &Graph,
+    ambiguous: &std::collections::BTreeMap<String, Vec<ComponentId>>,
+    report: &mut Report,
+) {
     if ambiguous.is_empty() {
         return;
     }
@@ -51,8 +68,12 @@ pub(super) fn ambiguous_refs(plan: &Plan, graph: &Graph, ambiguous: &std::collec
             if let Some(ids) = ambiguous.get(&title) {
                 let list: Vec<&str> = ids.iter().map(ComponentId::as_str).collect();
                 report.push(
-                    Finding::error(FindingCode::AmbiguousSchemaRef, component(&c.id), format!("{title} could be any of {}", list.join(", ")))
-                        .suggest("rename one of the data types so the reference is unique"),
+                    Finding::error(
+                        FindingCode::AmbiguousSchemaRef,
+                        component(&c.id),
+                        format!("{title} could be any of {}", list.join(", ")),
+                    )
+                    .suggest("rename one of the data types so the reference is unique"),
                 );
             }
         }

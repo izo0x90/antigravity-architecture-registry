@@ -10,7 +10,10 @@
 use std::path::{Path, PathBuf};
 
 use fff_search::file_picker::FilePicker;
-use fff_search::{AiGrepConfig, ConstraintVec, FFFQuery, FilePickerOptions, FileSearchConfig, FuzzyQuery, FuzzySearchOptions, GitRecencyConfig, GrepMode, GrepSearchOptions, PaginationArgs, QueryParser};
+use fff_search::{
+    AiGrepConfig, ConstraintVec, FFFQuery, FilePickerOptions, FileSearchConfig, FuzzyQuery, FuzzySearchOptions, GitRecencyConfig, GrepMode,
+    GrepSearchOptions, PaginationArgs, QueryParser,
+};
 
 /// Limits on a search through file contents.
 #[derive(Clone, Debug, PartialEq)]
@@ -67,7 +70,8 @@ impl RepoFiles {
     /// fff's walk, then out with what the caller ignores.
     fn list(&mut self) -> Result<(), String> {
         self.picker.collect_files().map_err(|e| format!("listing {}: {e}", self.root.display()))?;
-        let left_out: Vec<PathBuf> = self.picker.get_files().iter().map(|f| f.absolute_path(&self.picker, &self.root)).filter(|p| (self.ignored)(p)).collect();
+        let left_out: Vec<PathBuf> =
+            self.picker.get_files().iter().map(|f| f.absolute_path(&self.picker, &self.root)).filter(|p| (self.ignored)(p)).collect();
         for path in left_out {
             self.picker.remove_file_by_path(&path);
         }
@@ -95,8 +99,11 @@ impl RepoFiles {
         // fff's walk lists hidden files only in a git repository; one that
         // arrives later is taken in the same way.
         let hidden_ok = self.picker.has_git_repo();
-        let hidden = |p: &Path| p.strip_prefix(&self.root).is_ok_and(|rest| rest.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.')));
-        let kept: Vec<&PathBuf> = paths.iter().filter(|p| p.starts_with(&self.root) && !(self.ignored)(p) && (hidden_ok || !hidden(p))).collect();
+        let hidden = |p: &Path| {
+            p.strip_prefix(&self.root).is_ok_and(|rest| rest.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.')))
+        };
+        let kept: Vec<&PathBuf> =
+            paths.iter().filter(|p| p.starts_with(&self.root) && !(self.ignored)(p) && (hidden_ok || !hidden(p))).collect();
         for path in kept {
             if path.is_file() {
                 // fff holds only so many files added since its walk: when
@@ -122,7 +129,16 @@ impl crate::Search for RepoFiles {
     /// Files whose path matches `query`, best first.
     fn search(&self, query: &str, limit: usize) -> crate::Searched<FoundFile> {
         let parsed = QueryParser::new(FileSearchConfig).parse(query);
-        let found = self.picker.fuzzy_search(&parsed, None, FuzzySearchOptions { max_threads: 0, current_file: None, pagination: PaginationArgs { offset: 0, limit }, ..FuzzySearchOptions::default() });
+        let found = self.picker.fuzzy_search(
+            &parsed,
+            None,
+            FuzzySearchOptions {
+                max_threads: 0,
+                current_file: None,
+                pagination: PaginationArgs { offset: 0, limit },
+                ..FuzzySearchOptions::default()
+            },
+        );
         let files = found.items.iter().map(|f| FoundFile { path: f.relative_path(&self.picker) }).collect();
         crate::Searched { found: files, total: found.total_matched, partial: false }
     }
@@ -152,7 +168,12 @@ impl Lines<'_> {
     /// it short.
     pub fn containing(&self, text: &str, limit: usize) -> crate::Searched<FoundLine> {
         let text = text.trim();
-        let query = FFFQuery { raw_query: text, constraints: ConstraintVec::new(), fuzzy_query: if text.is_empty() { FuzzyQuery::Empty } else { FuzzyQuery::Text(text) }, location: None };
+        let query = FFFQuery {
+            raw_query: text,
+            constraints: ConstraintVec::new(),
+            fuzzy_query: if text.is_empty() { FuzzyQuery::Empty } else { FuzzyQuery::Text(text) },
+            location: None,
+        };
         self.grep(&query, limit, false)
     }
 
@@ -206,7 +227,11 @@ mod tests {
         let mut files = RepoFiles::scan(&root, Box::new(move |p| p.starts_with(&skip))).unwrap();
 
         let paths = files.search("servic", 10);
-        assert_eq!(paths.found.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["src/service.rs"], "ignored and outside files aren't found");
+        assert_eq!(
+            paths.found.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            ["src/service.rs"],
+            "ignored and outside files aren't found"
+        );
         assert_eq!(paths.total, 1);
         let lines = files.lines(limits()).search("rebuild_observed", 10);
         assert_eq!(lines.found, [FoundLine { path: "src/service.rs".into(), line: 1, text: "fn rebuild_observed() {}".into() }]);
@@ -219,7 +244,15 @@ mod tests {
         std::fs::write(root.join("src/view.rs"), "fn rebuild_observed() {}\n").unwrap();
         std::fs::write(root.join("src/service.rs"), "fn other() {}\n").unwrap();
         std::fs::remove_file(root.join("src/store.rs")).unwrap();
-        files.changed(&[root.join("src/view.rs"), root.join("src/service.rs"), root.join("src/store.rs"), dir.path().join("outside.rs"), root.join("ignored/service.rs")]).unwrap();
+        files
+            .changed(&[
+                root.join("src/view.rs"),
+                root.join("src/service.rs"),
+                root.join("src/store.rs"),
+                dir.path().join("outside.rs"),
+                root.join("ignored/service.rs"),
+            ])
+            .unwrap();
         let lines = files.lines(limits()).search("rebuild_observed", 10).found;
         assert_eq!(lines.iter().map(|l| l.path.as_str()).collect::<Vec<_>>(), ["src/view.rs"]);
         assert!(!files.search("store", 10).found.iter().any(|f| f.path == "src/store.rs"), "removed");
@@ -239,15 +272,20 @@ mod tests {
         let logs = root.join(".nah/state/tagged");
         std::fs::write(logs.join("a.log"), "== a\nsee src/ for it\n").unwrap();
         let mut files = RepoFiles::scan(&logs, Box::new(|_| false)).unwrap();
-        assert_eq!(files.lines(limits()).containing("see src/", 10).found, [FoundLine { path: "a.log".into(), line: 2, text: "see src/ for it".into() }]);
+        assert_eq!(
+            files.lines(limits()).containing("see src/", 10).found,
+            [FoundLine { path: "a.log".into(), line: 2, text: "see src/ for it".into() }]
+        );
         let mut grown = std::fs::OpenOptions::new().append(true).open(logs.join("a.log")).unwrap();
         std::io::Write::write_all(&mut grown, b"later: error 3\n").unwrap();
         std::fs::write(logs.join("b.log"), "== b\nerror 4\n").unwrap();
         files.changed(&[logs.join("a.log"), logs.join("b.log")]).unwrap();
-        let mut found: Vec<String> = files.lines(limits()).containing("ERROR", 10).found.into_iter().map(|l| format!("{}:{}", l.path, l.line)).collect();
+        let mut found: Vec<String> =
+            files.lines(limits()).containing("ERROR", 10).found.into_iter().map(|l| format!("{}:{}", l.path, l.line)).collect();
         found.sort();
         assert!(found.is_empty(), "capitals heeded when there are some: {found:?}");
-        let mut found: Vec<String> = files.lines(limits()).containing("error", 10).found.into_iter().map(|l| format!("{}:{}", l.path, l.line)).collect();
+        let mut found: Vec<String> =
+            files.lines(limits()).containing("error", 10).found.into_iter().map(|l| format!("{}:{}", l.path, l.line)).collect();
         found.sort();
         assert_eq!(found, ["a.log:3", "b.log:2"]);
     }
@@ -264,7 +302,10 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/store.rs"), "struct Store;\nfn save() {}\n").unwrap();
         let files = RepoFiles::scan(&root, Box::new(|_| false)).unwrap();
-        let symbols = crate::Symbols { names: vec!["Store".into(), "save".into()], qualified: vec!["store::Store src/store.rs".into(), "store::save src/store.rs".into()] };
+        let symbols = crate::Symbols {
+            names: vec!["Store".into(), "save".into()],
+            qualified: vec!["store::Store src/store.rs".into(), "store::save src/store.rs".into()],
+        };
         assert_eq!(how_many(&symbols, "save"), 1);
         assert_eq!(how_many(&symbols, "store::Store"), 1, "a qualified query matches the whole symbol");
         assert_eq!(how_many(&files, "store"), 1);

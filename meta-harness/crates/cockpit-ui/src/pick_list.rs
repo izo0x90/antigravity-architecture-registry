@@ -54,7 +54,13 @@ pub struct Row<'a> {
 impl<'a> Row<'a> {
     /// A choice, as it's listed wherever choices are.
     pub fn of_choice(choice: &'a Choice) -> Self {
-        Self { label: &choice.label, colour: choice.colour, current: choice.current, detail: choice.detail.as_deref().map(Cow::Borrowed), ..Self::default() }
+        Self {
+            label: &choice.label,
+            colour: choice.colour,
+            current: choice.current,
+            detail: choice.detail.as_deref().map(Cow::Borrowed),
+            ..Self::default()
+        }
     }
 }
 
@@ -131,7 +137,15 @@ impl PickList {
     /// says what each is, asked of any, so it's cheap), after the keys'
     /// move (`moved`); returns the one picked (tapped, or the highlight on
     /// `enter`).
-    pub fn show<'a>(&mut self, ui: &mut egui::Ui, listing: Listing<'_>, moved: Option<Motion>, enter: bool, kind: impl Fn(usize) -> RowKind, row: impl Fn(usize) -> Row<'a>) -> Option<usize> {
+    pub fn show<'a>(
+        &mut self,
+        ui: &mut egui::Ui,
+        listing: Listing<'_>,
+        moved: Option<Motion>,
+        enter: bool,
+        kind: impl Fn(usize) -> RowKind,
+        row: impl Fn(usize) -> Row<'a>,
+    ) -> Option<usize> {
         let Listing { id, height, len, details, empty } = listing;
         let now = ui.input(|i| i.time);
         let row_h = Self::row_height(ui, details);
@@ -139,7 +153,8 @@ impl PickList {
         self.highlight = self.highlight.min(len.saturating_sub(1));
         // Never on a heading: the next row that isn't.
         if len > 0 && kind(self.highlight) == RowKind::Heading {
-            self.highlight = (self.highlight..len).chain(0..self.highlight).find(|i| kind(*i) != RowKind::Heading).unwrap_or(self.highlight);
+            self.highlight =
+                (self.highlight..len).chain(0..self.highlight).find(|i| kind(*i) != RowKind::Heading).unwrap_or(self.highlight);
         }
         // This frame's window and rows, before any move (not the last
         // frame's: a list just opened, or rows just come).
@@ -163,7 +178,8 @@ impl PickList {
             area = area.vertical_scroll_offset(y);
         }
         if len == 0 {
-            let output = area.show(ui, |ui| ui.label(egui::RichText::new(empty).size(crate::theme::look().text_body).color(colors().muted)));
+            let output =
+                area.show(ui, |ui| ui.label(egui::RichText::new(empty).size(crate::theme::look().text_body).color(colors().muted)));
             self.viewport.drawn(output.state.offset, output.inner_rect.size(), output.content_size);
             return None;
         }
@@ -241,18 +257,30 @@ impl PickList {
         let label_width = (inner.width() - keys.size().x - look.space_m).max(0.0);
         if kind == RowKind::Heading {
             let title = egui::RichText::new(row.label).strong().size(look.text_label).color(theme.accent);
-            let galley = egui::WidgetText::from(title).into_galley(ui, Some(egui::TextWrapMode::Truncate), inner.width(), egui::TextStyle::Body);
+            let galley =
+                egui::WidgetText::from(title).into_galley(ui, Some(egui::TextWrapMode::Truncate), inner.width(), egui::TextStyle::Body);
             ui.painter().galley(egui::pos2(inner.left(), inner.bottom() - galley.size().y), galley, theme.accent);
             return;
         }
         let strong = if row.faint { theme.faint } else { theme.text_strong };
-        let label: Cow<'_, str> = if row.current { format!("{} {}", egui_phosphor::regular::CHECK, row.label).into() } else { row.label.into() };
-        let galley = crate::actions::choice_text(ui, &label, row.colour, look.text_label, strong).into_galley(ui, Some(egui::TextWrapMode::Truncate), label_width, egui::TextStyle::Body);
-        ui.painter().galley(egui::pos2(inner.right() - keys.size().x, inner.top() + (galley.size().y - keys.size().y) / 2.0), keys, theme.key);
+        let label: Cow<'_, str> =
+            if row.current { format!("{} {}", egui_phosphor::regular::CHECK, row.label).into() } else { row.label.into() };
+        let galley = crate::actions::choice_text(ui, &label, row.colour, look.text_label, strong).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            label_width,
+            egui::TextStyle::Body,
+        );
+        ui.painter().galley(
+            egui::pos2(inner.right() - keys.size().x, inner.top() + (galley.size().y - keys.size().y) / 2.0),
+            keys,
+            theme.key,
+        );
         let label_height = galley.size().y;
         ui.painter().galley(inner.left_top(), galley, strong);
         if let Some(detail) = row.detail.filter(|d| !d.is_empty()) {
-            let mut job = egui::text::LayoutJob::simple_singleline(detail.into_owned(), egui::FontId::proportional(look.text_small), theme.muted);
+            let mut job =
+                egui::text::LayoutJob::simple_singleline(detail.into_owned(), egui::FontId::proportional(look.text_small), theme.muted);
             job.wrap = egui::text::TextWrapping::truncate_at_width(inner.width());
             ui.painter().galley(egui::pos2(inner.left(), inner.top() + label_height), ui.painter().layout_job(job), theme.muted);
         }
@@ -291,15 +319,35 @@ mod tests {
         fn frame(&mut self, events: Vec<egui::Event>, moved: Option<Motion>, enter: bool) -> Frame {
             self.time += 1.0;
             let labels: Vec<String> = (0..self.len).map(|i| format!("row {i}")).collect();
-            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))), time: Some(self.time), events, ..Default::default() };
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            };
             let (mut picked, mut height) = (None, 0.0);
             let (list, len, inform, headings) = (&mut self.list, self.len, self.inform, &self.headings);
             let output = self.ctx.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let kind = |i: usize| if headings.contains(&i) { RowKind::Heading } else if inform == Some(i) { RowKind::Inform } else { RowKind::Pick };
+                    let kind = |i: usize| {
+                        if headings.contains(&i) {
+                            RowKind::Heading
+                        } else if inform == Some(i) {
+                            RowKind::Inform
+                        } else {
+                            RowKind::Pick
+                        }
+                    };
                     let row = |i: usize| Row { label: &labels[i], ..Row::default() };
                     let top = ui.cursor().top();
-                    picked = list.show(ui, Listing { id: "test_list", height: 120.0, len, details: false, empty: "Nothing here" }, moved, enter, kind, row);
+                    picked = list.show(
+                        ui,
+                        Listing { id: "test_list", height: 120.0, len, details: false, empty: "Nothing here" },
+                        moved,
+                        enter,
+                        kind,
+                        row,
+                    );
                     height = ui.cursor().top() - top;
                 });
             });
@@ -398,7 +446,8 @@ mod tests {
         let over = at(&frame, "row 2").unwrap();
         shown.frame(vec![], Some(Motion::Last), false);
         shown.frame(vec![], None, false);
-        let wheel = egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 200.0), modifiers: egui::Modifiers::NONE };
+        let wheel =
+            egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 200.0), modifiers: egui::Modifiers::NONE };
         shown.frame(vec![egui::Event::PointerMoved(over), wheel], None, false);
         shown.frame(vec![egui::Event::PointerGone], None, false);
         assert!(shown.list.viewport.by_hand, "scrolled by hand");
@@ -446,7 +495,12 @@ mod tests {
         shown.point(two);
         assert_eq!(shown.list.highlight(), 2, "the hand and the keys agree on the highlight");
         assert_eq!(shown.frame(vec![], None, true).picked, Some(2), "Enter picks the highlight");
-        let tap = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let tap = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
         assert_eq!(shown.frame(vec![tap(two, true), tap(two, false)], None, false).picked, Some(2), "a tap picks its row");
         shown.point(three);
         let tapped = shown.frame(vec![tap(three, true), tap(three, false)], None, false).picked;

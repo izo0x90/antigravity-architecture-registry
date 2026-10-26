@@ -59,7 +59,9 @@ fn unzip(archive: &Path, into: &Path, extract: &[String]) -> Result<(), String> 
             set_mode(&target, mode)?;
         }
     }
-    check_found(extract, |e| (0..zip.len()).any(|i| zip.name_for_index(i).is_some_and(|n| n.is_ok_and(|n| wanted(&n, std::slice::from_ref(e))))))
+    check_found(extract, |e| {
+        (0..zip.len()).any(|i| zip.name_for_index(i).is_some_and(|n| n.is_ok_and(|n| wanted(&n, std::slice::from_ref(e)))))
+    })
 }
 
 fn untar(reader: impl Read, into: &Path, extract: &[String]) -> Result<(), String> {
@@ -168,7 +170,9 @@ pub fn ensure_group(name: &str, group_file: &Path, create: &[&str], root: bool, 
         return Ok(false);
     }
     if !root {
-        return Err(format!("the system group '{name}' is missing, and creating it needs root (run the install as root, or create the group first)"));
+        return Err(format!(
+            "the system group '{name}' is missing, and creating it needs root (run the install as root, or create the group first)"
+        ));
     }
     let (program, args) = create.split_first().ok_or("no command to create a group")?;
     let mut args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
@@ -311,7 +315,9 @@ pub fn patch_archive(file: &Path, members: &[glob::Pattern], addition: &[u8]) ->
             }
             let crc = crc32fast::hash(&content);
             let size = u32::try_from(content.len()).map_err(|_| "a member past 4 GiB")?;
-            for (record, crc_at, sizes) in [(&mut local[..], 14, [18, 22]), (&mut entry.record[..], CdEntry::CRC, [CdEntry::COMPRESSED, CdEntry::SIZE])] {
+            for (record, crc_at, sizes) in
+                [(&mut local[..], 14, [18, 22]), (&mut entry.record[..], CdEntry::CRC, [CdEntry::COMPRESSED, CdEntry::SIZE])]
+            {
                 put_u32(record, crc_at, crc);
                 put_u32(record, sizes[0], size);
                 put_u32(record, sizes[1], size);
@@ -377,7 +383,8 @@ fn directory(source: &mut (impl Read + Seek), len: u64, file: &Path) -> Result<(
         return Err(format!("{}: zip64 archives aren't supported", file.display()));
     }
     let cd_at = len - tail_len + end as u64 - u64::from(cd_size);
-    let base = cd_at.checked_sub(u64::from(cd_offset)).ok_or_else(|| format!("{}: its central directory is out of place", file.display()))?;
+    let base =
+        cd_at.checked_sub(u64::from(cd_offset)).ok_or_else(|| format!("{}: its central directory is out of place", file.display()))?;
     source.seek(std::io::SeekFrom::Start(cd_at)).map_err(fail)?;
     let mut cd = vec![0; cd_size as usize];
     source.read_exact(&mut cd).map_err(fail)?;
@@ -429,7 +436,13 @@ fn same_size(content: &[u8], addition: &[u8], block: &[u8], pad: u8) -> Result<O
 /// match `members`, in place: each keeps its size (trailing blocks dropped
 /// to make room), so a program the archive is a fixed part of still reads
 /// it. Members must be stored (not compressed). Returns the members changed.
-pub fn patch_archive_in_place(file: &Path, members: &[glob::Pattern], addition: &[u8], block: &[u8], pad: u8) -> Result<Vec<String>, String> {
+pub fn patch_archive_in_place(
+    file: &Path,
+    members: &[glob::Pattern],
+    addition: &[u8],
+    block: &[u8],
+    pad: u8,
+) -> Result<Vec<String>, String> {
     let fail = |e: std::io::Error| format!("{}: {e}", file.display());
     let mut f = std::fs::OpenOptions::new().read(true).write(true).open(file).map_err(fail)?;
     let len = f.metadata().map_err(fail)?.len();
@@ -450,7 +463,10 @@ pub fn patch_archive_in_place(file: &Path, members: &[glob::Pattern], addition: 
         let mut content = vec![0; u32_at(&entry.record, CdEntry::COMPRESSED) as usize];
         f.seek(std::io::SeekFrom::Start(data_at)).map_err(fail)?;
         f.read_exact(&mut content).map_err(fail)?;
-        let Some(patched) = same_size(&content, addition, block, pad).map_err(|e| format!("{}: {}: {e}", file.display(), entry.name))? else { continue };
+        let Some(patched) = same_size(&content, addition, block, pad).map_err(|e| format!("{}: {}: {e}", file.display(), entry.name))?
+        else {
+            continue;
+        };
         let crc = crc32fast::hash(&patched).to_le_bytes();
         f.seek(std::io::SeekFrom::Start(data_at)).map_err(fail)?;
         f.write_all(&patched).map_err(fail)?;

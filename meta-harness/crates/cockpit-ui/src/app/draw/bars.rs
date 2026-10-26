@@ -39,7 +39,9 @@ impl CockpitApp {
         let back = local.back.label();
         match mode {
             InputMode::Capture { .. } => match &self.capture {
-                Some(Capture::Search(_)) => Some(("Searching", vec![(local.input.label(crate::keymap::Sent::Send), "jumps to it"), (back, "gives up")])),
+                Some(Capture::Search(_)) => {
+                    Some(("Searching", vec![(local.input.label(crate::keymap::Sent::Send), "jumps to it"), (back, "gives up")]))
+                }
                 Some(Capture::Hint(_)) => Some(("Labels", vec![("a label".into(), "goes there"), (back, "gives up")])),
                 Some(Capture::MarkSet | Capture::MarkJump) => Some(("Marks", vec![("a letter".into(), "the mark"), (back, "gives up")])),
                 None => None,
@@ -58,7 +60,10 @@ impl CockpitApp {
         let narrow = ctx.content_rect().width() < self.config.keymap.bar.narrow_below;
         let mut run: Option<Bound> = None;
         let status: Option<(String, Color32)> = match &self.capture {
-            Some(Capture::Hint(h)) => Some((format!("hint: type a label{}", if h.typed.is_empty() { String::new() } else { format!(" ({})", h.typed) }), colors().key)),
+            Some(Capture::Hint(h)) => Some((
+                format!("hint: type a label{}", if h.typed.is_empty() { String::new() } else { format!(" ({})", h.typed) }),
+                colors().key,
+            )),
             Some(Capture::MarkSet) => Some(("mark: press a letter".into(), colors().key)),
             Some(Capture::MarkJump) => Some(("jump to mark: press its letter".into(), colors().key)),
             _ => self.search_status(ctx).map(|(text, typing)| (text, if typing { colors().key } else { colors().muted })),
@@ -93,10 +98,13 @@ impl CockpitApp {
     /// The keys that matter now (while a mode has the keys, its keys; the
     /// action list's, as it says them), tappable; the one tapped in `run`.
     fn draw_bar_keys(&self, ui: &mut egui::Ui, bound: &[Bound], narrow: bool, run: &mut Option<Bound>) {
-        let said = |ui: &mut egui::Ui, text: String| ui.label(RichText::new(text).size(crate::theme::look().text_body).color(colors().muted));
+        let said =
+            |ui: &mut egui::Ui, text: String| ui.label(RichText::new(text).size(crate::theme::look().text_body).color(colors().muted));
         if self.input_mode == InputMode::Palette {
             let actions = self.palette_actions();
-            for keys in self.palette.keys_said(&self.config.keymap, |origin, id| actions.iter().find(|b| b.origin == origin && b.action.id == id)) {
+            for keys in
+                self.palette.keys_said(&self.config.keymap, |origin, id| actions.iter().find(|b| b.origin == origin && b.action.id == id))
+            {
                 said(ui, keys);
             }
             return;
@@ -116,9 +124,12 @@ impl CockpitApp {
                 button = button.min_size(egui::vec2(32.0, 32.0));
             }
             // Too wide for the bar's share: cut to it (whole on hover).
-            let wide = ui.painter().layout_no_wrap(words, egui::FontId::proportional(size), colors().text).size().x + 2.0 * ui.spacing().button_padding.x;
+            let wide = ui.painter().layout_no_wrap(words, egui::FontId::proportional(size), colors().text).size().x
+                + 2.0 * ui.spacing().button_padding.x;
             let clicked = match wide > widest {
-                true => ui.add_sized(egui::vec2(widest, ui.spacing().interact_size.y.max(if narrow { 32.0 } else { 0.0 })), button.truncate()),
+                true => {
+                    ui.add_sized(egui::vec2(widest, ui.spacing().interact_size.y.max(if narrow { 32.0 } else { 0.0 })), button.truncate())
+                }
                 false => ui.add(button),
             };
             if clicked.on_hover_text(&b.action.label).clicked() {
@@ -153,9 +164,22 @@ impl CockpitApp {
             next.retain(|(b, _)| self.applies(b, here));
             // The closest to where you are first.
             next.sort_by_key(|(b, _)| b.layer);
-            next.into_iter().map(|(b, rest)| (rest.iter().map(Chord::label).collect::<Vec<_>>().join(" "), b.action.label.clone(), Some(Followed::Run(b.action.id.clone())))).collect()
+            next.into_iter()
+                .map(|(b, rest)| {
+                    (
+                        rest.iter().map(Chord::label).collect::<Vec<_>>().join(" "),
+                        b.action.label.clone(),
+                        Some(Followed::Run(b.action.id.clone())),
+                    )
+                })
+                .collect()
         } else {
-            let mut rows: Vec<(String, String, Option<Followed>)> = self.desk.marks.iter().map(|(letter, jump)| (letter.to_string(), self.describe_jump(jump), Some(Followed::Mark(*letter)))).collect();
+            let mut rows: Vec<(String, String, Option<Followed>)> = self
+                .desk
+                .marks
+                .iter()
+                .map(|(letter, jump)| (letter.to_string(), self.describe_jump(jump), Some(Followed::Mark(*letter))))
+                .collect();
             if matches!(self.capture, Some(Capture::MarkSet)) {
                 rows.insert(0, ("a–z".into(), "set a mark here (replaces one with that letter)".into(), None));
             }
@@ -163,22 +187,36 @@ impl CockpitApp {
         };
         let fingers = if self.fingers { crate::actions::Fingers::Yes } else { crate::actions::Fingers::No };
         let mut tapped = None;
-        let title = if waiting { self.pending_keys.iter().map(Chord::label).collect::<Vec<_>>().join(" ") + " …" } else { "marks".into() };
-        let popup = egui::Area::new(egui::Id::new("prefix_popup")).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0)).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
-            Frame::NONE.fill(colors().overlay).stroke(Stroke::new(crate::theme::look().line_thin, colors().focus)).corner_radius(crate::theme::look().radius_xl).inner_margin(crate::theme::margin2(crate::theme::look().space_l, crate::theme::look().space_m)).show(ui, |ui| {
-                ui.label(RichText::new(title).monospace().strong().size(crate::theme::look().text_body).color(colors().info));
-                if rows.is_empty() {
-                    ui.label(RichText::new("nothing applies here").size(crate::theme::look().text_body).color(colors().muted));
-                }
-                let width = (ctx.content_rect().width() - 64.0).min(420.0);
-                for (keys, label, followed) in rows {
-                    if crate::actions::entry(ui, &keys, &label, crate::actions::Emphasis::Plain, width, fingers, &label).clicked() {
-                        tapped = followed;
-                    }
-                }
-                ui.label(RichText::new(format!("{} to cancel", self.config.keymap.back.label())).size(crate::theme::look().text_small).color(colors().muted));
+        let title =
+            if waiting { self.pending_keys.iter().map(Chord::label).collect::<Vec<_>>().join(" ") + " …" } else { "marks".into() };
+        let popup = egui::Area::new(egui::Id::new("prefix_popup"))
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0))
+            .order(egui::Order::Foreground)
+            .constrain(true)
+            .show(ctx, |ui| {
+                Frame::NONE
+                    .fill(colors().overlay)
+                    .stroke(Stroke::new(crate::theme::look().line_thin, colors().focus))
+                    .corner_radius(crate::theme::look().radius_xl)
+                    .inner_margin(crate::theme::margin2(crate::theme::look().space_l, crate::theme::look().space_m))
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(title).monospace().strong().size(crate::theme::look().text_body).color(colors().info));
+                        if rows.is_empty() {
+                            ui.label(RichText::new("nothing applies here").size(crate::theme::look().text_body).color(colors().muted));
+                        }
+                        let width = (ctx.content_rect().width() - 64.0).min(420.0);
+                        for (keys, label, followed) in rows {
+                            if crate::actions::entry(ui, &keys, &label, crate::actions::Emphasis::Plain, width, fingers, &label).clicked() {
+                                tapped = followed;
+                            }
+                        }
+                        ui.label(
+                            RichText::new(format!("{} to cancel", self.config.keymap.back.label()))
+                                .size(crate::theme::look().text_small)
+                                .color(colors().muted),
+                        );
+                    });
             });
-        });
         if waiting {
             self.overlays.drawn_at(crate::overlay::Overlay::Keys, popup.response.rect);
         }
@@ -224,7 +262,8 @@ impl CockpitApp {
             ("tap a menu".to_owned(), "a panel's top line, or Menus: its actions, as the leader opens them"),
             (go_to, "go to the name under it (code)"),
         ];
-        informs.push(Informs { title: "Pointer and touch".to_owned(), keys: pointer.into_iter().map(|(k, does)| inform(k, does)).collect() });
+        informs
+            .push(Informs { title: "Pointer and touch".to_owned(), keys: pointer.into_iter().map(|(k, does)| inform(k, does)).collect() });
         let groups = self.menu_keys().into_iter().map(|key| (key, self.group_name(&[key], here.kind))).collect();
         let line = offered.iter().find(|o| o.bound.action.command::<ShellCommand>() == Some(&ShellCommand::Line)).map(|o| o.bound.clone());
         let sheet = Sheet { view: format!("This view ({})", here.kind.words()), host, informs, groups, line };

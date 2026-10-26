@@ -1,8 +1,8 @@
 //! The actions: gathering, binding, invoking, and the shell's own commands.
 
 use super::*;
-use crate::keymap::Host;
 use crate::hosted::ItemButtons;
+use crate::keymap::Host;
 
 impl CockpitApp {
     /// The outermost level, everywhere: the shell's own (panels and
@@ -11,43 +11,134 @@ impl CockpitApp {
     pub(crate) fn shell_actions(&self) -> Vec<Action> {
         use ShellCommand as S;
         let mut actions = Vec::new();
-        let admin = |id: String, label: String, detail: String, c: ShellCommand| Action::new(id, label, detail, c).group(Group::View).importance(MINOR);
+        let admin = |id: String, label: String, detail: String, c: ShellCommand| {
+            Action::new(id, label, detail, c).group(Group::View).importance(MINOR)
+        };
         let max = self.config.panels.max;
         for panel in 0..max {
-            actions.push(admin(format!("panel.focus.{}", panel + 1), format!("Focus panel {}", panel + 1), format!("The keys go to the buffer in panel {} (counted from the left)", panel + 1), S::FocusPanel(panel)));
+            actions.push(admin(
+                format!("panel.focus.{}", panel + 1),
+                format!("Focus panel {}", panel + 1),
+                format!("The keys go to the buffer in panel {} (counted from the left)", panel + 1),
+                S::FocusPanel(panel),
+            ));
         }
-        actions.push(admin("panel.next".into(), "Next panel".into(), "The keys go to the panel to the right (from the last, the first)".into(), S::CyclePanel(1)));
-        actions.push(admin("panel.prev".into(), "Previous panel".into(), "The keys go to the panel to the left (from the first, the last)".into(), S::CyclePanel(-1)));
+        actions.push(admin(
+            "panel.next".into(),
+            "Next panel".into(),
+            "The keys go to the panel to the right (from the last, the first)".into(),
+            S::CyclePanel(1),
+        ));
+        actions.push(admin(
+            "panel.prev".into(),
+            "Previous panel".into(),
+            "The keys go to the panel to the left (from the first, the last)".into(),
+            S::CyclePanel(-1),
+        ));
         for cols in 1..=max {
-            actions.push(admin(format!("layout.{cols}"), format!("{cols}-panel layout"), format!("{cols} panels side by side: buffers that don't fit are hidden, not lost"), S::SetLayout(cols)));
+            actions.push(admin(
+                format!("layout.{cols}"),
+                format!("{cols}-panel layout"),
+                format!("{cols} panels side by side: buffers that don't fit are hidden, not lost"),
+                S::SetLayout(cols),
+            ));
         }
-        actions.push(admin("panel.add".into(), "Add a panel".into(), "One more panel, on the right: a hidden buffer comes back in it".into(), S::SetLayout(self.desk.panels.len() + 1)));
-        actions.push(admin("panel.fewer".into(), "One panel fewer (its buffer is hidden, not lost)".into(), "The rightmost panel goes; its buffer stays open, hidden".into(), S::SetLayout(self.desk.panels.len().saturating_sub(1).max(1))));
+        actions.push(admin(
+            "panel.add".into(),
+            "Add a panel".into(),
+            "One more panel, on the right: a hidden buffer comes back in it".into(),
+            S::SetLayout(self.desk.panels.len() + 1),
+        ));
+        actions.push(admin(
+            "panel.fewer".into(),
+            "One panel fewer (its buffer is hidden, not lost)".into(),
+            "The rightmost panel goes; its buffer stays open, hidden".into(),
+            S::SetLayout(self.desk.panels.len().saturating_sub(1).max(1)),
+        ));
         let bar = self.item_buttons_now() == ItemButtons::Bar;
         // What shows an agent at work: a look of the cockpit's, not a
         // chat's.
         let at_work = self.at_work.unwrap_or(self.config.chat.indicator);
-        let choices = <crate::config::IndicatorKind as crate::config::Named>::ALL.iter().map(|k| crate::actions::Choice::new(crate::config::Named::name(*k), crate::config::Named::words(*k)).detail(Some(crate::config::Named::detail(*k).into())).current(*k == at_work)).collect();
-        actions.push(Action::new("look.at_work", "What shows an agent at work", "Beside a running turn's words, in every chat: a heartbeat of its updates, or nothing", S::AtWork).param(Param::Choice(choices)).group(Group::View).importance(MINOR));
-        actions.push(Action::new("panel.item_buttons", "Show the buttons of what you're on in a bar along each panel's bottom (else floating under it)", "Where the buttons for the item under the cursor show, in every panel", S::ItemButtons).param(Param::Toggle { on: bar }).group(Group::View).importance(MINOR));
-        actions.push(admin("inspector.toggle".into(), "Toggle element inspector".into(), "For reporting the cockpit itself: point at anything drawn to file feedback on it".into(), S::ToggleInspector));
-        actions.push(admin("issues.toggle".into(), "Toggle issues window".into(), "The feedback filed on the cockpit, and what came of it".into(), S::ToggleIssues));
+        let choices = <crate::config::IndicatorKind as crate::config::Named>::ALL
+            .iter()
+            .map(|k| {
+                crate::actions::Choice::new(crate::config::Named::name(*k), crate::config::Named::words(*k))
+                    .detail(Some(crate::config::Named::detail(*k).into()))
+                    .current(*k == at_work)
+            })
+            .collect();
+        actions.push(
+            Action::new(
+                "look.at_work",
+                "What shows an agent at work",
+                "Beside a running turn's words, in every chat: a heartbeat of its updates, or nothing",
+                S::AtWork,
+            )
+            .param(Param::Choice(choices))
+            .group(Group::View)
+            .importance(MINOR),
+        );
+        actions.push(
+            Action::new(
+                "panel.item_buttons",
+                "Show the buttons of what you're on in a bar along each panel's bottom (else floating under it)",
+                "Where the buttons for the item under the cursor show, in every panel",
+                S::ItemButtons,
+            )
+            .param(Param::Toggle { on: bar })
+            .group(Group::View)
+            .importance(MINOR),
+        );
+        actions.push(admin(
+            "inspector.toggle".into(),
+            "Toggle element inspector".into(),
+            "For reporting the cockpit itself: point at anything drawn to file feedback on it".into(),
+            S::ToggleInspector,
+        ));
+        actions.push(admin(
+            "issues.toggle".into(),
+            "Toggle issues window".into(),
+            "The feedback filed on the cockpit, and what came of it".into(),
+            S::ToggleIssues,
+        ));
         actions.extend(self.attention_actions());
         actions.extend(self.server_actions());
         actions.push(
-            Action::new("cockpit.agents", "Let agents drive the cockpit", "Agents read the screen and run actions through the server's cockpit tools, as you would", S::Agents)
-                .param(Param::Toggle { on: self.desk.remote.agents })
-                .group(Group::Act)
-                .importance(MINOR),
+            Action::new(
+                "cockpit.agents",
+                "Let agents drive the cockpit",
+                "Agents read the screen and run actions through the server's cockpit tools, as you would",
+                S::Agents,
+            )
+            .param(Param::Toggle { on: self.desk.remote.agents })
+            .group(Group::Act)
+            .importance(MINOR),
         );
         actions.push(admin("palette.open".into(), "Action list".into(), "What can be done here, found by typing".into(), S::OpenPalette));
         // A menu of the leader's (each group's button opens its own).
         let kind = self.focused_kind();
         let choices = self.menu_keys().into_iter().map(|key| Choice::new(key.to_string(), self.group_name(&[key], kind))).collect();
-        actions.push(Action::new(MENU, "Open a menu", "A group of actions, as the leader and its key open it", S::Menu).param(Param::Choice(choices)).group(Group::View).importance(MINOR));
-        let index = |id: &str, label: &str, detail: &str, op: IndexOp| Action::new(id, label, detail, S::Index(op)).group(Group::Act).importance(MINOR);
-        actions.push(index("index.changed", "Re-read the code that changed", "The index takes in the files changed since it last read them", IndexOp::Changed));
-        actions.push(index("index.rebuild", "Rebuild the index from scratch", "Reads every file again (slow on a big project): when the index seems wrong", IndexOp::Rebuild));
+        actions.push(
+            Action::new(MENU, "Open a menu", "A group of actions, as the leader and its key open it", S::Menu)
+                .param(Param::Choice(choices))
+                .group(Group::View)
+                .importance(MINOR),
+        );
+        let index = |id: &str, label: &str, detail: &str, op: IndexOp| {
+            Action::new(id, label, detail, S::Index(op)).group(Group::Act).importance(MINOR)
+        };
+        actions.push(index(
+            "index.changed",
+            "Re-read the code that changed",
+            "The index takes in the files changed since it last read them",
+            IndexOp::Changed,
+        ));
+        actions.push(index(
+            "index.rebuild",
+            "Rebuild the index from scratch",
+            "Reads every file again (slow on a big project): when the index seems wrong",
+            IndexOp::Rebuild,
+        ));
         actions
     }
 
@@ -59,28 +150,70 @@ impl CockpitApp {
             let look = |id: &str, label: &str, detail: &str, c: ShellCommand| Action::new(id, label, detail, c).group(Group::View);
             return vec![
                 look("quicklook.toggle", "Close the quick look", "Back to the panel it floats over", S::QuickLook).importance(PRIMARY),
-                look("quicklook.to_panel", "Open it in a panel", "What the quick look shows, in a panel of its own", S::QuickLookToPanel).importance(PRIMARY),
+                look("quicklook.to_panel", "Open it in a panel", "What the quick look shows, in a panel of its own", S::QuickLookToPanel)
+                    .importance(PRIMARY),
             ];
         }
-        let admin = |id: String, label: String, detail: String, c: ShellCommand| Action::new(id, label, detail, c).group(Group::View).importance(MINOR);
-        let mut actions = vec![Action::new("panel.close", "Close this panel (its buffer is hidden, not lost)", "The panel goes; its buffer stays open, hidden, and comes back with more panels", S::ClosePanel).group(Group::View).importance(MINOR)];
+        let admin = |id: String, label: String, detail: String, c: ShellCommand| {
+            Action::new(id, label, detail, c).group(Group::View).importance(MINOR)
+        };
+        let mut actions = vec![
+            Action::new(
+                "panel.close",
+                "Close this panel (its buffer is hidden, not lost)",
+                "The panel goes; its buffer stays open, hidden, and comes back with more panels",
+                S::ClosePanel,
+            )
+            .group(Group::View)
+            .importance(MINOR),
+        ];
         for kind in BufferKind::ALL {
-            actions.push(admin(format!("buffer.{}", kind.name()), format!("Show {} in this panel", kind.name()), format!("The {} buffer you used last, here (or a new one beside it)", kind.name()), S::ShowBuffer(kind)));
+            actions.push(admin(
+                format!("buffer.{}", kind.name()),
+                format!("Show {} in this panel", kind.name()),
+                format!("The {} buffer you used last, here (or a new one beside it)", kind.name()),
+                S::ShowBuffer(kind),
+            ));
         }
         // Every open view, to show here: on screen (and where) or hidden.
         let views: Vec<Choice> = self
-            .desk.panels
+            .desk
+            .panels
             .buffers()
             .iter()
             .enumerate()
             .map(|(panel, p)| (*p, format!("panel {}", panel + 1)))
             .chain(self.desk.panels.put_away().map(|p| (p, "hidden".to_owned())))
-            .map(|(p, where_)| Choice::new(format!("{}:{}", p.kind.name(), p.id), self.describe(p)).detail(Some(where_)).current(p == self.desk.panels.focused_buffer()))
+            .map(|(p, where_)| {
+                Choice::new(format!("{}:{}", p.kind.name(), p.id), self.describe(p))
+                    .detail(Some(where_))
+                    .current(p == self.desk.panels.focused_buffer())
+            })
             .collect();
-        actions.push(Action::new("buffer.list", "Open buffers: show one here", "Every open buffer, on screen or hidden: pick one to show it in this panel", S::PickView).param(Param::Choice(views)).group(Group::View).importance(SECONDARY));
-        actions.push(admin("buffer.delete".into(), "Delete this panel's buffer (for good)".into(), "The buffer and its state go; the panel shows another".into(), S::DeleteView));
+        actions.push(
+            Action::new(
+                "buffer.list",
+                "Open buffers: show one here",
+                "Every open buffer, on screen or hidden: pick one to show it in this panel",
+                S::PickView,
+            )
+            .param(Param::Choice(views))
+            .group(Group::View)
+            .importance(SECONDARY),
+        );
+        actions.push(admin(
+            "buffer.delete".into(),
+            "Delete this panel's buffer (for good)".into(),
+            "The buffer and its state go; the panel shows another".into(),
+            S::DeleteView,
+        ));
         for kind in BufferKind::ALL.into_iter().filter(|k| !k.one_only()) {
-            actions.push(admin(format!("buffer.new.{}", kind.name()), format!("New {} buffer here", kind.name()), format!("Another {} buffer, beside the ones open, starting where the last was", kind.name()), S::NewView(kind)));
+            actions.push(admin(
+                format!("buffer.new.{}", kind.name()),
+                format!("New {} buffer here", kind.name()),
+                format!("Another {} buffer, beside the ones open, starting where the last was", kind.name()),
+                S::NewView(kind),
+            ));
         }
         actions
     }
@@ -93,17 +226,60 @@ impl CockpitApp {
         use ShellCommand as S;
         let nav = |id: &str, label: &str, detail: &str, c: ShellCommand| Action::new(id, label, detail, c).group(Group::Navigate);
         let mut out = vec![
-            nav("nav.hint", "Jump to something on screen", "Labels what's drawn: type a label to put the cursor there", S::Hint { open: false }).importance(PRIMARY),
-            nav("nav.hint_open", "Open something on screen", "Labels what's drawn: type a label to open it, as going into it would", S::Hint { open: true }).importance(SECONDARY).icon(egui_phosphor::regular::CURSOR_CLICK),
-            nav("nav.search", "Search this buffer", "Finds as you type, names first (letters in order), then text", S::Search).importance(PRIMARY).icon(egui_phosphor::regular::MAGNIFYING_GLASS),
-            nav("nav.search_next", "Next match", "The next thing the last search found", S::SearchStep { forward: true }).importance(SECONDARY).when(When::Searched),
-            nav("nav.search_prev", "Previous match", "The thing before, of what the last search found", S::SearchStep { forward: false }).importance(MINOR).when(When::Searched),
-            nav("nav.mark_set", "Set a mark here", "A letter to come back here with (going to the mark brings you back)", S::MarkSet).importance(MINOR).icon(egui_phosphor::regular::BOOKMARK_SIMPLE),
-            nav("nav.mark_jump", "Jump to a mark", "Back to where a letter was set, in whichever buffer", S::MarkJump).importance(MINOR).when(When::Marked),
-            nav("nav.back", "Back (jump list)", "Where you were before the last jump, in any buffer or panel", S::Back).importance(SECONDARY).when(When::Back).icon(egui_phosphor::regular::ARROW_LEFT),
-            nav("nav.forward", "Forward (jump list)", "Where you went back from", S::Forward).importance(MINOR).when(When::Forward).icon(egui_phosphor::regular::ARROW_RIGHT),
-            Action::new("nav.keys", "Action list: everything", "Every action, faded where it doesn't apply, and the keys that run nothing themselves", S::Keys).group(Group::View).importance(MINOR),
-            Action::new("talk.open", "Talk to the agent from here", "The lead's chat over what's on screen, ready to type and send", S::Talk).group(Group::Act).importance(SECONDARY),
+            nav(
+                "nav.hint",
+                "Jump to something on screen",
+                "Labels what's drawn: type a label to put the cursor there",
+                S::Hint { open: false },
+            )
+            .importance(PRIMARY),
+            nav(
+                "nav.hint_open",
+                "Open something on screen",
+                "Labels what's drawn: type a label to open it, as going into it would",
+                S::Hint { open: true },
+            )
+            .importance(SECONDARY)
+            .icon(egui_phosphor::regular::CURSOR_CLICK),
+            nav("nav.search", "Search this buffer", "Finds as you type, names first (letters in order), then text", S::Search)
+                .importance(PRIMARY)
+                .icon(egui_phosphor::regular::MAGNIFYING_GLASS),
+            nav("nav.search_next", "Next match", "The next thing the last search found", S::SearchStep { forward: true })
+                .importance(SECONDARY)
+                .when(When::Searched),
+            nav("nav.search_prev", "Previous match", "The thing before, of what the last search found", S::SearchStep { forward: false })
+                .importance(MINOR)
+                .when(When::Searched),
+            nav("nav.mark_set", "Set a mark here", "A letter to come back here with (going to the mark brings you back)", S::MarkSet)
+                .importance(MINOR)
+                .icon(egui_phosphor::regular::BOOKMARK_SIMPLE),
+            nav("nav.mark_jump", "Jump to a mark", "Back to where a letter was set, in whichever buffer", S::MarkJump)
+                .importance(MINOR)
+                .when(When::Marked),
+            nav("nav.back", "Back (jump list)", "Where you were before the last jump, in any buffer or panel", S::Back)
+                .importance(SECONDARY)
+                .when(When::Back)
+                .icon(egui_phosphor::regular::ARROW_LEFT),
+            nav("nav.forward", "Forward (jump list)", "Where you went back from", S::Forward)
+                .importance(MINOR)
+                .when(When::Forward)
+                .icon(egui_phosphor::regular::ARROW_RIGHT),
+            Action::new(
+                "nav.keys",
+                "Action list: everything",
+                "Every action, faded where it doesn't apply, and the keys that run nothing themselves",
+                S::Keys,
+            )
+            .group(Group::View)
+            .importance(MINOR),
+            Action::new(
+                "talk.open",
+                "Talk to the agent from here",
+                "The lead's chat over what's on screen, ready to type and send",
+                S::Talk,
+            )
+            .group(Group::Act)
+            .importance(SECONDARY),
             Action::new(
                 "terminal.popup",
                 if self.popped_terminal() { "Hide the pop-up terminal" } else { "Pop up a terminal over everything" },
@@ -112,12 +288,24 @@ impl CockpitApp {
             )
             .group(Group::Act)
             .importance(SECONDARY),
-            nav("nav.line", "Go to line or row", "By its number (a terminal's lines by the numbers they keep for life)", S::Line).param(Param::Text { hint: "line or row number".into(), start: String::new() }).importance(MINOR),
+            nav("nav.line", "Go to line or row", "By its number (a terminal's lines by the numbers they keep for life)", S::Line)
+                .param(Param::Text { hint: "line or row number".into(), start: String::new() })
+                .importance(MINOR),
         ];
         // What the view has where you are (a selection, a block picked,
         // the item), copied.
         if let Some(what) = self.desk.view(here.kind).copyable() {
-            out.push(Action::new("nav.copy", format!("Copy {what}"), "To the clipboard: what you're on (a selection, a code block picked with f, else the item)", S::Copy).group(Group::Act).importance(SECONDARY).on_item(crate::actions::Style::Button, "Copy", Some(egui_phosphor::regular::COPY)));
+            out.push(
+                Action::new(
+                    "nav.copy",
+                    format!("Copy {what}"),
+                    "To the clipboard: what you're on (a selection, a code block picked with f, else the item)",
+                    S::Copy,
+                )
+                .group(Group::Act)
+                .importance(SECONDARY)
+                .on_item(crate::actions::Style::Button, "Copy", Some(egui_phosphor::regular::COPY)),
+            );
         }
         out.extend(self.tag_actions(here));
         out.extend(self.link_actions(here));
@@ -137,12 +325,27 @@ impl CockpitApp {
         }
         // On what you're on: its full card (open, it's the quick look's).
         if self.quick_look.is_none() {
-            out.push(Action::new("quicklook.toggle", "Quick look: the full card (hold to peek)", "The full card of what you're on, floating over the panel: hold the key to peek", S::QuickLook).group(Group::View).importance(PRIMARY).when(When::Component));
+            out.push(
+                Action::new(
+                    "quicklook.toggle",
+                    "Quick look: the full card (hold to peek)",
+                    "The full card of what you're on, floating over the panel: hold the key to peek",
+                    S::QuickLook,
+                )
+                .group(Group::View)
+                .importance(PRIMARY)
+                .when(When::Component),
+            );
         }
         if let Some(choosing) = &self.desk.choosing {
             let name = |id: &ComponentId| self.component_name(id);
-            let choices = choosing.candidates.iter().map(|c| Choice::new(c.id.as_str(), name(&c.id)).detail(Some(c.id.to_string()))).collect();
-            out.push(Action::new("goto.pick", format!("Go to which {}?", choosing.op.one()), "It leads to several: pick one", S::GotoPick).param(Param::Choice(choices)).group(Group::GoTo));
+            let choices =
+                choosing.candidates.iter().map(|c| Choice::new(c.id.as_str(), name(&c.id)).detail(Some(c.id.to_string()))).collect();
+            out.push(
+                Action::new("goto.pick", format!("Go to which {}?", choosing.op.one()), "It leads to several: pick one", S::GotoPick)
+                    .param(Param::Choice(choices))
+                    .group(Group::GoTo),
+            );
         }
         out
     }
@@ -193,7 +396,9 @@ impl CockpitApp {
         #[cfg(test)]
         self.gathered.set(self.gathered.get() + 1);
         let kind = here.kind;
-        let view = |k: BufferKind, all: bool| self.desk.view(k).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(k), a));
+        let view = |k: BufferKind, all: bool| {
+            self.desk.view(k).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(k), a))
+        };
         let mut levels: Vec<(Layer, Origin, Action)> = Vec::new();
         levels.extend(view(kind, true).map(|(o, a)| (Layer::Panel, o, a)));
         levels.extend(self.panel_actions(here).into_iter().map(|a| (Layer::Panel, Origin::Shell, a)));
@@ -208,22 +413,32 @@ impl CockpitApp {
             }));
         }
         for (id, control) in self.placements(here) {
-            let found = levels.iter().position(|(_, o, a)| *o == Origin::View(kind) && a.id == id).or_else(|| levels.iter().position(|(_, o, a)| *o == Origin::Shell && a.id == id));
+            let found = levels
+                .iter()
+                .position(|(_, o, a)| *o == Origin::View(kind) && a.id == id)
+                .or_else(|| levels.iter().position(|(_, o, a)| *o == Origin::Shell && a.id == id));
             if let Some(i) = found {
                 levels[i].2.control = Some(control);
             }
         }
-        let tagged: Vec<Layer> = levels.iter().map(|(level, _, action)| if action.control.as_ref().is_some_and(|c| c.at.under_something()) { Layer::On } else { *level }).collect();
+        let tagged: Vec<Layer> = levels
+            .iter()
+            .map(|(level, _, action)| if action.control.as_ref().is_some_and(|c| c.at.under_something()) { Layer::On } else { *level })
+            .collect();
         let actions: Vec<(Origin, Action)> = levels.into_iter().map(|(_, o, a)| (o, a)).collect();
         // The keys given out where it is, again only when its actions changed
         // (compared as they are, nothing built to compare).
         let mut cache = self.bound_cache.borrow_mut();
         let at = cache.iter().position(|((h, _), _)| *h == here);
-        let same = |(_, kept): &KeyedActions| kept.len() == actions.len() && kept.iter().zip(&actions).all(|((o, id, aliases), (origin, a))| o == origin && *id == a.id && *aliases == a.aliases);
+        let same = |(_, kept): &KeyedActions| {
+            kept.len() == actions.len()
+                && kept.iter().zip(&actions).all(|((o, id, aliases), (origin, a))| o == origin && *id == a.id && *aliases == a.aliases)
+        };
         let keys: Vec<Keys> = match at {
             Some(at) if same(&cache[at].0) => cache[at].1.clone(),
             _ => {
-                let keys: Vec<Keys> = self.bind_actions(actions.clone(), kind).into_iter().map(|b| (b.leader, b.keys, b.gestures)).collect();
+                let keys: Vec<Keys> =
+                    self.bind_actions(actions.clone(), kind).into_iter().map(|b| (b.leader, b.keys, b.gestures)).collect();
                 let kept = ((here, actions.iter().map(|(origin, a)| (*origin, a.id.clone(), a.aliases.clone())).collect()), keys.clone());
                 match at {
                     Some(at) => cache[at] = kept,
@@ -240,7 +455,12 @@ impl CockpitApp {
             }
         };
         drop(cache);
-        actions.into_iter().zip(keys).zip(tagged).map(|(((origin, action), (leader, keys, gestures)), layer)| Bound { action, origin, leader, keys, gestures, layer }).collect()
+        actions
+            .into_iter()
+            .zip(keys)
+            .zip(tagged)
+            .map(|(((origin, action), (leader, keys, gestures)), layer)| Bound { action, origin, leader, keys, gestures, layer })
+            .collect()
     }
 
     /// Every placement for `here`: the panel's (on its top line, or under
@@ -256,9 +476,12 @@ impl CockpitApp {
         // The focused view's own menu: its actions without a leader path get
         // the next free keys under the view-menu key.
         let menu = self.config.keymap.view_menu;
-        let mut taken: Vec<char> = bound.iter().filter_map(|b| b.leader.as_ref().filter(|l| l.len() == 2 && l[0] == menu).map(|l| l[1])).collect();
+        let mut taken: Vec<char> =
+            bound.iter().filter_map(|b| b.leader.as_ref().filter(|l| l.len() == 2 && l[0] == menu).map(|l| l[1])).collect();
         // The shared moves a view offers have their keys in the keymap.
-        for b in bound.iter_mut().filter(|b| b.origin == Origin::View(focused) && b.leader.is_none() && b.action.command::<Move>().is_none()) {
+        for b in
+            bound.iter_mut().filter(|b| b.origin == Origin::View(focused) && b.leader.is_none() && b.action.command::<Move>().is_none())
+        {
             if let Some(key) = crate::keymap::AUTO_KEYS.chars().find(|c| !taken.contains(c)) {
                 taken.push(key);
                 b.leader = Some(vec![menu, key]);
@@ -274,9 +497,18 @@ impl CockpitApp {
         let focused = self.focused_kind();
         for kind in BufferKind::ALL.into_iter().filter(|k| *k != focused) {
             // Their own actions; not their shared moves, which act where you are.
-            for mut action in self.desk.view(kind).actions().into_iter().filter(|a| a.scope == Scope::Focused && a.command::<Move>().is_none()) {
+            for mut action in
+                self.desk.view(kind).actions().into_iter().filter(|a| a.scope == Scope::Focused && a.command::<Move>().is_none())
+            {
                 action.label = format!("{} · {}", kind.words(), action.label);
-                out.push(Bound { action, origin: Origin::View(kind), leader: None, keys: Vec::new(), gestures: Vec::new(), layer: Layer::Everywhere });
+                out.push(Bound {
+                    action,
+                    origin: Origin::View(kind),
+                    leader: None,
+                    keys: Vec::new(),
+                    gestures: Vec::new(),
+                    layer: Layer::Everywhere,
+                });
             }
         }
         out
@@ -374,7 +606,9 @@ impl CockpitApp {
         }
         match &bound.action.param {
             Param::None => self.invoke_counted(Invocation { action: bound.action.clone(), origin: bound.origin, value: None }, count, ctx),
-            Param::Toggle { on } => self.invoke(Invocation { action: bound.action.clone(), origin: bound.origin, value: Some((!on).to_string()) }, ctx),
+            Param::Toggle { on } => {
+                self.invoke(Invocation { action: bound.action.clone(), origin: bound.origin, value: Some((!on).to_string()) }, ctx)
+            }
             _ => self.open_palette(bound),
         }
     }
@@ -383,7 +617,9 @@ impl CockpitApp {
         let kind = self.focused_kind();
         let count = typed.unwrap_or(1).max(1);
         match command {
-            ShellCommand::AttentionNextWaiting | ShellCommand::AttentionPick | ShellCommand::Alerts => self.run_attention(command, value, ctx),
+            ShellCommand::AttentionNextWaiting | ShellCommand::AttentionPick | ShellCommand::Alerts => {
+                self.run_attention(command, value, ctx)
+            }
             ShellCommand::ServerSwitch
             | ShellCommand::ServerAdd
             | ShellCommand::ServerConnect
@@ -399,7 +635,9 @@ impl CockpitApp {
                 let buffer = self.desk.panels.show(self.desk.panels.focused(), kind);
                 self.use_buffer(buffer);
             }
-            ShellCommand::SetLayout(cols) if cols > self.config.panels.max => self.note = Some(format!("{} panels at most (`[panels] max` in your UI config).", self.config.panels.max)),
+            ShellCommand::SetLayout(cols) if cols > self.config.panels.max => {
+                self.note = Some(format!("{} panels at most (`[panels] max` in your UI config).", self.config.panels.max))
+            }
             ShellCommand::SetLayout(cols) => self.desk.panels.set_count(cols, self.config.panels.max),
             ShellCommand::ClosePanel => self.close_panel(self.desk.panels.focused()),
             ShellCommand::DeleteView => self.delete_view(),
@@ -434,11 +672,25 @@ impl CockpitApp {
             ShellCommand::ItemButtons => {
                 let bar = value.as_deref() == Some("true");
                 self.item_buttons = Some(if bar { ItemButtons::Bar } else { ItemButtons::Floating });
-                self.note = Some(if bar { "The buttons of what you're on are in a bar along each panel's bottom." } else { "The buttons of what you're on float under it." }.into());
+                self.note = Some(
+                    if bar {
+                        "The buttons of what you're on are in a bar along each panel's bottom."
+                    } else {
+                        "The buttons of what you're on float under it."
+                    }
+                    .into(),
+                );
             }
             ShellCommand::Agents => {
                 self.desk.remote.agents = value.as_deref() == Some("true");
-                self.note = Some(if self.desk.remote.agents { "Agents can drive the cockpit (the server's cockpit tools)." } else { "Agents can't drive the cockpit." }.into());
+                self.note = Some(
+                    if self.desk.remote.agents {
+                        "Agents can drive the cockpit (the server's cockpit tools)."
+                    } else {
+                        "Agents can't drive the cockpit."
+                    }
+                    .into(),
+                );
             }
             ShellCommand::OpenPalette => self.open_list(crate::sheet::Reach::Here),
             ShellCommand::Line => match value.as_deref().map(str::trim).and_then(|v| v.parse::<usize>().ok()) {
@@ -462,17 +714,33 @@ impl CockpitApp {
             }
             ShellCommand::SearchStep { forward } => self.search_step(forward, count),
             ShellCommand::MarkSet => self.start_capture(Capture::MarkSet),
-            ShellCommand::Tag | ShellCommand::Untag(_) | ShellCommand::TagGoTo | ShellCommand::TagGoToPick | ShellCommand::TagStep { .. } | ShellCommand::TagLevel | ShellCommand::TagEdit(..) | ShellCommand::TagEditWhich(_) | ShellCommand::TagInsert => self.run_tag(&command, value, ctx),
+            ShellCommand::Tag
+            | ShellCommand::Untag(_)
+            | ShellCommand::TagGoTo
+            | ShellCommand::TagGoToPick
+            | ShellCommand::TagStep { .. }
+            | ShellCommand::TagLevel
+            | ShellCommand::TagEdit(..)
+            | ShellCommand::TagEditWhich(_)
+            | ShellCommand::TagInsert => self.run_tag(&command, value, ctx),
             ShellCommand::LinkThing => self.run_link(value),
             ShellCommand::LinkInclude => self.cycle_link(),
             ShellCommand::ItemState(plan, item) => self.set_item_state(&plan, &item, value, ctx),
-            ShellCommand::Discuss | ShellCommand::DiscussLevel | ShellCommand::DiscussAsk | ShellCommand::DiscussWrite | ShellCommand::DiscussOpen => self.run_discuss(&command, value, ctx),
+            ShellCommand::Discuss
+            | ShellCommand::DiscussLevel
+            | ShellCommand::DiscussAsk
+            | ShellCommand::DiscussWrite
+            | ShellCommand::DiscussOpen => self.run_discuss(&command, value, ctx),
             ShellCommand::MarkJump => self.start_capture(Capture::MarkJump),
             ShellCommand::Back | ShellCommand::Forward => {
                 let here = self.jump_here();
                 let mut to = None;
                 for _ in 0..count {
-                    let step = if command == ShellCommand::Back { self.desk.jumps.back(to.clone().unwrap_or_else(|| here.clone())) } else { self.desk.jumps.forward(to.clone().unwrap_or_else(|| here.clone())) };
+                    let step = if command == ShellCommand::Back {
+                        self.desk.jumps.back(to.clone().unwrap_or_else(|| here.clone()))
+                    } else {
+                        self.desk.jumps.forward(to.clone().unwrap_or_else(|| here.clone()))
+                    };
                     match step {
                         Some(j) => to = Some(j),
                         None => break,
@@ -480,7 +748,10 @@ impl CockpitApp {
                 }
                 match to {
                     Some(jump) => self.restore_jump(jump),
-                    None => self.note = Some(if command == ShellCommand::Back { "Nothing to go back to." } else { "Nothing to go forward to." }.into()),
+                    None => {
+                        self.note =
+                            Some(if command == ShellCommand::Back { "Nothing to go back to." } else { "Nothing to go forward to." }.into())
+                    }
                 }
             }
             // The action list on everything.

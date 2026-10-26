@@ -37,7 +37,9 @@ impl IntoResponse for TerminalError {
         let status = match self {
             TerminalError::NotFound(_) => StatusCode::NOT_FOUND,
             TerminalError::Ended(_) => StatusCode::CONFLICT,
-            TerminalError::Start { .. } | TerminalError::Io(_) | TerminalError::Store(_) | TerminalError::Dropped(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            TerminalError::Start { .. } | TerminalError::Io(_) | TerminalError::Store(_) | TerminalError::Dropped(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         (status, Json(serde_json::json!({ "error": self.to_string() }))).into_response()
     }
@@ -52,12 +54,20 @@ async fn open(_: Needs<can::ShellDrive>, State(state): State<TerminalsState>) ->
     blocking(move || terminals.open()).await.map(Json)
 }
 
-async fn restart(_: Needs<can::ShellDrive>, State(state): State<TerminalsState>, Path(id): Path<String>) -> Result<Json<Terminal>, TerminalError> {
+async fn restart(
+    _: Needs<can::ShellDrive>,
+    State(state): State<TerminalsState>,
+    Path(id): Path<String>,
+) -> Result<Json<Terminal>, TerminalError> {
     let terminals = state.terminals.clone();
     blocking(move || terminals.restart(&TerminalId::new(id))).await.map(Json)
 }
 
-async fn close(_: Needs<can::ShellDrive>, State(state): State<TerminalsState>, Path(id): Path<String>) -> Result<StatusCode, TerminalError> {
+async fn close(
+    _: Needs<can::ShellDrive>,
+    State(state): State<TerminalsState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, TerminalError> {
     let terminals = state.terminals.clone();
     blocking(move || terminals.close(&TerminalId::new(id))).await.map(|()| StatusCode::NO_CONTENT)
 }
@@ -162,7 +172,8 @@ async fn changed_since(open: &Arc<Open>, from: u64, gone: Vec<Row>) -> Option<Fr
     }
     let count = gone.len() as u32;
     let (start, now) = read(open, move |o| o.scrollback(from, count)).await.ok()?;
-    let lines: Vec<(u64, Row)> = (start..).zip(now).filter(|(n, row)| n.checked_sub(from).and_then(|i| gone.get(i as usize)) != Some(row)).collect();
+    let lines: Vec<(u64, Row)> =
+        (start..).zip(now).filter(|(n, row)| n.checked_sub(from).and_then(|i| gone.get(i as usize)) != Some(row)).collect();
     (!lines.is_empty()).then_some(FromTerminal::ScrolledOff { lines })
 }
 

@@ -32,7 +32,12 @@ impl Changes {
             }
             Some(at) => {
                 let mut o = git2::DiffOptions::new();
-                o.context_lines(at.context).pathspec(&full).disable_pathspec_match(true).include_untracked(true).recurse_untracked_dirs(true).show_untracked_content(true);
+                o.context_lines(at.context)
+                    .pathspec(&full)
+                    .disable_pathspec_match(true)
+                    .include_untracked(true)
+                    .recurse_untracked_dirs(true)
+                    .show_untracked_content(true);
                 let diff = repo.diff_index_to_workdir(None, Some(&mut o))?;
                 apply_one(&repo, &diff, (at.old_start, at.new_start), path)
             }

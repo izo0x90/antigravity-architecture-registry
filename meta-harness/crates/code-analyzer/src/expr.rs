@@ -39,7 +39,9 @@ impl Expr {
         match spec.shape {
             ExpressionShape::Name => Expr::Name(node.text().trim().to_owned()),
             ExpressionShape::Unwrap => inner().map_or_else(|| Expr::Other(node.text().trim().to_owned()), |n| Expr::read(pack, &n)),
-            ExpressionShape::Call => inner().map_or_else(|| Expr::Other(node.text().trim().to_owned()), |n| Expr::Call(Box::new(Expr::read(pack, &n)))),
+            ExpressionShape::Call => {
+                inner().map_or_else(|| Expr::Other(node.text().trim().to_owned()), |n| Expr::Call(Box::new(Expr::read(pack, &n))))
+            }
             ExpressionShape::Member => match (inner(), name()) {
                 (Some(of), Some(name)) => Expr::Member(Box::new(Expr::read(pack, &of)), name, sep()),
                 _ => Expr::Other(node.text().trim().to_owned()),

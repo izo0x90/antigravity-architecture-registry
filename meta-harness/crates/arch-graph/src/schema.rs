@@ -19,9 +19,38 @@ const JSON_TYPES: [&str; 8] = ["string", "integer", "number", "boolean", "object
 /// (a type, a reference, or a combinator), so a record with a field called
 /// `type` stays a record.
 const SCHEMA_KEYWORDS: [&str; 32] = [
-    "$schema", "$id", "$ref", "$defs", "$comment", "definitions", "type", "title", "description", "default", "examples", "enum", "const",
-    "anyOf", "oneOf", "allOf", "not", "properties", "required", "additionalProperties", "patternProperties", "items", "prefixItems",
-    "minItems", "maxItems", "uniqueItems", "minimum", "maximum", "minLength", "maxLength", "pattern", "format",
+    "$schema",
+    "$id",
+    "$ref",
+    "$defs",
+    "$comment",
+    "definitions",
+    "type",
+    "title",
+    "description",
+    "default",
+    "examples",
+    "enum",
+    "const",
+    "anyOf",
+    "oneOf",
+    "allOf",
+    "not",
+    "properties",
+    "required",
+    "additionalProperties",
+    "patternProperties",
+    "items",
+    "prefixItems",
+    "minItems",
+    "maxItems",
+    "uniqueItems",
+    "minimum",
+    "maximum",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "format",
 ];
 
 /// Keywords that say what a schema is.
@@ -307,7 +336,8 @@ fn compare(provided: &Value, accepted: &Value, path: &str, out: &mut Vec<String>
             let empty = Map::new();
             let pprops = provided.get("properties").and_then(Value::as_object).unwrap_or(&empty);
             let aprops = accepted.get("properties").and_then(Value::as_object).unwrap_or(&empty);
-            let prequired: BTreeSet<&str> = provided.get("required").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+            let prequired: BTreeSet<&str> =
+                provided.get("required").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
             for name in accepted.get("required").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
                 if !pprops.contains_key(name) {
                     out.push(format!("{}: required field missing", join(path, name)));
@@ -411,7 +441,10 @@ mod tests {
         assert_eq!(compatibility(&s(json!("str")), &s(json!("int"))), vec!["value: type string where integer is expected"]);
         assert_eq!(compatibility(&s(json!({"name": "str"})), &s(json!({"id": "int"}))), vec!["id: required field missing"]);
         assert_eq!(compatibility(&s(json!({"id": "int?"})), &s(json!({"id": "int"})))[0], "id: required but optional where it comes from");
-        assert_eq!(compatibility(&s(json!({"user": {"id": "str"}})), &s(json!({"user": {"id": "int"}}))), vec!["user.id: type string where integer is expected"]);
+        assert_eq!(
+            compatibility(&s(json!({"user": {"id": "str"}})), &s(json!({"user": {"id": "int"}}))),
+            vec!["user.id: type string where integer is expected"]
+        );
         assert_eq!(compatibility(&s(json!("str[]")), &s(json!("int[]"))), vec!["value[]: type string where integer is expected"]);
         // A nullable value isn't accepted where null isn't; the reverse is fine.
         let nullable = compatibility(&s(json!("int?")), &s(json!("int")));

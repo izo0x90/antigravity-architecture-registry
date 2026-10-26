@@ -29,7 +29,17 @@ pub struct FileWrite {
 
 impl FileWrite {
     pub fn new(path: RepoPath) -> Self {
-        Self { path, file: None, components: None, refs: None, relations: None, flows: None, placeholders: None, rule_hits: None, highlights: None }
+        Self {
+            path,
+            file: None,
+            components: None,
+            refs: None,
+            relations: None,
+            flows: None,
+            placeholders: None,
+            rule_hits: None,
+            highlights: None,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -100,15 +110,32 @@ struct Seen {
 fn seen_change(old: Option<&FileExtract>, new: Option<&FileExtract>) -> Seen {
     let texts = |named: &[crate::Named]| named.iter().map(|n| n.text.as_str()).collect::<Vec<_>>().join(",");
     let shared = |ex: &FileExtract| {
-        let boundaries: Vec<String> = ex.flows.iter().filter(|f| f.boundary.is_some()).map(|f| format!("{:?}|{:?}|{}|{:?}", f.kind, f.boundary, f.what, f.at.map(|i| &ex.definitions[i].name))).collect();
+        let boundaries: Vec<String> = ex
+            .flows
+            .iter()
+            .filter(|f| f.boundary.is_some())
+            .map(|f| format!("{:?}|{:?}|{}|{:?}", f.kind, f.boundary, f.what, f.at.map(|i| &ex.definitions[i].name)))
+            .collect();
         format!("{}\n{}\n{:?}\n{:?}\n{:?}", ex.module, texts(&ex.imports), ex.aliases, ex.macro_defs, boundaries)
     };
     let defs = |ex: &FileExtract| -> BTreeMap<String, Vec<String>> {
         let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for d in &ex.definitions {
-            let scope = d.scope.as_ref().map(|s| format!("{}:{}", s.target.text, s.implements.as_ref().map_or("", |i| i.text.as_str()))).unwrap_or_default();
+            let scope = d
+                .scope
+                .as_ref()
+                .map(|s| format!("{}:{}", s.target.text, s.implements.as_ref().map_or("", |i| i.text.as_str())))
+                .unwrap_or_default();
             let parent = d.parent.map(|i| ex.definitions[i].name.as_str());
-            out.entry(d.name.clone()).or_default().push(format!("{}|{}|{parent:?}|{scope}|{:?}|{}|{:?}|{}", d.type_name, d.syntax_kind, d.signature, texts(&d.bases), d.self_name, texts(&d.type_names)));
+            out.entry(d.name.clone()).or_default().push(format!(
+                "{}|{}|{parent:?}|{scope}|{:?}|{}|{:?}|{}",
+                d.type_name,
+                d.syntax_kind,
+                d.signature,
+                texts(&d.bases),
+                d.self_name,
+                texts(&d.type_names)
+            ));
         }
         for lines in out.values_mut() {
             lines.sort();
@@ -116,7 +143,12 @@ fn seen_change(old: Option<&FileExtract>, new: Option<&FileExtract>) -> Seen {
         out
     };
     let scopes = |ex: &FileExtract, only: Option<&BTreeSet<String>>| -> Vec<String> {
-        ex.definitions.iter().filter(|d| only.is_none_or(|n| n.contains(&d.name))).filter_map(|d| d.scope.as_ref()).map(|s| s.target.text.clone()).collect()
+        ex.definitions
+            .iter()
+            .filter(|d| only.is_none_or(|n| n.contains(&d.name)))
+            .filter_map(|d| d.scope.as_ref())
+            .map(|s| s.target.text.clone())
+            .collect()
     };
     let everything = |exs: &[&FileExtract]| Seen {
         names: exs.iter().flat_map(|ex| ex.definitions.iter().map(|d| d.name.clone()).chain(ex.items.iter().cloned())).collect(),
@@ -125,7 +157,8 @@ fn seen_change(old: Option<&FileExtract>, new: Option<&FileExtract>) -> Seen {
     match (old, new) {
         (Some(old), Some(new)) if shared(old) == shared(new) => {
             let (before, after) = (defs(old), defs(new));
-            let mut names: BTreeSet<String> = before.keys().chain(after.keys()).filter(|n| before.get(*n) != after.get(*n)).cloned().collect();
+            let mut names: BTreeSet<String> =
+                before.keys().chain(after.keys()).filter(|n| before.get(*n) != after.get(*n)).cloned().collect();
             let items_before: BTreeSet<&String> = old.items.iter().collect();
             let items_after: BTreeSet<&String> = new.items.iter().collect();
             names.extend(items_before.symmetric_difference(&items_after).map(|n| (*n).clone()));
@@ -135,8 +168,6 @@ fn seen_change(old: Option<&FileExtract>, new: Option<&FileExtract>) -> Seen {
         (old, new) => everything(&old.into_iter().chain(new).collect::<Vec<_>>()),
     }
 }
-
-
 
 impl Uses {
     fn add(&mut self, rows: &FileRows) {
@@ -372,7 +403,8 @@ impl Model {
             .read
             .into_iter()
             .map(|(f, e)| {
-                let said = self.kept_answers.remove(&f.path).filter(|(hash, _)| *hash == f.content_hash).map(|(_, s)| s).unwrap_or_default();
+                let said =
+                    self.kept_answers.remove(&f.path).filter(|(hash, _)| *hash == f.content_hash).map(|(_, s)| s).unwrap_or_default();
                 (f, e, said)
             })
             .collect();
@@ -380,7 +412,8 @@ impl Model {
             let rows = &self.files[path];
             let mut said = saids_of(rows);
             // A call's name, by its place among the calls.
-            let names_of: BTreeMap<usize, &str> = rows.refs.iter().filter_map(|r| r.detail.call.as_ref().map(|(ci, _)| (*ci, r.name.as_str()))).collect();
+            let names_of: BTreeMap<usize, &str> =
+                rows.refs.iter().filter_map(|r| r.detail.call.as_ref().map(|(ci, _)| (*ci, r.name.as_str()))).collect();
             for (ci, s) in said.calls.iter_mut() {
                 // Into a changed file, or nowhere while a changed file now
                 // defines (or did define) its name: asked again.
@@ -405,7 +438,13 @@ impl Model {
             }
             self.put(Arc::new(rows));
         }
-        let changed: BTreeSet<RepoPath> = written.writes.iter().filter(|w| !written.touched.contains(&w.path)).map(|w| w.path.clone()).chain(written.removed.iter().cloned()).collect();
+        let changed: BTreeSet<RepoPath> = written
+            .writes
+            .iter()
+            .filter(|w| !written.touched.contains(&w.path))
+            .map(|w| w.path.clone())
+            .chain(written.removed.iter().cloned())
+            .collect();
         if !changed.is_empty() {
             self.keep(&changed, packs);
         }
@@ -438,7 +477,15 @@ impl Model {
     /// call's, type's and field's component (None: outside the repo). The
     /// file is linked again with it; a file changed since is left for a
     /// newer answer.
-    pub fn confirm(&mut self, packs: &PackSet, types: &TypeSystem, path: &RepoPath, content_hash: &str, answers: &Answers, prover: &str) -> Written {
+    pub fn confirm(
+        &mut self,
+        packs: &PackSet,
+        types: &TypeSystem,
+        path: &RepoPath,
+        content_hash: &str,
+        answers: &Answers,
+        prover: &str,
+    ) -> Written {
         let mut written = Written::default();
         let Some(rows) = self.files.get(path).filter(|r| r.file.content_hash == content_hash) else { return written };
         let mut said = saids_of(rows);
@@ -480,11 +527,16 @@ impl Model {
                 .files
                 .iter()
                 .filter(|(p, _)| *p != path)
-                .filter(|(_, r)| r.relations.iter().any(|rel| rel.kind == arch_graph::RelationKind::DataFlow && (ids.contains(&rel.source) || ids.contains(&rel.target))))
+                .filter(|(_, r)| {
+                    r.relations.iter().any(|rel| {
+                        rel.kind == arch_graph::RelationKind::DataFlow && (ids.contains(&rel.source) || ids.contains(&rel.target))
+                    })
+                })
                 .map(|(p, _)| p.clone())
                 .collect();
             if !dependents.is_empty() {
-                let to_link: Vec<_> = dependents.iter().filter_map(|p| self.files.get(p)).map(|r| (r.file.clone(), r.reading(), saids_of(r))).collect();
+                let to_link: Vec<_> =
+                    dependents.iter().filter_map(|p| self.files.get(p)).map(|r| (r.file.clone(), r.reading(), saids_of(r))).collect();
                 for linked in self.linker.link(packs, types, to_link) {
                     let at = linked.file.path.clone();
                     let write = diff(&at, self.get(&at), &linked);
@@ -517,7 +569,14 @@ fn saids_of(rows: &FileRows) -> Saids {
     for r in &rows.refs {
         let Some(prover) = r.prover.clone() else { continue };
         let confirmed = matches!(r.evidence, Evidence::Server | Evidence::External | Evidence::NotFound | Evidence::Local);
-        let said = Said { target: r.target.clone(), outside: r.evidence == Evidence::External, local: r.evidence == Evidence::Local, prover, confirmed, access: r.detail.server_access };
+        let said = Said {
+            target: r.target.clone(),
+            outside: r.evidence == Evidence::External,
+            local: r.evidence == Evidence::Local,
+            prover,
+            confirmed,
+            access: r.detail.server_access,
+        };
         match (&r.detail.call, r.kind) {
             (Some((ci, _)), _) => {
                 out.calls.insert(*ci, said);

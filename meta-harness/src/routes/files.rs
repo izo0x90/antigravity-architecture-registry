@@ -9,8 +9,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::modules::ProjectState;
 use crate::cockpit::{Needs, can};
+use crate::modules::ProjectState;
 
 pub(crate) fn routes() -> Router<ProjectState> {
     Router::new().route("/api/fs/read", get(fs_read_handler))
@@ -59,18 +59,17 @@ async fn fs_read_handler(
         at
     });
     let private = arch_service::private_paths(&root);
-    if private.iter().any(|p| asked.starts_with(p) || canonical.starts_with(p) || p.canonicalize().is_ok_and(|p| canonical.starts_with(p))) {
+    if private.iter().any(|p| asked.starts_with(p) || canonical.starts_with(p) || p.canonicalize().is_ok_and(|p| canonical.starts_with(p)))
+    {
         return Err((StatusCode::FORBIDDEN, "That's the server's own (its state, the harnesses' logins): it isn't served".to_string()));
     }
     if !canonical.is_file() {
         return Err((StatusCode::BAD_REQUEST, "Target is not a regular file".to_string()));
     }
-    let content = tokio::fs::read_to_string(&canonical).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read file: {e}")))?;
+    let content = tokio::fs::read_to_string(&canonical)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read file: {e}")))?;
 
     let lines = content.lines().count();
-    Ok(Json(FsReadResponse {
-        path: canonical.to_string_lossy().to_string(),
-        content,
-        lines,
-    }))
+    Ok(Json(FsReadResponse { path: canonical.to_string_lossy().to_string(), content, lines }))
 }

@@ -127,7 +127,10 @@ impl Changes {
     /// The repository the project's folder `project` is in (or is).
     pub fn open(project: &Path) -> Result<Self> {
         let repo = git2::Repository::discover(project).map_err(|_| ChangesError::NotARepo(project.display().to_string()))?;
-        let workdir = repo.workdir().map(Path::to_path_buf).ok_or_else(|| ChangesError::NotARepo(format!("{} (a bare repository)", project.display())))?;
+        let workdir = repo
+            .workdir()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| ChangesError::NotARepo(format!("{} (a bare repository)", project.display())))?;
         let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
         let inside = canonical(project).strip_prefix(canonical(&workdir)).map(Path::to_path_buf).unwrap_or_default();
         let prefix = inside.components().map(|c| format!("{}/", c.as_os_str().to_string_lossy())).collect();
@@ -160,7 +163,8 @@ impl Changes {
     /// filters ("only changed files").
     pub fn changed_paths(&self, comparison: &Comparison) -> Result<Vec<String>> {
         let repo = self.repo()?;
-        let mut paths: Vec<String> = compare::files(&repo, comparison, &self.prefix)?.into_iter().flat_map(|f| std::iter::once(f.path).chain(f.old_path)).collect();
+        let mut paths: Vec<String> =
+            compare::files(&repo, comparison, &self.prefix)?.into_iter().flat_map(|f| std::iter::once(f.path).chain(f.old_path)).collect();
         paths.sort();
         paths.dedup();
         Ok(paths)

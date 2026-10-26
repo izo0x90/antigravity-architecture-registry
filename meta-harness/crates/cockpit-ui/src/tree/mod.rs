@@ -22,11 +22,11 @@ use egui::RichText;
 
 use crate::actions::{Action, ActionProvider, RunCx};
 use crate::feedback::FeedbackInspectorState;
-use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, SearchEvent, Spot, Step, Target};
-use crate::viewport::{Go, Show, Stop, Viewport};
 use crate::hosted::Status;
+use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, SearchEvent, Spot, Step, Target};
 use crate::net::NetClient;
 use crate::theme::colors;
+use crate::viewport::{Go, Show, Stop, Viewport};
 
 /// One drawn row: a row at a depth in the tree.
 #[derive(Clone, Debug, PartialEq)]
@@ -244,7 +244,14 @@ impl TreeBuffer {
     /// The rows on screen, in order: open rows' children under them; with a
     /// filter, only matches and what contains them (opened up).
     pub fn rows(&self) -> Vec<Row> {
-        fn walk(tree: &TreeBuffer, id: &String, depth: usize, keep: &dyn Fn(&String) -> bool, out: &mut Vec<Row>, seen: &mut BTreeSet<String>) {
+        fn walk(
+            tree: &TreeBuffer,
+            id: &String,
+            depth: usize,
+            keep: &dyn Fn(&String) -> bool,
+            out: &mut Vec<Row>,
+            seen: &mut BTreeSet<String>,
+        ) {
             if !seen.insert(id.clone()) || !keep(id) {
                 return;
             }
@@ -357,7 +364,8 @@ impl TreeBuffer {
 
     pub(crate) fn draw(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
         let host = cx.at.name();
-        let header = ui.horizontal(|ui| ui.add(egui::TextEdit::singleline(&mut self.search_filter).hint_text("filter…").desired_width(f32::INFINITY)));
+        let header = ui
+            .horizontal(|ui| ui.add(egui::TextEdit::singleline(&mut self.search_filter).hint_text("filter…").desired_width(f32::INFINITY)));
         feedback.register_inspectable(ui, &format!("{host}:tree:header"), header.response.rect);
         ui.separator();
         if !self.answered_once {
@@ -391,24 +399,27 @@ impl TreeBuffer {
         let output = area.show_rows(ui, row_h, rows.len(), |ui, range| {
             for row in &rows[range] {
                 let on_cursor = self.cursor.as_ref() == Some(&row.id);
-                let response = ui
-                    .horizontal(|ui| {
-                        ui.set_min_height(row_h);
-                        ui.add_space(row.depth as f32 * crate::theme::look().space_xl);
-                        if self.has_children(&row.id) {
-                            let icon = crate::nav::fold_mark(!self.folded(&row.id));
-                            ui.label(RichText::new(icon).size(crate::theme::look().text_body).color(colors().muted));
-                        } else {
-                            ui.add_space(crate::theme::look().space_xl);
-                        }
-                        let c = self.known.get(&row.id);
-                        let (name, kind) = c.map_or_else(|| (row.id.to_string(), String::new()), |c| (c.label.clone(), c.kind.clone()));
-                        let color = if self.matches(&row.id) { colors().text } else { colors().faint };
-                        let text = RichText::new(format!("{name} ")).size(crate::theme::look().text_label).color(if on_cursor { colors().text_strong } else { color });
-                        let label = ui.label(if on_cursor { text.background_color(colors().selection) } else { text });
-                        ui.label(RichText::new(kind).size(crate::theme::look().text_small).color(colors().muted));
-                        label.rect
+                let response = ui.horizontal(|ui| {
+                    ui.set_min_height(row_h);
+                    ui.add_space(row.depth as f32 * crate::theme::look().space_xl);
+                    if self.has_children(&row.id) {
+                        let icon = crate::nav::fold_mark(!self.folded(&row.id));
+                        ui.label(RichText::new(icon).size(crate::theme::look().text_body).color(colors().muted));
+                    } else {
+                        ui.add_space(crate::theme::look().space_xl);
+                    }
+                    let c = self.known.get(&row.id);
+                    let (name, kind) = c.map_or_else(|| (row.id.to_string(), String::new()), |c| (c.label.clone(), c.kind.clone()));
+                    let color = if self.matches(&row.id) { colors().text } else { colors().faint };
+                    let text = RichText::new(format!("{name} ")).size(crate::theme::look().text_label).color(if on_cursor {
+                        colors().text_strong
+                    } else {
+                        color
                     });
+                    let label = ui.label(if on_cursor { text.background_color(colors().selection) } else { text });
+                    ui.label(RichText::new(kind).size(crate::theme::look().text_small).color(colors().muted));
+                    label.rect
+                });
                 measured = measured.max(response.response.rect.height());
                 spots.push(Spot { key: row.id.to_string(), rect: response.inner });
             }
@@ -437,13 +448,25 @@ impl TreeBuffer {
     fn moves(&self) -> Vec<Action> {
         use crate::actions::SECONDARY;
         let mut out = crate::nav::list_moves();
-        out.push(Move::Motion(Motion::Left).offer("Fold, or up to what holds it").detail("Folds what the cursor's on; folded, out to what holds it").importance(SECONDARY));
-        out.push(Move::Motion(Motion::Right).offer("Unfold, or into its first child").detail("Unfolds what the cursor's on; unfolded, into its first part").importance(SECONDARY));
+        out.push(
+            Move::Motion(Motion::Left)
+                .offer("Fold, or up to what holds it")
+                .detail("Folds what the cursor's on; folded, out to what holds it")
+                .importance(SECONDARY),
+        );
+        out.push(
+            Move::Motion(Motion::Right)
+                .offer("Unfold, or into its first child")
+                .detail("Unfolds what the cursor's on; unfolded, into its first part")
+                .importance(SECONDARY),
+        );
         out.push(Move::Motion(Motion::NextSibling).offer("Next sibling row"));
         out.push(Move::Motion(Motion::PrevSibling).offer("Previous sibling row"));
         let id = self.cursor.as_ref();
         out.push(match id {
-            Some(id) if self.source.opens(id).is_some() => Move::Enter.offer(self.source.opens(id).map(|(_, said)| said).unwrap_or_default()),
+            Some(id) if self.source.opens(id).is_some() => {
+                Move::Enter.offer(self.source.opens(id).map(|(_, said)| said).unwrap_or_default())
+            }
             Some(id) if self.folded(id) => Move::Enter.offer(format!("Unfold {}", self.name(id))),
             Some(id) => match self.children.get(id).and_then(|k| k.first()) {
                 Some(first) => Move::Enter.offer(format!("Into {}", self.name(first))),
@@ -470,7 +493,16 @@ impl ActionProvider for TreeBuffer {
     fn actions(&self) -> Vec<Action> {
         let mut out = self.moves();
         if !self.search_filter.is_empty() {
-            out.push(Action::new("tree.clear_filter", "Clear the filter", "Shows the whole outline again, not only what matched", TreeCommand::ClearFilter).focused().importance(crate::actions::MINOR));
+            out.push(
+                Action::new(
+                    "tree.clear_filter",
+                    "Clear the filter",
+                    "Shows the whole outline again, not only what matched",
+                    TreeCommand::ClearFilter,
+                )
+                .focused()
+                .importance(crate::actions::MINOR),
+            );
         }
         out
     }
@@ -710,7 +742,14 @@ impl Navigable for TreeBuffer {
             Fold::Open | Fold::Close | Fold::Toggle => {
                 let Some(id) = cursor else { return };
                 // On a leaf, the fold is the row that holds it.
-                let row = if self.has_children(&id) { id } else { match self.parent.get(&id).cloned() { Some(p) => p, None => return } };
+                let row = if self.has_children(&id) {
+                    id
+                } else {
+                    match self.parent.get(&id).cloned() {
+                        Some(p) => p,
+                        None => return,
+                    }
+                };
                 let open = match fold {
                     Fold::Open => true,
                     Fold::Close => false,
@@ -954,7 +993,8 @@ pub(crate) mod tests {
         t.load(&["rust:a::run".to_owned()]);
         let mut answer = outline_tree(1);
         answer.dropped = vec!["rust:a::run".into()];
-        answer.cut = Some(arch_graph::tree::Cut { reason: arch_graph::tree::CutReason::Budget, starts_left_out: 0, shown: 1, asked: 2, hidden: 1 });
+        answer.cut =
+            Some(arch_graph::tree::Cut { reason: arch_graph::tree::CutReason::Budget, starts_left_out: 0, shown: 1, asked: 2, hidden: 1 });
         t.take(outline::rows_of(answer));
         let said: Vec<String> = crate::hosted::Hosted::status(&t).into_iter().map(|s| s.text).collect();
         assert_eq!(said, ["cut (too big)", "Couldn't open run: it goes over what one answer holds."]);
@@ -972,12 +1012,29 @@ pub(crate) mod tests {
         t.loaded_once = true;
         t.take(outline());
         for _ in 0..2 {
-            let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 160.0))), ..Default::default() }, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
-                    t.draw(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut asked });
-                });
-            });
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 160.0))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
+                        t.draw(
+                            ui,
+                            &mut feedback,
+                            &mut RunCx {
+                                net: &net,
+                                ctx,
+                                input_mode: &mut mode,
+                                at: crate::keymap::Host::Panel(0),
+                                note: &mut note,
+                                asked: &mut asked,
+                            },
+                        );
+                    });
+                },
+            );
         }
         let spots = t.spots();
         assert!(!spots.is_empty() && spots.len() < 6, "only what fits is labelled: {}", spots.len());
@@ -1012,7 +1069,13 @@ pub(crate) mod tests {
 
     impl Headings {
         fn row(key: &str, parent: Option<&str>, more: u32) -> RowData {
-            RowData { key: key.into(), label: key.rsplit('/').next().unwrap().into(), kind: "heading".into(), parent: parent.map(Into::into), more }
+            RowData {
+                key: key.into(),
+                label: key.rsplit('/').next().unwrap().into(),
+                kind: "heading".into(),
+                parent: parent.map(Into::into),
+                more,
+            }
         }
     }
 
@@ -1022,7 +1085,8 @@ pub(crate) mod tests {
         }
 
         fn ask(&mut self, number: u64, opened: &[String], _net: &NetClient, _ctx: &egui::Context) {
-            let mut rows = vec![Self::row("Plan", None, 0), Self::row("Plan/Goals", Some("Plan"), 0), Self::row("Plan/Steps", Some("Plan"), 2)];
+            let mut rows =
+                vec![Self::row("Plan", None, 0), Self::row("Plan/Goals", Some("Plan"), 0), Self::row("Plan/Steps", Some("Plan"), 2)];
             if opened.iter().any(|o| o == "Plan/Steps") {
                 rows.extend([Self::row("Plan/Steps/Read", Some("Plan/Steps"), 0), Self::row("Plan/Steps/Write", Some("Plan/Steps"), 0)]);
                 rows[2].more = 0;
@@ -1052,7 +1116,11 @@ pub(crate) mod tests {
         crate::buffer::Buffer::tick(&mut t, &net, &ctx);
         let shown = |t: &TreeBuffer| t.rows().iter().map(|r| format!("{}{}", "  ".repeat(r.depth), t.name(&r.id))).collect::<Vec<_>>();
         assert_eq!(shown(&t), ["Plan", "  Goals", "  Steps"]);
-        assert_eq!(crate::hosted::Hosted::title(&t).text, format!("{} Headings", egui_phosphor::regular::TREE_STRUCTURE), "its source names it");
+        assert_eq!(
+            crate::hosted::Hosted::title(&t).text,
+            format!("{} Headings", egui_phosphor::regular::TREE_STRUCTURE),
+            "its source names it"
+        );
         t.move_to("Plan/Steps");
         assert!(t.folded(&"Plan/Steps".to_owned()), "its parts aren't here: folded");
         assert_eq!(t.enter(), Step::Done);

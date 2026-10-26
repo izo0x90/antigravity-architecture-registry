@@ -60,12 +60,54 @@ fn requests_plan_edits_approvals_verification_and_refresh_copy_no_graph() {
     };
     step("add a component", &mut || {
         service
-            .apply(&plan, PlanOp::AddComponent { name: "validate".into(), type_name: "function".into(), description: "Checks input.".into(), parent: Some(id("sample")), file: None, signature: Some(Signature { params: vec![Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] }), schemas: None, spec: None })
+            .apply(
+                &plan,
+                PlanOp::AddComponent {
+                    name: "validate".into(),
+                    type_name: "function".into(),
+                    description: "Checks input.".into(),
+                    parent: Some(id("sample")),
+                    file: None,
+                    signature: Some(Signature {
+                        params: vec![Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }],
+                        returns: Some("bool".into()),
+                        qualifiers: vec![],
+                    }),
+                    schemas: None,
+                    spec: None,
+                },
+            )
             .unwrap();
     });
     step("relate", &mut || {
-        service.apply(&plan, PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::validate"), order: None, ports: None, note: None, expects: None }).unwrap();
-        service.apply(&plan, PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::validate"), target: id("sample::store::Store::new"), order: None, ports: None, note: None, expects: None }).unwrap();
+        service
+            .apply(
+                &plan,
+                PlanOp::Relate {
+                    kind: RelationKind::Calls,
+                    source: id("sample::run"),
+                    target: id("sample::validate"),
+                    order: None,
+                    ports: None,
+                    note: None,
+                    expects: None,
+                },
+            )
+            .unwrap();
+        service
+            .apply(
+                &plan,
+                PlanOp::Relate {
+                    kind: RelationKind::Calls,
+                    source: id("sample::validate"),
+                    target: id("sample::store::Store::new"),
+                    order: None,
+                    ports: None,
+                    note: None,
+                    expects: None,
+                },
+            )
+            .unwrap();
     });
     step("read the plan's graph", &mut || {
         service.graph(&source).unwrap();
@@ -115,7 +157,11 @@ fn requests_plan_edits_approvals_verification_and_refresh_copy_no_graph() {
     // A step may insert only the plan's own items and, for the refresh, the
     // changed file's components; more is a rebuild.
     let planned = service.plan(&plan).unwrap().components.len();
-    let in_util = service.observed().unwrap().components().filter(|c| c.anchor.as_ref().is_some_and(|a| a.file.as_str() == "src/util.rs")).count();
+    let in_util =
+        service.observed().unwrap().components().filter(|c| c.anchor.as_ref().is_some_and(|a| a.file.as_str() == "src/util.rs")).count();
     let rebuilt: Vec<_> = did.iter().filter(|(name, n)| *n > planned + if name.starts_with("refresh") { in_util } else { 0 }).collect();
-    assert!(rebuilt.is_empty(), "whole rebuilds (step, components inserted; the plan has {planned} items, src/util.rs {in_util} components): {rebuilt:?}");
+    assert!(
+        rebuilt.is_empty(),
+        "whole rebuilds (step, components inserted; the plan has {planned} items, src/util.rs {in_util} components): {rebuilt:?}"
+    );
 }

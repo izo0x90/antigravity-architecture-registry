@@ -122,14 +122,31 @@ impl<G: GraphRead> Growing<'_, '_, G> {
                 self.links_left -= 1;
             }
             self.cards[from].open = true;
-            self.lines.push(Line { from: pair.0, to: pair.1, kind, relation: child.relation, order: child.order, mark: child.mark, pills: child.pills, path: Vec::new(), reach: Vec::new(), evidence: child.evidence });
+            self.lines.push(Line {
+                from: pair.0,
+                to: pair.1,
+                kind,
+                relation: child.relation,
+                order: child.order,
+                mark: child.mark,
+                pills: child.pills,
+                path: Vec::new(),
+                reach: Vec::new(),
+                evidence: child.evidence,
+            });
         }
         true
     }
 
     /// Walks `levels` levels under `frontier`. Returns the cut (levels added
     /// before it stopped) if it couldn't go all the way.
-    fn deepen(&mut self, mut frontier: Vec<usize>, levels: u32, forced_first: bool, out_of_time: &dyn Fn() -> bool) -> Option<(u32, CutReason)> {
+    fn deepen(
+        &mut self,
+        mut frontier: Vec<usize>,
+        levels: u32,
+        forced_first: bool,
+        out_of_time: &dyn Fn() -> bool,
+    ) -> Option<(u32, CutReason)> {
         for level in 0..levels {
             if out_of_time() {
                 return Some((level, CutReason::Time));
@@ -156,7 +173,14 @@ impl<G: GraphRead> Growing<'_, '_, G> {
                 continue;
             }
             let key = self.cards[i].key.clone();
-            let more = self.lens.children(&key).iter().filter(|c| !self.at.contains_key(&c.key)).map(|c| c.key.clone()).collect::<BTreeSet<_>>().len() as u32;
+            let more = self
+                .lens
+                .children(&key)
+                .iter()
+                .filter(|c| !self.at.contains_key(&c.key))
+                .map(|c| c.key.clone())
+                .collect::<BTreeSet<_>>()
+                .len() as u32;
             self.cards[i].more = more;
             hidden += more;
         }
@@ -167,7 +191,14 @@ impl<G: GraphRead> Growing<'_, '_, G> {
     /// (and nothing added) when it doesn't fit.
     fn open_by_hand(&mut self, opened: &super::Opened, out_of_time: &dyn Fn() -> bool) -> bool {
         let frontier = self.leaves_under(self.at[&opened.card]);
-        let before = (self.cards.len(), self.lines.len(), self.drawn.clone(), self.at.clone(), self.cards.iter().map(|c| (c.open, c.links_left_out)).collect::<Vec<_>>(), self.links_left);
+        let before = (
+            self.cards.len(),
+            self.lines.len(),
+            self.drawn.clone(),
+            self.at.clone(),
+            self.cards.iter().map(|c| (c.open, c.links_left_out)).collect::<Vec<_>>(),
+            self.links_left,
+        );
         if self.deepen(frontier, opened.levels, true, out_of_time).is_none() {
             return true;
         }
@@ -210,7 +241,17 @@ pub(super) fn walk_known<G: GraphRead>(lens: &Lens<G>, input: &Input<G>, request
     let depth = request.depth.unwrap_or_else(|| lens.default_depth());
     let budget = input.budget.max(1);
     let known: BTreeSet<String> = known.iter().filter(|k| request.root.as_ref() != Some(*k)).cloned().collect();
-    let mut grow = Growing { lens, cards: Vec::new(), at: BTreeMap::new(), lines: Vec::new(), drawn: BTreeSet::new(), budget, links_left: input.link_budget, closed: request.closed.iter().cloned().collect(), known };
+    let mut grow = Growing {
+        lens,
+        cards: Vec::new(),
+        at: BTreeMap::new(),
+        lines: Vec::new(),
+        drawn: BTreeSet::new(),
+        budget,
+        links_left: input.link_budget,
+        closed: request.closed.iter().cloned().collect(),
+        known,
+    };
     let mut request = request.clone();
     request.depth = Some(depth);
     let starts: Vec<String> = match &request.root {
@@ -268,7 +309,15 @@ pub(super) fn walk_known<G: GraphRead>(lens: &Lens<G>, input: &Input<G>, request
 /// lines (of the asked view) to those. Only that branch is walked: a card
 /// nothing holds is its own top (it and what it holds).
 pub(super) fn context<G: GraphRead>(lens: &Lens<G>, input: &Input<G>, request: &TreeRequest, card: &str) -> Tree {
-    let contains = TreeRequest { view: ViewKind::Contains, way: super::Way::Down, depth: Some(1), root: None, opened: Vec::new(), closed: Vec::new(), ..request.clone() };
+    let contains = TreeRequest {
+        view: ViewKind::Contains,
+        way: super::Way::Down,
+        depth: Some(1),
+        root: None,
+        opened: Vec::new(),
+        closed: Vec::new(),
+        ..request.clone()
+    };
     let holder_lens = Lens::new(input, &contains);
     let id = crate::ComponentId::new(lens.face(card).component.map_or_else(|| card.to_owned(), |c| c.0));
     let holder = lens.ancestors(&id).into_iter().next();
@@ -281,7 +330,18 @@ pub(super) fn context<G: GraphRead>(lens: &Lens<G>, input: &Input<G>, request: &
     if request.view != ViewKind::Contains {
         for child in lens.children(&id.0) {
             if beside.contains(&child.key) && child.key != id.0 {
-                tree.lines.push(Line { from: id.0.clone(), to: child.key, kind: LineKind::Repeat, relation: child.relation, order: child.order, mark: child.mark, pills: child.pills, path: Vec::new(), reach: Vec::new(), evidence: child.evidence });
+                tree.lines.push(Line {
+                    from: id.0.clone(),
+                    to: child.key,
+                    kind: LineKind::Repeat,
+                    relation: child.relation,
+                    order: child.order,
+                    mark: child.mark,
+                    pills: child.pills,
+                    path: Vec::new(),
+                    reach: Vec::new(),
+                    evidence: child.evidence,
+                });
             }
         }
     }

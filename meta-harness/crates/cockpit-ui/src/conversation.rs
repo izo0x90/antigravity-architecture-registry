@@ -102,7 +102,15 @@ impl Messages {
 /// Draws `m`: who said it (and what, and when) above, the text (its links
 /// as `chips`), what's under it. Its code blocks coloured as `code` has
 /// them.
-fn message(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highlighter::Highlighter, wanted: &mut Vec<(String, String)>, salt: egui::Id, chips: &[Chip], m: &Message<'_>) -> Drawn {
+fn message(
+    ui: &mut egui::Ui,
+    cache: &mut CommonMarkCache,
+    code: &crate::highlighter::Highlighter,
+    wanted: &mut Vec<(String, String)>,
+    salt: egui::Id,
+    chips: &[Chip],
+    m: &Message<'_>,
+) -> Drawn {
     let look = crate::theme::look();
     let mut drawn = Drawn::default();
     let mut head = who(m.by).to_owned();
@@ -137,7 +145,14 @@ fn message(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highlig
 /// a table's rows and a code block's lines can't, so each scrolls sideways
 /// in a box of that width, never widening what holds it. Code blocks not
 /// known yet are asked for (`wanted`); where they were drawn.
-fn markdown(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highlighter::Highlighter, wanted: &mut Vec<(String, String)>, salt: egui::Id, text: &str) -> Vec<Rect> {
+fn markdown(
+    ui: &mut egui::Ui,
+    cache: &mut CommonMarkCache,
+    code: &crate::highlighter::Highlighter,
+    wanted: &mut Vec<(String, String)>,
+    salt: egui::Id,
+    text: &str,
+) -> Vec<Rect> {
     let mut drawn = Vec::new();
     for (n, part) in parts(text).into_iter().enumerate() {
         let id = salt.with(n);
@@ -160,7 +175,15 @@ fn markdown(ui: &mut egui::Ui, cache: &mut CommonMarkCache, code: &crate::highli
 /// fence names (as the code view colours a file; one still being written,
 /// `closed` not, plain till it is: asked for once whole), in a box of the
 /// width it's given. Where it was drawn.
-fn code_block(ui: &mut egui::Ui, code: &crate::highlighter::Highlighter, wanted: &mut Vec<(String, String)>, id: egui::Id, fence: &str, text: &str, closed: bool) -> Rect {
+fn code_block(
+    ui: &mut egui::Ui,
+    code: &crate::highlighter::Highlighter,
+    wanted: &mut Vec<(String, String)>,
+    id: egui::Id,
+    fence: &str,
+    text: &str,
+    closed: bool,
+) -> Rect {
     let look = crate::theme::look();
     let colours = code.colours(fence, text);
     if let crate::highlighter::Colours::Unknown { asked: false } = colours
@@ -170,7 +193,8 @@ fn code_block(ui: &mut egui::Ui, code: &crate::highlighter::Highlighter, wanted:
     }
     let font = egui::FontId::monospace(look.text_body);
     let format = |color: Color32| egui::text::TextFormat { font_id: font.clone(), color, ..Default::default() };
-    let job = crate::highlighter::coloured(text, 0..text.len(), colours.highlights(), |capture| code.colour(capture), colors().text, format);
+    let job =
+        crate::highlighter::coloured(text, 0..text.len(), colours.highlights(), |capture| code.colour(capture), colors().text, format);
     boxed(ui, id, colors().surface, |ui| {
         ui.add(egui::Label::new(job).extend());
     })
@@ -285,14 +309,22 @@ pub fn said<'a>(d: &'a harness_contracts::Discussion, s: &'a harness_contracts::
         SaidKind::Reopened => Some(colors().warn),
     };
     let what = (s.kind != SaidKind::Message).then(|| s.kind.words());
-    Message { by: d.name_of(&s.by), at_ms: Some(s.at_ms), what, text: &s.text, markdown: s.by != harness_contracts::USER, tone, under: s.changed.iter().map(|c| format!("changed {}", c.what)).collect(), links: &[] }
+    Message {
+        by: d.name_of(&s.by),
+        at_ms: Some(s.at_ms),
+        what,
+        text: &s.text,
+        markdown: s.by != harness_contracts::USER,
+        tone,
+        under: s.changed.iter().map(|c| format!("changed {}", c.what)).collect(),
+        links: &[],
+    }
 }
 
 /// A text's first line, cut short (what a list shows of what was said).
 pub fn first_line(text: &str) -> String {
     text.lines().next().unwrap_or_default().chars().take(120).collect()
 }
-
 
 /// Where a discussion stands, in a word, and its colour.
 pub fn standing(d: &harness_contracts::Discussion) -> (&'static str, Color32) {
@@ -370,7 +402,8 @@ fn span_rect(galley: &egui::Galley, text: &str, link: &harness_contracts::Link) 
     if link.end > text.chars().count() || link.start >= link.end {
         return None;
     }
-    let (start, end) = (galley.pos_from_cursor(egui::text::CCursor::new(link.start)), galley.pos_from_cursor(egui::text::CCursor::new(link.end)));
+    let (start, end) =
+        (galley.pos_from_cursor(egui::text::CCursor::new(link.start)), galley.pos_from_cursor(egui::text::CCursor::new(link.end)));
     let right = if (start.min.y - end.min.y).abs() < 1.0 { end.max.x } else { galley.rect.right() };
     Some(Rect::from_min_max(start.min, egui::pos2(right, start.max.y)))
 }
@@ -574,7 +607,9 @@ impl TypingBox {
         let written = (!self.links.is_empty()).then(|| self.text.clone());
         let chips = TypingBox { links: self.links.clone(), ..TypingBox::default() };
         let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap: f32| chips.laid_out(ui, text.as_str(), wrap);
-        let output = ui.add(keys.text_box(&mut self.text).id(id).desired_rows(rows).desired_width(f32::INFINITY).hint_text(hint).layouter(&mut layouter));
+        let output = ui.add(
+            keys.text_box(&mut self.text).id(id).desired_rows(rows).desired_width(f32::INFINITY).hint_text(hint).layouter(&mut layouter),
+        );
         let caret_now = egui::TextEdit::load_state(ui.ctx(), output.id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index);
         if let Some(written) = written {
             self.follow_edit(&written, caret_now);
@@ -586,7 +621,9 @@ impl TypingBox {
         }
         // Typed at its end (what's picked is put there): a trigger typed amid
         // what's written is just a character.
-        let at_end = egui::TextEdit::load_state(ui.ctx(), output.id).and_then(|s| s.cursor.char_range()).is_none_or(|r| r.primary.index == self.text.chars().count());
+        let at_end = egui::TextEdit::load_state(ui.ctx(), output.id)
+            .and_then(|s| s.cursor.char_range())
+            .is_none_or(|r| r.primary.index == self.text.chars().count());
         let trigger = (output.changed() && at_end).then(|| crate::trigger::typed(&self.text, before)).flatten();
         // What its links come to, said before it's sent.
         if let Some(warning) = &self.warning {
@@ -614,7 +651,10 @@ mod tests {
     fn tables_are_cut_apart_from_the_words_around_them() {
         let text = "Here:\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nand after.\n| not | a table |\n";
         let cut = parts(text);
-        assert!(matches!(cut[..], [Part::Words(_), Part::Table(table), Part::Words(after)] if table.starts_with("| a | b |") && table.contains("| 1 | 2 |") && after.contains("and after") && after.contains("| not | a table |")), "{cut:?}");
+        assert!(
+            matches!(cut[..], [Part::Words(_), Part::Table(table), Part::Words(after)] if table.starts_with("| a | b |") && table.contains("| 1 | 2 |") && after.contains("and after") && after.contains("| not | a table |")),
+            "{cut:?}"
+        );
         assert_eq!(parts("just words"), [Part::Words("just words")]);
     }
 
@@ -627,7 +667,16 @@ mod tests {
     fn code_blocks_are_cut_apart_with_their_language() {
         let text = "Try:\n```rust\nfn main() {}\n```\nThen:\n~~~~ py extra\nprint(1)\n```\n~~~~\n| a |\n|---|\n";
         let code = |fence: &'static str, code: &str, closed| Part::Code { fence, code: code.to_owned(), closed };
-        assert_eq!(parts(text), [Part::Words("Try:\n"), code("rust", "fn main() {}", true), Part::Words("\nThen:\n"), code("py", "print(1)\n```", true), Part::Table("| a |\n|---|\n")]);
+        assert_eq!(
+            parts(text),
+            [
+                Part::Words("Try:\n"),
+                code("rust", "fn main() {}", true),
+                Part::Words("\nThen:\n"),
+                code("py", "print(1)\n```", true),
+                Part::Table("| a |\n|---|\n")
+            ]
+        );
         assert_eq!(parts("```\n| a |\n|---|\nstill"), [code("", "| a |\n|---|\nstill", false)], "not closed yet: to the end");
         let listed = "- one\n  ```sh\n  ls\n  ```\n- two\n";
         assert_eq!(parts(listed), [Part::Words(listed)], "in a list: with its words");
@@ -641,8 +690,14 @@ mod tests {
     fn the_files_a_message_names_are_read_from_its_words() {
         let text = "See src/chat/render.rs:42, and `lib.rs:7` (and lib.rs:7 again); ./crates/a.rs too.\n\
                     Not https://x.io/a.rs:3, v1.2.3, render.rs, e.g. this, note: that, or a.rs:x.";
-        assert_eq!(places(text, ""), [("src/chat/render.rs".to_owned(), Some(42)), ("lib.rs".to_owned(), Some(7)), ("crates/a.rs".to_owned(), None)]);
-        assert_eq!(places("Cargo.toml:5:3 and [the file](src/x.ts)", ""), [("Cargo.toml".to_owned(), Some(5)), ("src/x.ts".to_owned(), None)]);
+        assert_eq!(
+            places(text, ""),
+            [("src/chat/render.rs".to_owned(), Some(42)), ("lib.rs".to_owned(), Some(7)), ("crates/a.rs".to_owned(), None)]
+        );
+        assert_eq!(
+            places("Cargo.toml:5:3 and [the file](src/x.ts)", ""),
+            [("Cargo.toml".to_owned(), Some(5)), ("src/x.ts".to_owned(), None)]
+        );
         // An absolute path: from where the session works, when it's there.
         let said = "Fixed /work/proj/src/a.rs:12 (see /etc/hosts.txt).";
         assert_eq!(places(said, ""), [], "no folder: not a place");

@@ -21,7 +21,9 @@ fn sample() -> PathBuf {
 
 fn open(root: &Path, limits: Limits) -> ArchitectureService {
     let facts = open_facts(root, &limits).unwrap();
-    ArchitectureService::open(root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap().with_limits(limits)
+    ArchitectureService::open(root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts)
+        .unwrap()
+        .with_limits(limits)
 }
 
 fn stages(timed: &arch_service::Timed) -> Vec<&str> {

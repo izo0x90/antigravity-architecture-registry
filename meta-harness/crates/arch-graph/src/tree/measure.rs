@@ -13,7 +13,8 @@ use ttf_parser::{Face, GlyphId};
 /// each with the scale the theme draws it at. (The theme's icon font sits
 /// second; it holds only private-use characters, which card text doesn't
 /// carry.)
-const FONTS: [(&[u8], f32); 3] = [(epaint_default_fonts::UBUNTU_LIGHT, 1.0), (epaint_default_fonts::NOTO_EMOJI_REGULAR, 0.81), (epaint_default_fonts::EMOJI_ICON, 0.90)];
+const FONTS: [(&[u8], f32); 3] =
+    [(epaint_default_fonts::UBUNTU_LIGHT, 1.0), (epaint_default_fonts::NOTO_EMOJI_REGULAR, 0.81), (epaint_default_fonts::EMOJI_ICON, 0.90)];
 
 /// Drawn for a character no font has, as egui does (the first one found).
 const REPLACEMENTS: [char; 2] = ['◻', '?'];
@@ -67,7 +68,11 @@ impl Measure {
         if let Some(g) = kept.glyphs.get(&c) {
             return *g;
         }
-        let found = self.find(c).or_else(|| REPLACEMENTS.iter().find_map(|r| self.find(*r))).unwrap_or(Glyph { font: 0, id: GlyphId(0), advance: 0.0 });
+        let found = self.find(c).or_else(|| REPLACEMENTS.iter().find_map(|r| self.find(*r))).unwrap_or(Glyph {
+            font: 0,
+            id: GlyphId(0),
+            advance: 0.0,
+        });
         kept.glyphs.insert(c, found);
         found
     }
@@ -77,7 +82,9 @@ impl Measure {
     fn kerning(&self, kept: &mut Kept, (a, b): (char, char), (ga, gb): (Glyph, Glyph)) -> f32 {
         *kept.kerning.entry((a, b)).or_insert_with(|| {
             let font = &self.fonts[gb.font];
-            let units = font.face.tables().kern.and_then(|kern| kern.subtables.into_iter().filter(|s| s.horizontal && !s.variable).find_map(|s| s.glyphs_kerning(ga.id, gb.id)));
+            let units = font.face.tables().kern.and_then(|kern| {
+                kern.subtables.into_iter().filter(|s| s.horizontal && !s.variable).find_map(|s| s.glyphs_kerning(ga.id, gb.id))
+            });
             f32::from(units.unwrap_or_default()) * font.per_unit
         })
     }

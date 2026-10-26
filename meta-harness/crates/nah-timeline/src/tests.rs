@@ -63,7 +63,11 @@ fn timeline() -> (tempfile::TempDir, Arc<Changes>, Arc<Memory>, Timeline) {
 }
 
 fn turn(id: &str, thread: &str, status: TurnStatus) -> ClientEvent {
-    ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new(id), thread_id: ThreadId::new(thread), ordinal: 1, status, failure: None, usage: None } } }
+    ClientEvent::Session {
+        event: AdapterEvent::TurnUpdated {
+            turn: Turn { id: TurnId::new(id), thread_id: ThreadId::new(thread), ordinal: 1, status, failure: None, usage: None },
+        },
+    }
 }
 
 #[test]

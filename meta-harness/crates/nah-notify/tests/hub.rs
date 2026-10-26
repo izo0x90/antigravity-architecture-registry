@@ -2,8 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use harness_contracts::{
-    AdapterEvent, ClientEvent, InstanceId, Level, Notification, NotificationId, NotificationKind, NotificationState, RequestId, RequestKind, RequestStatus, RuntimeRequest, SessionKey, Slot,
-    SlotId, SlotSession, SlotStatus, Starter, ThreadId, Turn, TurnId, TurnStatus,
+    AdapterEvent, ClientEvent, InstanceId, Level, Notification, NotificationId, NotificationKind, NotificationState, RequestId,
+    RequestKind, RequestStatus, RuntimeRequest, SessionKey, Slot, SlotId, SlotSession, SlotStatus, Starter, ThreadId, Turn, TurnId,
+    TurnStatus,
 };
 use harness_core::EventHub;
 use nah_notify::testing::{Ended, MemoryStore, Recorder};
@@ -49,7 +50,11 @@ fn ran(id: &str, thread: &str, status: TurnStatus) -> [ClientEvent; 2] {
 }
 
 fn turn(id: &str, thread: &str, status: TurnStatus) -> ClientEvent {
-    ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new(id), thread_id: ThreadId::new(thread), ordinal: 1, status, failure: None, usage: None } } }
+    ClientEvent::Session {
+        event: AdapterEvent::TurnUpdated {
+            turn: Turn { id: TurnId::new(id), thread_id: ThreadId::new(thread), ordinal: 1, status, failure: None, usage: None },
+        },
+    }
 }
 
 struct Rig {
@@ -87,9 +92,17 @@ async fn an_approval_waits_until_answered_and_every_step_is_kept_published_and_h
     r.events.publish(request("r1", RequestStatus::Pending));
     settle().await;
     let open = r.hub.open();
-    assert_eq!((ids(&open), open[0].kind, open[0].slot.as_ref().map(|s| s.as_str())), (vec!["req:r1"], NotificationKind::Approval, Some("sub-1")));
+    assert_eq!(
+        (ids(&open), open[0].kind, open[0].slot.as_ref().map(|s| s.as_str())),
+        (vec!["req:r1"], NotificationKind::Approval, Some("sub-1"))
+    );
     let (replay, _) = r.events.subscribe();
-    assert!(replay.iter().any(|e| matches!(&e.event, ClientEvent::NotificationUpdated { notification } if notification.id.as_str() == "req:r1")), "a late client gets it");
+    assert!(
+        replay
+            .iter()
+            .any(|e| matches!(&e.event, ClientEvent::NotificationUpdated { notification } if notification.id.as_str() == "req:r1")),
+        "a late client gets it"
+    );
     // The same event again changes nothing.
     r.events.publish(request("r1", RequestStatus::Pending));
     r.events.publish(request("r1", RequestStatus::Resolved));

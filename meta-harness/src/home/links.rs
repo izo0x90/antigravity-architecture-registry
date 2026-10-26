@@ -57,7 +57,10 @@ impl Links {
     /// A server added: followed from now on.
     pub fn add(self: &Arc<Self>, entry: ServerEntry) {
         let name = entry.name.clone();
-        lock(&self.links).insert(name.clone(), Link { entry, hub: Arc::new(EventHub::default()), state: Arc::new(Mutex::new(LinkState::Connecting)), task: None });
+        lock(&self.links).insert(
+            name.clone(),
+            Link { entry, hub: Arc::new(EventHub::default()), state: Arc::new(Mutex::new(LinkState::Connecting)), task: None },
+        );
         self.connect(&name);
     }
 
@@ -114,7 +117,10 @@ impl Links {
 
     /// The servers and their links (no secrets).
     pub fn list(&self) -> Vec<ServerView> {
-        lock(&self.links).values().map(|l| ServerView { name: l.entry.name.clone(), url: l.entry.url.clone(), link: lock(&l.state).clone(), project: true }).collect()
+        lock(&self.links)
+            .values()
+            .map(|l| ServerView { name: l.entry.name.clone(), url: l.entry.url.clone(), link: lock(&l.state).clone(), project: true })
+            .collect()
     }
 
     /// Where a server is, and its secret.
@@ -165,7 +171,12 @@ async fn follow(entry: ServerEntry, hub: Arc<EventHub>, state: Arc<Mutex<LinkSta
 
 /// One connection: until it ends. Its notifications are said to be from
 /// it, and handed to home's adapters (its rules ran there already).
-async fn stream(entry: &ServerEntry, hub: &Arc<EventHub>, state: &Arc<Mutex<LinkState>>, links: &std::sync::Weak<Links>) -> Result<(), String> {
+async fn stream(
+    entry: &ServerEntry,
+    hub: &Arc<EventHub>,
+    state: &Arc<Mutex<LinkState>>,
+    links: &std::sync::Weak<Links>,
+) -> Result<(), String> {
     let url = format!("{}/ws/events", entry.url.replacen("http://", "ws://", 1));
     let mut request = url.as_str().into_client_request().map_err(|e| format!("{url}: {e}"))?;
     let bearer = format!("Bearer {}", entry.secret).parse().map_err(|_| "its secret isn't a header value".to_owned())?;

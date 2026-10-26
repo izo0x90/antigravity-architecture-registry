@@ -17,6 +17,8 @@ dev-setup:
 	meta-harness/scripts/dev-setup.sh
 
 lint:
+	@echo "==> rustfmt: every Rust file formatted (rustfmt.toml)"
+	cd meta-harness && cargo fmt --all --check
 	@echo "==> Clippy: the server and every crate"
 	cd meta-harness && cargo clippy --workspace --all-targets -- -D warnings
 	@echo "==> Clippy: the cockpit's browser build"

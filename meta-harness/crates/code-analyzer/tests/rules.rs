@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use arch_graph::{ComponentId, FindingCode, Graph, Provenance, Severity, TypeSystem};
-use code_analyzer::{CodeRules, FileExtract, PackSet, Observed, RuleSeverity};
+use code_analyzer::{CodeRules, FileExtract, Observed, PackSet, RuleSeverity};
 
 mod common;
 
@@ -114,7 +114,9 @@ fn bad_rules_are_rejected_with_a_reason() {
     let packs = common::shipped_packs();
     let types = TypeSystem::defaults().unwrap();
     let rule = |language: &str, types_list: &str, body: &str| {
-        format!("[[rule]]\nid = \"r\"\nlanguage = \"{language}\"\ntypes = [{types_list}]\nkind = \"forbidden\"\nrule = {body}\nmessage = \"m\"\n")
+        format!(
+            "[[rule]]\nid = \"r\"\nlanguage = \"{language}\"\ntypes = [{types_list}]\nkind = \"forbidden\"\nrule = {body}\nmessage = \"m\"\n"
+        )
     };
     let cases = [
         (rule("cobol", "\"function\"", "{ pattern = \"x\" }"), "no language pack 'cobol'"),
@@ -136,7 +138,12 @@ fn tempfile_dir() -> std::path::PathBuf {
 }
 
 /// Every file under `root` read with its pack, then linked.
-fn read_all(root: &Path, packs: &PackSet, rules: &code_analyzer::CodeRules, types: &TypeSystem) -> (Vec<FileExtract>, Observed, code_analyzer::Model) {
+fn read_all(
+    root: &Path,
+    packs: &PackSet,
+    rules: &code_analyzer::CodeRules,
+    types: &TypeSystem,
+) -> (Vec<FileExtract>, Observed, code_analyzer::Model) {
     let extracts: Vec<FileExtract> = code_analyzer::walk(root, root, packs)
         .unwrap()
         .into_iter()
@@ -149,7 +156,14 @@ fn read_all(root: &Path, packs: &PackSet, rules: &code_analyzer::CodeRules, type
         .iter()
         .map(|e| {
             let version = code_analyzer::rows::read_version(&e.pack_fingerprint, &e.rules_fingerprint);
-            let file = code_analyzer::rows::FileRow { path: e.file.clone(), language: e.language.clone(), size: 0, modified: 0, content_hash: e.content_hash.clone(), read_version: version };
+            let file = code_analyzer::rows::FileRow {
+                path: e.file.clone(),
+                language: e.language.clone(),
+                size: 0,
+                modified: 0,
+                content_hash: e.content_hash.clone(),
+                read_version: version,
+            };
             (file, e.clone())
         })
         .collect();

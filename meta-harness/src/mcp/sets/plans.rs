@@ -59,7 +59,12 @@ impl Plans {
     pub(crate) fn schemas(trees: &TreeConfig) -> Vec<ToolDef> {
         let Fragments { id, plan, op, .. } = Fragments::new(trees);
         vec![
-            tool(Capability::ViewRead, "plan_list", "All plans, with their components and stages.", json!({ "type": "object", "properties": {} })),
+            tool(
+                Capability::ViewRead,
+                "plan_list",
+                "All plans, with their components and stages.",
+                json!({ "type": "object", "properties": {} }),
+            ),
             tool(
                 Capability::PlanEdit,
                 "plan_create",
@@ -126,114 +131,138 @@ impl ToolSet for Plans {
 
     async fn call(&self, name: &str, args: Value, _caller: &crate::mcp::McpCaller) -> Result<String, ServiceError> {
         match name {
-        "plan_list" => {
-            let plans = blocking(&self.arch, |s| s.plans()).await?;
-            let mut out = String::new();
-            for p in &plans {
-                let _ = writeln!(out, "{} — {} ({}){}", p.id, p.title, p.kind.name(), if p.greenfield { " (greenfield)" } else { "" });
-                for c in &p.components {
-                    let _ = writeln!(out, "  {} [{} {:?}/{:?}]", c.id, c.type_name, c.status, c.stage);
+            "plan_list" => {
+                let plans = blocking(&self.arch, |s| s.plans()).await?;
+                let mut out = String::new();
+                for p in &plans {
+                    let _ = writeln!(out, "{} — {} ({}){}", p.id, p.title, p.kind.name(), if p.greenfield { " (greenfield)" } else { "" });
+                    for c in &p.components {
+                        let _ = writeln!(out, "  {} [{} {:?}/{:?}]", c.id, c.type_name, c.status, c.stage);
+                    }
+                    out.push_str(&items(p));
                 }
-                out.push_str(&items(p));
+                if plans.is_empty() {
+                    out.push_str("No plans yet.\n\nNext: plan_create starts one (or plan_import brings in system_architecture.json).");
+                }
+                for p in &plans {
+                    let _ = write!(out, "\n[{}]", p.id);
+                    out.push_str(&self.steps(p.id.clone(), None).await?);
+                }
+                Ok(out)
             }
-            if plans.is_empty() {
-                out.push_str("No plans yet.\n\nNext: plan_create starts one (or plan_import brings in system_architecture.json).");
+            "plan_create" => {
+                let a: CreateArgs = parse(args)?;
+                let plan = blocking(&self.arch, move |s| s.create_plan(&a.id, &a.title, &a.description, a.kind)).await?;
+                Ok(match plan.kind {
+                    arch_graph::PlanKind::Change => format!(
+                        "Created plan {}.\n\nNext: reference the existing components it builds on, add new components under real parents, relate them to where they integrate, then plan_validate.",
+                        plan.id
+                    ),
+                    arch_graph::PlanKind::Walkthrough => format!(
+                        "Created walkthrough {}.\n\nNext: plan_edit modify each component the behavior goes through (functions, and the data types it passes), writing its description and spec (logic steps, invariants) from what the code does; then navigate with source plan:{} to show the user only those components, from the entry point.",
+                        plan.id, plan.id
+                    ),
+                    arch_graph::PlanKind::Review => format!(
+                        "Created review {}.\n\nNext: plan_edit add_item each finding, decision or question to settle (nested with `under`), with what it is in its text; the user goes through them in the cockpit.",
+                        plan.id
+                    ),
+                })
             }
-            for p in &plans {
-                let _ = write!(out, "\n[{}]", p.id);
-                out.push_str(&self.steps(p.id.clone(), None).await?);
+            "plan_import" => {
+                let a: ImportArgs = parse(args)?;
+                let (plan, report) = blocking(&self.arch, move |s| {
+                    let file = a.file.clone().unwrap_or_else(|| "system_architecture.json".to_owned());
+                    let title = match &a.title {
+                        Some(t) => t.clone(),
+                        None => format!("Imported from {file}"),
+                    };
+                    s.import_registry_file(&a.id, &title, &file, a.language.as_deref())
+                })
+                .await?;
+                let matched = report.components.iter().filter(|c| c.matched).count();
+                let mut text = format!(
+                    "Imported plan {}: {} components ({matched} matched to code), {} relations, {} workflows.",
+                    plan.id,
+                    report.components.len(),
+                    plan.relations.len(),
+                    plan.workflows.len()
+                );
+                if !report.unmapped.is_empty() {
+                    text.push_str("\n\nNot carried over as is:");
+                    for u in &report.unmapped {
+                        text.push_str(&format!("\n- {}: {}", u.item, u.reason));
+                    }
+                }
+                if !report.tools.tools.is_empty() {
+                    text.push_str(&format!("\n\nOld validation tools (add to .nah/tools.toml):\n{}", pretty(&report.tools)?));
+                }
+                text.push_str(&self.steps(plan.id.clone(), None).await?);
+                Ok(text)
             }
-            Ok(out)
-        }
-        "plan_create" => {
-            let a: CreateArgs = parse(args)?;
-            let plan = blocking(&self.arch, move |s| s.create_plan(&a.id, &a.title, &a.description, a.kind)).await?;
-            Ok(match plan.kind {
-                arch_graph::PlanKind::Change => format!(
-                    "Created plan {}.\n\nNext: reference the existing components it builds on, add new components under real parents, relate them to where they integrate, then plan_validate.",
-                    plan.id
-                ),
-                arch_graph::PlanKind::Walkthrough => format!(
-                    "Created walkthrough {}.\n\nNext: plan_edit modify each component the behavior goes through (functions, and the data types it passes), writing its description and spec (logic steps, invariants) from what the code does; then navigate with source plan:{} to show the user only those components, from the entry point.",
-                    plan.id, plan.id
-                ),
-                arch_graph::PlanKind::Review => format!("Created review {}.\n\nNext: plan_edit add_item each finding, decision or question to settle (nested with `under`), with what it is in its text; the user goes through them in the cockpit.", plan.id),
-            })
-        }
-        "plan_import" => {
-            let a: ImportArgs = parse(args)?;
-            let (plan, report) = blocking(&self.arch, move |s| {
-                let file = a.file.clone().unwrap_or_else(|| "system_architecture.json".to_owned());
-                let title = match &a.title {
-                    Some(t) => t.clone(),
-                    None => format!("Imported from {file}"),
+            "plan_edit" => {
+                let a: EditArgs = parse(args)?;
+                let id = plan_id(&a.plan)?;
+                let plan = blocking(&self.arch, move |s| {
+                    let mut current = s.plan(&id)?;
+                    for (i, op) in a.ops.into_iter().enumerate() {
+                        current = s
+                            .apply(&id, op)
+                            .map_err(|e| ServiceError::InvalidOp(format!("op {} failed (earlier ops were applied): {e}", i + 1)))?;
+                    }
+                    Ok(current)
+                })
+                .await?;
+                let steps = self.steps(plan.id.clone(), None).await?;
+                let items = if plan.items.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ", {} items ({})",
+                        plan.items.len(),
+                        plan.items.iter().map(|i| format!("{} {}", i.id, i.state.name())).collect::<Vec<_>>().join(", ")
+                    )
                 };
-                s.import_registry_file(&a.id, &title, &file, a.language.as_deref())
-            })
-            .await?;
-            let matched = report.components.iter().filter(|c| c.matched).count();
-            let mut text = format!(
-                "Imported plan {}: {} components ({matched} matched to code), {} relations, {} workflows.",
-                plan.id,
-                report.components.len(),
-                plan.relations.len(),
-                plan.workflows.len()
-            );
-            if !report.unmapped.is_empty() {
-                text.push_str("\n\nNot carried over as is:");
-                for u in &report.unmapped {
-                    text.push_str(&format!("\n- {}: {}", u.item, u.reason));
+                Ok(format!(
+                    "Plan {} now has {} components, {} relations{items}.{steps}",
+                    plan.id,
+                    plan.components.len(),
+                    plan.relations.len()
+                ))
+            }
+            "plan_validate" => {
+                let a: PlanArgs = parse(args)?;
+                let id = plan_id(&a.plan)?;
+                let plan = id.clone();
+                let report = blocking(&self.arch, move |s| s.validate(&id)).await?;
+                let mut out = String::new();
+                if report.findings.is_empty() {
+                    out.push_str("The plan checks out.");
                 }
-            }
-            if !report.tools.tools.is_empty() {
-                text.push_str(&format!("\n\nOld validation tools (add to .nah/tools.toml):\n{}", pretty(&report.tools)?));
-            }
-            text.push_str(&self.steps(plan.id.clone(), None).await?);
-            Ok(text)
-        }
-        "plan_edit" => {
-            let a: EditArgs = parse(args)?;
-            let id = plan_id(&a.plan)?;
-            let plan = blocking(&self.arch, move |s| {
-                let mut current = s.plan(&id)?;
-                for (i, op) in a.ops.into_iter().enumerate() {
-                    current = s.apply(&id, op).map_err(|e| ServiceError::InvalidOp(format!("op {} failed (earlier ops were applied): {e}", i + 1)))?;
+                for f in &report.findings {
+                    let sev = match f.severity {
+                        Severity::Error => "ERROR",
+                        Severity::Warning => "warning",
+                        Severity::Info => "info",
+                    };
+                    let _ = writeln!(
+                        out,
+                        "{sev} [{}] {}{}",
+                        serde_json::to_value(f.code).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default(),
+                        f.message,
+                        f.suggestion.as_ref().map(|s| format!(" — {s}")).unwrap_or_default()
+                    );
                 }
-                Ok(current)
-            })
-            .await?;
-            let steps = self.steps(plan.id.clone(), None).await?;
-            let items = if plan.items.is_empty() { String::new() } else { format!(", {} items ({})", plan.items.len(), plan.items.iter().map(|i| format!("{} {}", i.id, i.state.name())).collect::<Vec<_>>().join(", ")) };
-            Ok(format!("Plan {} now has {} components, {} relations{items}.{steps}", plan.id, plan.components.len(), plan.relations.len()))
-        }
-        "plan_validate" => {
-            let a: PlanArgs = parse(args)?;
-            let id = plan_id(&a.plan)?;
-            let plan = id.clone();
-            let report = blocking(&self.arch, move |s| s.validate(&id)).await?;
-            let mut out = String::new();
-            if report.findings.is_empty() {
-                out.push_str("The plan checks out.");
+                out.push_str(&self.steps(plan, None).await?);
+                Ok(out)
             }
-            for f in &report.findings {
-                let sev = match f.severity {
-                    Severity::Error => "ERROR",
-                    Severity::Warning => "warning",
-                    Severity::Info => "info",
-                };
-                let _ = writeln!(out, "{sev} [{}] {}{}", serde_json::to_value(f.code).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default(), f.message, f.suggestion.as_ref().map(|s| format!(" — {s}")).unwrap_or_default());
+            "contract" => {
+                let a: ComponentArgs = parse(args)?;
+                let plan = plan_id(&a.plan)?;
+                let cid = ComponentId::new(a.id);
+                let (p, c) = (plan.clone(), cid.clone());
+                let slice = blocking(&self.arch, move |s| s.contract(&p, &c)).await?;
+                Ok(format!("{}{}", slice.to_markdown(), self.steps(plan, Some(cid)).await?))
             }
-            out.push_str(&self.steps(plan, None).await?);
-            Ok(out)
-        }
-        "contract" => {
-            let a: ComponentArgs = parse(args)?;
-            let plan = plan_id(&a.plan)?;
-            let cid = ComponentId::new(a.id);
-            let (p, c) = (plan.clone(), cid.clone());
-            let slice = blocking(&self.arch, move |s| s.contract(&p, &c)).await?;
-            Ok(format!("{}{}", slice.to_markdown(), self.steps(plan, Some(cid)).await?))
-        }
             other => Err(ServiceError::NotFound(format!("tool '{other}'"))),
         }
     }

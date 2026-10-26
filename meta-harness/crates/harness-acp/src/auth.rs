@@ -300,10 +300,13 @@ impl Steps {
         };
         let Some(launch) = &self.launch else { return fail("the agent can't be started to sign in".into()) };
         let settings = &self.profile.settings.login;
-        let started = match LoginRun::start(launch, &login, &self.profile.project, settings.link_pattern(), Duration::from_secs(settings.wait_s)).await {
-            Ok(started) => started,
-            Err(err) => return fail(err.to_string()),
-        };
+        let started =
+            match LoginRun::start(launch, &login, &self.profile.project, settings.link_pattern(), Duration::from_secs(settings.wait_s))
+                .await
+            {
+                Ok(started) => started,
+                Err(err) => return fail(err.to_string()),
+            };
         if self.slot.current() != Some(id) {
             return Err(self.slot.gone(id));
         }
@@ -360,11 +363,14 @@ impl Steps {
                     let waiting = SignInWaiting {
                         id,
                         url: Some(link),
-                        instructions: "Open the link and sign in. The last page won't load: that's expected. Copy its address and paste it back.".into(),
+                        instructions:
+                            "Open the link and sign in. The last page won't load: that's expected. Copy its address and paste it back."
+                                .into(),
                         expects: Some("the address of the page that failed to load".into()),
                         until_ms,
                     };
-                    let _ = link_to.send(if shown.hold(waiting.clone(), None, Some(callback)) { Ok(waiting) } else { Err("stopped".into()) });
+                    let _ =
+                        link_to.send(if shown.hold(waiting.clone(), None, Some(callback)) { Ok(waiting) } else { Err("stopped".into()) });
                 });
                 cx.send_request(acp::AuthenticateRequest::new(method)).block_task().await
             })
@@ -421,14 +427,19 @@ impl Steps {
         if let Err(why) = hand_back_callback(response, &callback).await? {
             return Err(match &*ended.borrow() {
                 Some(_) => self.slot.gone(id),
-                None => HarnessError::Conflict { reason: format!("the sign-in isn't waiting at its address any more ({why}): sign in again") },
+                None => {
+                    HarnessError::Conflict { reason: format!("the sign-in isn't waiting at its address any more ({why}): sign in again") }
+                }
             });
         }
         match how_it_ended(ended, FINISH_WAIT).await {
             Some(Ok(())) => Ok(()),
             Some(Err(_)) => Err(self.slot.gone(id)),
             None => {
-                self.slot.end(id, SignInEnd::Failed { reason: format!("it didn't finish within {} seconds of the address", FINISH_WAIT.as_secs()) });
+                self.slot.end(
+                    id,
+                    SignInEnd::Failed { reason: format!("it didn't finish within {} seconds of the address", FINISH_WAIT.as_secs()) },
+                );
                 Err(self.slot.gone(id))
             }
         }
@@ -445,11 +456,14 @@ impl Steps {
                 return;
             }
             let result = run.finish(&response).await;
-            slot.ended_by_step(id, match &result {
-                Ok(()) => SignInEnd::SignedIn,
-                Err(HarnessError::Provider { reason }) => SignInEnd::Failed { reason: reason.clone() },
-                Err(err) => SignInEnd::Failed { reason: err.to_string() },
-            });
+            slot.ended_by_step(
+                id,
+                match &result {
+                    Ok(()) => SignInEnd::SignedIn,
+                    Err(HarnessError::Provider { reason }) => SignInEnd::Failed { reason: reason.clone() },
+                    Err(err) => SignInEnd::Failed { reason: err.to_string() },
+                },
+            );
             let _ = done_to.send(result.is_ok());
         });
         if let Err(running) = self.slot.put(id, Running::Task(task.abort_handle()), true) {
@@ -479,7 +493,13 @@ impl AuthController for AcpAuthController {
         let within_s = self.steps.profile.settings.login.within_s;
         let until_ms = within_s.map(|s| now_ms() + s * 1000);
         // A sign-in started again replaces the one under way.
-        let id = self.steps.slot.start(|id| SignInWaiting { id, url: None, instructions: "Starting the sign-in…".into(), expects: None, until_ms });
+        let id = self.steps.slot.start(|id| SignInWaiting {
+            id,
+            url: None,
+            instructions: "Starting the sign-in…".into(),
+            expects: None,
+            until_ms,
+        });
         // Its time, counted from now, the same for every kind: then it ends.
         if let Some(within_s) = within_s {
             let slot = self.steps.slot.clone();
@@ -546,7 +566,10 @@ impl AuthController for AcpAuthController {
     }
 
     async fn logout(&self) -> Result<()> {
-        with_connection(&self.steps.launcher, &self.steps.profile, async move |cx, _| cx.send_request(acp::LogoutRequest::new()).block_task().await.map(|_| ())).await?;
+        with_connection(&self.steps.launcher, &self.steps.profile, async move |cx, _| {
+            cx.send_request(acp::LogoutRequest::new()).block_task().await.map(|_| ())
+        })
+        .await?;
         (self.steps.slot.on_change)(AuthEvent::Status(Some(false)));
         Ok(())
     }
@@ -612,7 +635,9 @@ async fn hand_back_callback(response: &str, callback: &Callback) -> Result<std::
     };
     // Taken: what it answers (or doesn't) is said by how the login ends.
     let _ = tokio::time::timeout(HAND_BACK_WAIT, async {
-        stream.write_all(format!("GET {target} HTTP/1.1\r\nHost: {}:{port}\r\nConnection: close\r\n\r\n", callback.host).as_bytes()).await?;
+        stream
+            .write_all(format!("GET {target} HTTP/1.1\r\nHost: {}:{port}\r\nConnection: close\r\n\r\n", callback.host).as_bytes())
+            .await?;
         let mut reply = Vec::new();
         stream.take(REPLY_MOST).read_to_end(&mut reply).await
     })
@@ -633,8 +658,14 @@ mod tests {
         // Antigravity's, as it printed it (1.1.1, checked live).
         let live = "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com&redirect_uri=http%3A%2F%2F127.0.0.1%3A53677%2F&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform&state=blSe&access_type=offline";
         assert_eq!(callback_of(live), Some(Callback { host: url::Host::Ipv4(std::net::Ipv4Addr::LOCALHOST), port: 53677 }));
-        assert_eq!(port("https://x.test/a?post_redirect_uri=http%3a%2f%2f127.0.0.1%3a1%2f&redirect_uri=http%3a%2f%2flocalhost%3a4000%2fcb"), Some(4000));
-        assert_eq!(callback_of("https://x.test/a?redirect_uri=http%3A%2F%2F%5B%3A%3A1%5D%3A4001%2F"), Some(Callback { host: url::Host::Ipv6(std::net::Ipv6Addr::LOCALHOST), port: 4001 }));
+        assert_eq!(
+            port("https://x.test/a?post_redirect_uri=http%3a%2f%2f127.0.0.1%3a1%2f&redirect_uri=http%3a%2f%2flocalhost%3a4000%2fcb"),
+            Some(4000)
+        );
+        assert_eq!(
+            callback_of("https://x.test/a?redirect_uri=http%3A%2F%2F%5B%3A%3A1%5D%3A4001%2F"),
+            Some(Callback { host: url::Host::Ipv6(std::net::Ipv6Addr::LOCALHOST), port: 4001 })
+        );
         // Not a callback on this machine: nothing to hand back to.
         assert_eq!(port("https://x.test/a?redirect_uri=https%3A%2F%2Fexample.com%2Fcb"), None);
         assert_eq!(port("https://x.test/a"), None);

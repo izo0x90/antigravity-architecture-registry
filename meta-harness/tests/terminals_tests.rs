@@ -50,7 +50,15 @@ fn text(row: &harness_contracts::Row) -> String {
 
 impl Reader {
     async fn at(addr: SocketAddr, path: &str) -> Self {
-        Self { socket: connect(addr, path).await, screen: ReaderScreen::default(), rows: Vec::new(), last: None, lines: Default::default(), commands: Default::default(), sent_again: Vec::new() }
+        Self {
+            socket: connect(addr, path).await,
+            screen: ReaderScreen::default(),
+            rows: Vec::new(),
+            last: None,
+            lines: Default::default(),
+            commands: Default::default(),
+            sent_again: Vec::new(),
+        }
     }
 
     async fn say(&mut self, said: ToTerminal) {
@@ -65,7 +73,11 @@ impl Reader {
     /// The next thing it's sent (a screen update is applied to its rows).
     async fn next(&mut self) -> FromTerminal {
         loop {
-            let message = tokio::time::timeout(Duration::from_secs(10), self.socket.next()).await.expect("sent something within 10 s").unwrap().unwrap();
+            let message = tokio::time::timeout(Duration::from_secs(10), self.socket.next())
+                .await
+                .expect("sent something within 10 s")
+                .unwrap()
+                .unwrap();
             let Message::Text(json) = message else { continue };
             let said: FromTerminal = serde_json::from_str(&json).unwrap();
             match &said {
@@ -219,7 +231,9 @@ async fn a_line_is_found_where_it_is_after_a_new_width() {
     let mut reader = Reader::at(addr, &format!("/ws/terminals/{}", terminal.id)).await;
     reader.next().await;
     reader.say(ToTerminal::Size { size: TermSize { cols: 80, rows: 10 } }).await;
-    reader.run("for i in $(seq 1 40); do printf '%s %s\\n' $i 0123456789012345678901234567890123456789012345678901234567890123456789; done").await;
+    reader
+        .run("for i in $(seq 1 40); do printf '%s %s\\n' $i 0123456789012345678901234567890123456789012345678901234567890123456789; done")
+        .await;
     reader.until_shows("40 0123456789012345678901234567890123456789012345678901234567890123456789").await;
     let shell = reader.last.as_ref().unwrap().shell;
     reader.say(ToTerminal::Search { query: "20 0123".into() }).await;
@@ -316,7 +330,13 @@ async fn an_ended_shell_is_started_again_in_the_same_terminal() {
 async fn through_home_the_socket_reaches_the_servers_terminal() {
     let (worker, _) = spawn_app().await;
     let (home, _) = spawn_app().await;
-    let (status, body) = http(home, "POST", "/api/home/servers", Some(&json!({ "name": "w1", "url": format!("http://{worker}"), "secret": COCKPIT_TOKEN }).to_string())).await;
+    let (status, body) = http(
+        home,
+        "POST",
+        "/api/home/servers",
+        Some(&json!({ "name": "w1", "url": format!("http://{worker}"), "secret": COCKPIT_TOKEN }).to_string()),
+    )
+    .await;
     assert_eq!(status, 201, "{body}");
     let (status, body) = http(home, "POST", "/s/w1/api/terminals", Some("{}")).await;
     assert_eq!(status, 200, "{body}");
@@ -342,14 +362,19 @@ async fn agents_read_terminals_and_type_only_with_shell_drive() {
     let (error, text) = lead.tool("terminal_read", json!({ "terminal": terminal.id })).await;
     assert!(!error && text.contains("for-the-agent"), "{text}");
     // The shell's commands, when it says them (bash and zsh do).
-    assert!(["bash", "zsh"].iter().any(|s| terminal.shell.ends_with(s)), "commands are marked by bash and zsh: run these tests with SHELL one of them, not {}", terminal.shell);
+    assert!(
+        ["bash", "zsh"].iter().any(|s| terminal.shell.ends_with(s)),
+        "commands are marked by bash and zsh: run these tests with SHELL one of them, not {}",
+        terminal.shell
+    );
     let start = std::time::Instant::now();
     while !reader.commands.values().any(|c| c.text == "echo for-the-agent" && c.end.is_some()) {
         assert!(start.elapsed() < Duration::from_secs(10), "the reader is told of it: {:?}", reader.commands);
         reader.next().await;
     }
     let (_, text) = lead.tool("terminal_read", json!({ "terminal": terminal.id })).await;
-    let line = text.lines().find(|l| l.contains("$ echo for-the-agent (exit code 0")).unwrap_or_else(|| panic!("named with its end: {text}"));
+    let line =
+        text.lines().find(|l| l.contains("$ echo for-the-agent (exit code 0")).unwrap_or_else(|| panic!("named with its end: {text}"));
     let number: u64 = line.split('.').next().unwrap().parse().unwrap();
     let (error, output) = lead.tool("terminal_read", json!({ "terminal": terminal.id, "command": number })).await;
     assert!(!error && output.lines().nth(1) == Some("for-the-agent"), "{output}");
@@ -385,7 +410,11 @@ async fn a_bell_and_a_shells_end_are_notifications_put_away_once_the_terminal_is
     assert!(open_ones(addr).await.iter().all(|n| n.terminal.is_none()), "seen: put away");
     reader.run("exit 3").await;
     let start = std::time::Instant::now();
-    while !open_ones(addr).await.iter().any(|n| n.kind == harness_contracts::NotificationKind::ShellEnded && n.detail.as_deref() == Some("exit code 3")) {
+    while !open_ones(addr)
+        .await
+        .iter()
+        .any(|n| n.kind == harness_contracts::NotificationKind::ShellEnded && n.detail.as_deref() == Some("exit code 3"))
+    {
         assert!(start.elapsed() < Duration::from_secs(10), "its end is told, with its code");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -433,15 +462,28 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let (status, body) = http(addr, "POST", "/api/tags", Some(&json!({ "tag": "two words", "subject": subject }).to_string())).await;
     assert!(status == 400 && body.contains("can't be a tag's name"), "{status} {body}");
     let (_, read) = http(addr, "GET", "/api/tags/seen-it", None).await;
-    assert!(read.contains(&format!("\"what\":\"terminal {} line {line} (of command ", terminal.id)) && read.contains("\"held\":\"source\"") && read.contains("\"text\":\"tagged-line"), "what it says now, named: {read}");
+    assert!(
+        read.contains(&format!("\"what\":\"terminal {} line {line} (of command ", terminal.id))
+            && read.contains("\"held\":\"source\"")
+            && read.contains("\"text\":\"tagged-line"),
+        "what it says now, named: {read}"
+    );
     // A narrower reader lays the lines out anew: the tag follows its line,
     // told to everyone as it moves (not only when it's next read).
     reader.say(ToTerminal::Size { size: TermSize { cols: 40, rows: 20 } }).await;
     while !matches!(reader.next().await, FromTerminal::Screen { update } if update.size.cols == 40) {}
-    let moved = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::TagUpdated { tag: t } if t.id == tag.id && t.on[0].subject != tag.on[0].subject)).await;
+    let moved = event_until(
+        &mut events,
+        |e| matches!(e, harness_contracts::ClientEvent::TagUpdated { tag: t } if t.id == tag.id && t.on[0].subject != tag.on[0].subject),
+    )
+    .await;
     let harness_contracts::ClientEvent::TagUpdated { tag: moved } = moved else { unreachable!() };
     let harness_contracts::Subject::TerminalLines { first, .. } = moved.on[0].subject else { panic!("{moved:?}") };
-    assert!(moved.on[0].what.starts_with(&format!("terminal {} line {first} (of command ", terminal.id)), "named where it is now, with its command: {}", moved.on[0].what);
+    assert!(
+        moved.on[0].what.starts_with(&format!("terminal {} line {first} (of command ", terminal.id)),
+        "named where it is now, with its command: {}",
+        moved.on[0].what
+    );
     let (_, read) = http(addr, "GET", "/api/tags/seen-it", None).await;
     assert!(read.contains("\"held\":\"source\"") && read.contains("\"text\":\"tagged-line"), "still found, numbered anew: {read}");
     // Many new widths in a row (more than the terminal remembers): still followed.
@@ -454,7 +496,11 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
 
     // An agent whose role may (the lead's) tags a command, by its number.
     let mut lead = Mcp::lead(addr).await;
-    assert!(["bash", "zsh"].iter().any(|s| terminal.shell.ends_with(s)), "commands are marked by bash and zsh: run these tests with SHELL one of them, not {}", terminal.shell);
+    assert!(
+        ["bash", "zsh"].iter().any(|s| terminal.shell.ends_with(s)),
+        "commands are marked by bash and zsh: run these tests with SHELL one of them, not {}",
+        terminal.shell
+    );
     while !reader.commands.values().any(|c| c.text == "echo tagged-line" && c.end.is_some()) {
         reader.next().await;
     }
@@ -463,7 +509,11 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let (error, said) = lead.tool("tag", json!({ "tag": "seen-it", "subject": command })).await;
     assert!(!error && said.starts_with("seen-it (on 2 things)"), "{said}");
     let (_, read) = lead.tool("tag_read", json!({ "tag": "seen-it" })).await;
-    assert!(read.contains(&format!("2. {command} (echo tagged-line) (tagged by lead; as it is now):")) && read.contains("$ echo tagged-line (exit code 0"), "named with what was typed: {read}");
+    assert!(
+        read.contains(&format!("2. {command} (echo tagged-line) (tagged by lead; as it is now):"))
+            && read.contains("$ echo tagged-line (exit code 0"),
+        "named with what was typed: {read}"
+    );
     assert!(read.contains("(tagged by the user; as it is now)"), "the user's, to an agent: {read}");
     // Taken off by the name tag_read gives; again: it isn't on it, and says so.
     let (error, said) = lead.tool("untag", json!({ "tag": "seen-it", "subject": command })).await;
@@ -475,28 +525,46 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     // A prompt linking the tag hands the agent what it's on, as it is now;
     // the same words not linked are text.
     let (_, tags) = http(addr, "GET", "/api/tags", None).await;
-    let checked = serde_json::from_str::<serde_json::Value>(&tags).unwrap().as_array().unwrap().iter().find(|t| t["name"] == "checked").unwrap()["id"].as_str().unwrap().to_owned();
+    let checked = serde_json::from_str::<serde_json::Value>(&tags)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "checked")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let link = json!({ "start": 8, "end": 16, "to": { "kind": "tag", "tag": checked } });
-    let (status, body) = http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "look at #checked.", "links": [link] }).to_string())).await;
+    let (status, body) =
+        http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "look at #checked.", "links": [link] }).to_string())).await;
     assert_eq!(status, 200, "{body}");
     // Yours: its own words and link, and what the link handed on, a piece
     // apart from its words.
     let yours = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if matches!(item.body, harness_contracts::ItemBody::UserMessage { .. }) && format!("{:?}", item.body).contains("look at #checked."))).await;
-    let harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item: yours } } = yours else { unreachable!() };
+    let harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item: yours } } = yours else {
+        unreachable!()
+    };
     let harness_contracts::ItemBody::UserMessage { text: sent, pieces } = yours.body else { unreachable!() };
     assert_eq!((sent.as_str(), pieces.len(), pieces[0].links.len()), ("look at #checked.", 1, 1), "its own words and link");
     assert!(pieces[0].text.starts_with("#checked"), "what was handed on, apart: {pieces:?}");
     let echoed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if matches!(item.body, harness_contracts::ItemBody::AssistantMessage { .. }) && format!("{:?}", item.body).contains("echo: look at #checked."))).await;
     let echoed = format!("{echoed:?}");
-    assert!(echoed.contains("#checked (the echo works; noted by lead)") && echoed.contains("tagged-line"), "an agent's note says whose: {echoed}");
-    let (status, _) = http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "plain #checked, not linked" }).to_string())).await;
+    assert!(
+        echoed.contains("#checked (the echo works; noted by lead)") && echoed.contains("tagged-line"),
+        "an agent's note says whose: {echoed}"
+    );
+    let (status, _) =
+        http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "plain #checked, not linked" }).to_string())).await;
     assert_eq!(status, 200);
     let plain = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if format!("{:?}", item.body).contains("plain #checked"))).await;
     assert!(!format!("{plain:?}").contains("tagged-line"), "not linked: nothing handed on: {plain:?}");
     // One thing linked as a pointer: its start, and the tool that reads the rest.
-    let subject = json!({ "kind": "terminal_command", "terminal": terminal.id, "shell": reader.last.as_ref().unwrap().shell, "command": number });
+    let subject =
+        json!({ "kind": "terminal_command", "terminal": terminal.id, "shell": reader.last.as_ref().unwrap().shell, "command": number });
     let link = json!({ "start": 0, "end": 4, "to": { "kind": "thing", "subject": subject }, "include": "pointer" });
-    let (status, body) = http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "this one", "links": [link] }).to_string())).await;
+    let (status, body) =
+        http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "this one", "links": [link] }).to_string())).await;
     assert_eq!(status, 200, "{body}");
     let pointed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if format!("{:?}", item.body).contains("this one"))).await;
     assert!(format!("{pointed:?}").contains("its start only: `thing_read`"), "{pointed:?}");
@@ -530,9 +598,17 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     // (as it's taken off by), and gone from there (as it was, from the logs).
     let (status, body) = http(addr, "POST", &format!("/api/terminals/{}/restart", terminal.id), None).await;
     assert_eq!(status, 200, "{body}");
-    let renamed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::TagUpdated { tag: t } if t.id == tag.id && t.on[0].what.contains('@'))).await;
+    let renamed = event_until(
+        &mut events,
+        |e| matches!(e, harness_contracts::ClientEvent::TagUpdated { tag: t } if t.id == tag.id && t.on[0].what.contains('@')),
+    )
+    .await;
     let (_, read) = lead.tool("tag_read", json!({ "tag": "checked" })).await;
-    assert!(read.contains(&format!("1. terminal {}@", terminal.id)) && read.contains("as it was when noted: changed or gone since):\ntagged-line"), "{read}");
+    assert!(
+        read.contains(&format!("1. terminal {}@", terminal.id))
+            && read.contains("as it was when noted: changed or gone since):\ntagged-line"),
+        "{read}"
+    );
     let harness_contracts::ClientEvent::TagUpdated { tag: renamed } = renamed else { unreachable!() };
     let (error, said) = lead.tool("untag", json!({ "tag": "checked", "subject": renamed.on[0].what })).await;
     assert!(!error && said.starts_with("checked (on 0 things)"), "taken off by that name: {said}");
@@ -592,7 +668,12 @@ async fn a_project_says_how_much_scrollback_its_terminals_keep() {
     reader.until_shows("3000").await;
     let screen = reader.last.clone().unwrap();
     // (Trimmed once 512 more have come.)
-    assert!(screen.top - screen.oldest <= 300 + 512 && screen.top > 2500, "300 kept above the screen, give or take (10,000 would keep them all): {} to {}", screen.oldest, screen.top);
+    assert!(
+        screen.top - screen.oldest <= 300 + 512 && screen.top > 2500,
+        "300 kept above the screen, give or take (10,000 would keep them all): {} to {}",
+        screen.oldest,
+        screen.top
+    );
 }
 
 #[tokio::test]
@@ -631,7 +712,12 @@ async fn a_running_command_tagged_again_after_its_tag_came_off_is_kept_once() {
     assert!(said.contains("exit code 0"), "{said}");
     // Searched: each line found, with its tag, thing and line.
     let (error, found) = lead.tool("tag_find", json!({ "query": "tick-3" })).await;
-    assert!(!error && found.contains(&format!("ticks · 1. {command} (for i in 1 2 3 4; do echo tick-$i; sleep 0.5; done) · line ")) && found.ends_with(": tick-3"), "{found}");
+    assert!(
+        !error
+            && found.contains(&format!("ticks · 1. {command} (for i in 1 2 3 4; do echo tick-$i; sleep 0.5; done) · line "))
+            && found.ends_with(": tick-3"),
+        "{found}"
+    );
 }
 
 /// The server itself, as the user starts it: on a project folder, with
@@ -713,12 +799,28 @@ async fn what_was_tagged_comes_back_whole_after_the_server_is_started_again() {
     let (status, read) = http(again.addr, "GET", "/api/tags/kept", None).await;
     assert_eq!(status, 200, "{read}");
     let read: harness_contracts::TagRead = serde_json::from_str(&read).unwrap();
-    let said: Vec<(&str, harness_contracts::Held, &str)> = read.on.iter().map(|t| (t.tagged.what.as_str(), t.held, t.text.as_deref().unwrap_or_default())).collect();
+    let said: Vec<(&str, harness_contracts::Held, &str)> =
+        read.on.iter().map(|t| (t.tagged.what.as_str(), t.held, t.text.as_deref().unwrap_or_default())).collect();
     let output = ran.output.unwrap();
     assert_eq!(said.len(), 2);
-    assert_eq!((said[0].0, said[0].1), (format!("terminal {}@{shell} command {} (printf 'kept-1\\nkept-2\\n')", terminal.id, ran.id).as_str(), harness_contracts::Held::Kept), "{said:?}");
+    assert_eq!(
+        (said[0].0, said[0].1),
+        (
+            format!("terminal {}@{shell} command {} (printf 'kept-1\\nkept-2\\n')", terminal.id, ran.id).as_str(),
+            harness_contracts::Held::Kept
+        ),
+        "{said:?}"
+    );
     assert!(said[0].2.contains("kept-1\nkept-2") && said[0].2.contains("exit code 0"), "whole, with how it ended: {said:?}");
-    assert_eq!((said[1].0, said[1].1, said[1].2), (format!("terminal {}@{shell} line {output} (of command {})", terminal.id, ran.id).as_str(), harness_contracts::Held::Kept, "kept-1"), "the command it was in, still named: {said:?}");
+    assert_eq!(
+        (said[1].0, said[1].1, said[1].2),
+        (
+            format!("terminal {}@{shell} line {output} (of command {})", terminal.id, ran.id).as_str(),
+            harness_contracts::Held::Kept,
+            "kept-1"
+        ),
+        "the command it was in, still named: {said:?}"
+    );
 }
 
 /// A project says how much of a running command a note keeps
@@ -750,5 +852,9 @@ async fn a_project_says_how_much_of_a_running_command_is_kept() {
     let lines = read.on[0].lines;
     assert!((90_000..100_000).contains(&lines), "about 1 MB of 11-byte lines, not 2.2 MB: {lines}");
     let (_, end) = lead.tool("tag_read", json!({ "tag": "capped", "thing": 1, "lines": format!("{}-{}", lines - 1, lines) })).await;
-    assert!(end.contains("(the rest isn't kept: past the 1 MB a growing thing's log keeps here)") && !end.lines().skip(1).any(|l| l == "done-here"), "{end}");
+    assert!(
+        end.contains("(the rest isn't kept: past the 1 MB a growing thing's log keeps here)")
+            && !end.lines().skip(1).any(|l| l == "done-here"),
+        "{end}"
+    );
 }

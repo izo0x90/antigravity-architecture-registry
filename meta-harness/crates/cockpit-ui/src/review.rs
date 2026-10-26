@@ -60,7 +60,8 @@ impl ReviewState {
         let now = (plan.cloned(), discussions.version());
         if self.discussed.as_ref() != Some(&now) {
             // Told again only when the plan's own changed (not one on a terminal).
-            let on: Vec<Discussion> = plan.map(|p| discussions.on(&Subject::Plan { plan: p.clone() }).into_iter().cloned().collect()).unwrap_or_default();
+            let on: Vec<Discussion> =
+                plan.map(|p| discussions.on(&Subject::Plan { plan: p.clone() }).into_iter().cloned().collect()).unwrap_or_default();
             if on != self.discussions {
                 self.discussions = on;
                 self.generation += 1;
@@ -130,8 +131,8 @@ fn push(inbox: &Arc<Mutex<Vec<Reply>>>, reply: Reply) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use arch_graph::{Change, RelationKind};
     pub(crate) use crate::discussions::tests::discussion;
+    use arch_graph::{Change, RelationKind};
 
     fn plan() -> PlanId {
         PlanId::new("p").unwrap()

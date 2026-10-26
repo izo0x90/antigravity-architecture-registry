@@ -147,7 +147,12 @@ impl GraphStyle {
             return Err("graph_style.nodes.outside_plan_alpha: must be in (0, 1]".into());
         }
         let k = &self.kinds;
-        let mut tokens: Vec<(String, &str)> = vec![("kinds.contains".into(), &k.contains), ("kinds.implements".into(), &k.implements), ("kinds.calls".into(), &k.calls), ("kinds.data_flow".into(), &k.data_flow)];
+        let mut tokens: Vec<(String, &str)> = vec![
+            ("kinds.contains".into(), &k.contains),
+            ("kinds.implements".into(), &k.implements),
+            ("kinds.calls".into(), &k.calls),
+            ("kinds.data_flow".into(), &k.data_flow),
+        ];
         tokens.extend(self.lines.all().into_iter().filter_map(|(n, l)| l.color.as_deref().map(|t| (format!("lines.{n}"), t))));
         tokens.extend([&self.back.repeat, &self.back.loops].into_iter().filter_map(|l| l.color.as_deref().map(|t| ("back".to_owned(), t))));
         tokens.extend(self.evidence.named.color.as_deref().map(|t| ("evidence.named".to_owned(), t)));
@@ -232,10 +237,18 @@ impl GraphStyle {
     pub fn legend(&self, theme: &Theme) -> Vec<LegendEntry> {
         let mut out = Vec::new();
         for kind in [RelationKind::Calls, RelationKind::DataFlow] {
-            out.push(LegendEntry { section: "Lines", label: kind.name().replace('_', " "), swatch: Swatch::Line(self.line(theme, kind, LineKind::Tree, Mark::Code, None)) });
+            out.push(LegendEntry {
+                section: "Lines",
+                label: kind.name().replace('_', " "),
+                swatch: Swatch::Line(self.line(theme, kind, LineKind::Tree, Mark::Code, None)),
+            });
         }
         // How each kind of link is known.
-        for (kind, what) in [(RelationKind::Calls, "a call"), (RelationKind::DataFlow, "a data flow"), (RelationKind::Implements, "an implementation (listed in the details card)")] {
+        for (kind, what) in [
+            (RelationKind::Calls, "a call"),
+            (RelationKind::DataFlow, "a data flow"),
+            (RelationKind::Implements, "an implementation (listed in the details card)"),
+        ] {
             out.push(LegendEntry {
                 section: "How it's known",
                 label: format!("{what} only matched by name (the language's analyzer didn't confirm it)"),
@@ -252,18 +265,48 @@ impl GraphStyle {
             label: "a box inside a box: read from the code's structure (exact)".into(),
             swatch: Swatch::Outline(self.node_outline(theme, Mark::Code, false)),
         });
-        out.push(LegendEntry { section: "Lines", label: "to a card shown elsewhere".into(), swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Repeat, Mark::Code, None)) });
-        out.push(LegendEntry { section: "Lines", label: "back up its own path (a loop)".into(), swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Loop, Mark::Code, None)) });
+        out.push(LegendEntry {
+            section: "Lines",
+            label: "to a card shown elsewhere".into(),
+            swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Repeat, Mark::Code, None)),
+        });
+        out.push(LegendEntry {
+            section: "Lines",
+            label: "back up its own path (a loop)".into(),
+            swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Loop, Mark::Code, None)),
+        });
         for mark in MARKS {
-            out.push(LegendEntry { section: "Plan", label: mark_label(mark), swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Tree, mark, None)) });
+            out.push(LegendEntry {
+                section: "Plan",
+                label: mark_label(mark),
+                swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Tree, mark, None)),
+            });
         }
         for mark in MARKS {
-            out.push(LegendEntry { section: "Cards", label: mark_label(mark), swatch: Swatch::Outline(self.node_outline(theme, mark, false)) });
+            out.push(LegendEntry {
+                section: "Cards",
+                label: mark_label(mark),
+                swatch: Swatch::Outline(self.node_outline(theme, mark, false)),
+            });
         }
-        out.push(LegendEntry { section: "Cards", label: "selected".to_owned(), swatch: Swatch::Outline(self.node_outline(theme, Mark::Code, true)) });
-        out.push(LegendEntry { section: "Cards", label: "the agent pointed here".to_owned(), swatch: Swatch::Outline(Line { color: self.agent_color(theme), width: self.nodes.selected_width, dashed: false }) });
-        for (role, label) in [(PillRole::In, "goes in"), (PillRole::Out, "comes back"), (PillRole::Step, "the step that turns one into the next")] {
-            out.push(LegendEntry { section: "On the selection's lines", label: label.into(), swatch: Swatch::Pill(self.pill_color(theme, role)) });
+        out.push(LegendEntry {
+            section: "Cards",
+            label: "selected".to_owned(),
+            swatch: Swatch::Outline(self.node_outline(theme, Mark::Code, true)),
+        });
+        out.push(LegendEntry {
+            section: "Cards",
+            label: "the agent pointed here".to_owned(),
+            swatch: Swatch::Outline(Line { color: self.agent_color(theme), width: self.nodes.selected_width, dashed: false }),
+        });
+        for (role, label) in
+            [(PillRole::In, "goes in"), (PillRole::Out, "comes back"), (PillRole::Step, "the step that turns one into the next")]
+        {
+            out.push(LegendEntry {
+                section: "On the selection's lines",
+                label: label.into(),
+                swatch: Swatch::Pill(self.pill_color(theme, role)),
+            });
         }
         out
     }
@@ -320,7 +363,13 @@ mod tests {
     fn the_legend_says_how_every_kind_of_link_is_known() {
         let config = UiConfig::with_overrides("").unwrap();
         let labels: Vec<String> = config.graph_style.legend(&config.theme).into_iter().map(|e| e.label).collect();
-        for needle in ["a call only matched by name", "a data flow only matched by name", "an implementation (listed in the details card) only matched by name", "confirmed by the language's analyzer", "read from the code's structure"] {
+        for needle in [
+            "a call only matched by name",
+            "a data flow only matched by name",
+            "an implementation (listed in the details card) only matched by name",
+            "confirmed by the language's analyzer",
+            "read from the code's structure",
+        ] {
             assert!(labels.iter().any(|l| l.contains(needle)), "{needle}: {labels:?}");
         }
     }
@@ -336,8 +385,13 @@ mod tests {
         assert_ne!(line(Some(&named)), line(Some(&proven)), "matched by name: its own look");
         assert!(line(Some(&named)).width < line(Some(&proven)).width);
         // A plan's marks win over it (what a plan says matters more there).
-        assert_eq!(style.line(theme, RelationKind::Calls, LineKind::Tree, Mark::Changed, Some(&named)), style.line(theme, RelationKind::Calls, LineKind::Tree, Mark::Changed, None));
-        assert!(style.legend(theme).iter().any(|e| e.label.contains("only matched by name") && e.swatch == Swatch::Line(line(Some(&named)))));
+        assert_eq!(
+            style.line(theme, RelationKind::Calls, LineKind::Tree, Mark::Changed, Some(&named)),
+            style.line(theme, RelationKind::Calls, LineKind::Tree, Mark::Changed, None)
+        );
+        assert!(
+            style.legend(theme).iter().any(|e| e.label.contains("only matched by name") && e.swatch == Swatch::Line(line(Some(&named))))
+        );
         assert!(UiConfig::with_overrides("[graph_style.evidence.named]\nwidth = 1.0\nfade = 2.0").unwrap_err().contains("fade"));
     }
 
@@ -369,7 +423,11 @@ mod tests {
         // Restyling is config: tokens are checked when the config loads.
         let custom = UiConfig::with_overrides("[graph_style.kinds]\ncalls = \"warn\"").unwrap();
         assert_eq!(custom.graph_style.kind_color(&custom.theme, RelationKind::Calls), custom.theme.warn);
-        assert!(UiConfig::with_overrides("[graph_style.kinds]\ncalls = \"chartreuse\"").unwrap_err().contains("'chartreuse' is not a theme color"));
+        assert!(
+            UiConfig::with_overrides("[graph_style.kinds]\ncalls = \"chartreuse\"")
+                .unwrap_err()
+                .contains("'chartreuse' is not a theme color")
+        );
         assert!(UiConfig::with_overrides("[graph_style.lines.code]\nwidth = 0.0").unwrap_err().contains("lines.code.width"));
     }
 }

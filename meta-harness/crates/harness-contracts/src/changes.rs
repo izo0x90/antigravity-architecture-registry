@@ -345,7 +345,13 @@ mod tests {
 
     #[test]
     fn points_read_and_write_as_short_strings() {
-        for (text, point) in [("HEAD", Point::Head), ("index", Point::Index), ("files", Point::Files), ("rev:main", Point::Rev("main".into())), ("snapshot:42", Point::Snapshot("42".into()))] {
+        for (text, point) in [
+            ("HEAD", Point::Head),
+            ("index", Point::Index),
+            ("files", Point::Files),
+            ("rev:main", Point::Rev("main".into())),
+            ("snapshot:42", Point::Snapshot("42".into())),
+        ] {
             assert_eq!(text.parse::<Point>().unwrap(), point);
             assert_eq!(point.to_string(), text);
         }

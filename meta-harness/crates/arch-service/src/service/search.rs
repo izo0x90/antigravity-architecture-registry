@@ -20,7 +20,14 @@ impl ArchitectureService {
     /// when none is given, never more than the configured most); only in
     /// the files `within` names, when given (the changed ones, say: the
     /// configured most are searched, then those kept).
-    pub fn search(&self, query: &str, kind: SearchKind, source: &Source, limit: Option<usize>, within: Option<&BTreeSet<String>>) -> Result<Found, ServiceError> {
+    pub fn search(
+        &self,
+        query: &str,
+        kind: SearchKind,
+        source: &Source,
+        limit: Option<usize>,
+        within: Option<&BTreeSet<String>>,
+    ) -> Result<Found, ServiceError> {
         self.timed("search", format!("{} {query:?} ({source})", kind.name()), |t| {
             let limits = &self.core.limits.search;
             let asked = limit.unwrap_or(limits.results).clamp(1, limits.most);
@@ -78,7 +85,8 @@ impl ArchitectureService {
 
     fn find_lines(&self, query: &str, graph: &Graph, limit: usize) -> Result<Found, ServiceError> {
         let limits = &self.core.limits.search;
-        let text = TextLimits { per_file: limits.text_per_file, budget_ms: limits.text_ms, max_file_bytes: limits.text_max_file_kib * 1024 };
+        let text =
+            TextLimits { per_file: limits.text_per_file, budget_ms: limits.text_ms, max_file_bytes: limits.text_max_file_kib * 1024 };
         self.with_repo_files(|files| {
             let lines = files.lines(text).search(query, limit);
             let hits: Vec<Hit> = lines

@@ -7,7 +7,11 @@ impl CockpitApp {
     pub(super) fn run_on(&mut self, kind: BufferKind, action: &Action, value: Option<String>, ctx: &egui::Context) {
         let at = self.host_of(kind);
         let (buffer, net) = self.desk.view_with_net(kind);
-        buffer.run(action, value, &mut RunCx { net, ctx, input_mode: &mut self.input_mode, at, note: &mut self.note, asked: &mut self.asked });
+        buffer.run(
+            action,
+            value,
+            &mut RunCx { net, ctx, input_mode: &mut self.input_mode, at, note: &mut self.note, asked: &mut self.asked },
+        );
     }
 
     /// The place `kind` is at, in the panel showing it.
@@ -92,7 +96,8 @@ impl CockpitApp {
         // The desk's comparison: read whether or not the changes are shown
         // (the code view and the graph show it too); asked again now and
         // then while they are.
-        let shown = self.desk.panels.kinds().contains(&BufferKind::Changes) || self.quick_look.as_ref().is_some_and(|q| q.kind() == BufferKind::Changes);
+        let shown = self.desk.panels.kinds().contains(&BufferKind::Changes)
+            || self.quick_look.as_ref().is_some_and(|q| q.kind() == BufferKind::Changes);
         self.desk.shared.changes.tick(&self.desk.net, ctx, shown, self.config.changes.refresh_s);
         let plan = self.desk.shared.source.get().plan().cloned();
         self.desk.shared.review.tick(&self.desk.net, ctx, plan.as_ref(), &self.desk.shared.discussions.get());

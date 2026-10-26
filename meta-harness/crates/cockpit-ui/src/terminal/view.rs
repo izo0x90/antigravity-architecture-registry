@@ -179,7 +179,11 @@ mod tests {
     fn after_a_scroll_by_hand_a_key_starts_from_what_shows() {
         let mut view = View::default();
         view.scroll(-500, SPAN);
-        assert_eq!(view.go(Go::Down(1), Some(1099), SPAN), Some(598), "the cursor was below: the nearest line that shows, kept from the bottom, then one down");
+        assert_eq!(
+            view.go(Go::Down(1), Some(1099), SPAN),
+            Some(598),
+            "the cursor was below: the nearest line that shows, kept from the bottom, then one down"
+        );
     }
 
     #[test]

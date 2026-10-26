@@ -133,7 +133,10 @@ impl Indicator for Heartbeat {
         let x_at = |t: f64| trace.right() - blip_w - ((now - t) / TRACE_S) as f32 * (trace.width() - blip_w);
         // The base line, then the blips: each update where it came; ones
         // closer than a blip's width, one blip as tall as how many.
-        spot.line_segment([Pos2::new(trace.left(), mid), Pos2::new(trace.right(), mid)], Stroke::new(look.line_thin, color.gamma_multiply(0.5)));
+        spot.line_segment(
+            [Pos2::new(trace.left(), mid), Pos2::new(trace.right(), mid)],
+            Stroke::new(look.line_thin, color.gamma_multiply(0.5)),
+        );
         let in_sight = || activity.updates.iter().filter(|(t, _)| now - *t <= TRACE_S);
         let mut blips: Vec<(f32, u32)> = Vec::new();
         for (t, n) in in_sight() {
@@ -146,7 +149,12 @@ impl Indicator for Heartbeat {
         let tallest = rect.height() / 2.0 - look.space_hair;
         for (x, count) in blips {
             let height = tallest * (0.5 + 0.5 * (count.min(FULL_BLIP) as f32 / FULL_BLIP as f32));
-            let blip = vec![Pos2::new(x, mid), Pos2::new(x + blip_w / 3.0, mid - height), Pos2::new(x + blip_w * 2.0 / 3.0, mid + height * 0.6), Pos2::new(x + blip_w, mid)];
+            let blip = vec![
+                Pos2::new(x, mid),
+                Pos2::new(x + blip_w / 3.0, mid - height),
+                Pos2::new(x + blip_w * 2.0 / 3.0, mid + height * 0.6),
+                Pos2::new(x + blip_w, mid),
+            ];
             spot.add(egui::Shape::line(blip, Stroke::new(look.line_bold, color)));
         }
         // Waiting: a dot breathing slowly at its end.
@@ -192,9 +200,16 @@ mod tests {
             next.push(beat.draw(&painter, &painter, &at(Liveness::Waiting, vec![(80.0, 1)]), &stage, 100.0));
             next.push(beat.draw(&painter, &painter, &at(Liveness::Quiet, vec![(10.0, 1)]), &stage, 100.0));
         });
-        assert!(matches!(next[..], [Next::In(a), Next::In(b), Next::OnChange] if (FASTEST_S..1.0).contains(&a) && b == BREATH_S), "{next:?}");
+        assert!(
+            matches!(next[..], [Next::In(a), Next::In(b), Next::OnChange] if (FASTEST_S..1.0).contains(&a) && b == BREATH_S),
+            "{next:?}"
+        );
         let dot = output.shapes.iter().find(|s| matches!(s.shape, egui::Shape::Circle(_))).expect("the breathing dot");
-        assert!(spot.contains_rect(dot.shape.visual_bounding_rect()), "inside its spot: {:?} in {spot:?}", dot.shape.visual_bounding_rect());
+        assert!(
+            spot.contains_rect(dot.shape.visual_bounding_rect()),
+            "inside its spot: {:?} in {spot:?}",
+            dot.shape.visual_bounding_rect()
+        );
         assert!(output.shapes.iter().all(|s| spot.expand(1.0).contains_rect(s.shape.visual_bounding_rect())), "all of it in its spot");
         assert!(Shown::of(IndicatorKind::None).drawer().is_none() && Shown::of(IndicatorKind::Heartbeat).drawer().is_some());
     }
@@ -210,9 +225,25 @@ mod tests {
         let blips = |updates: Vec<(f64, u32)>| {
             let output = ctx.run(egui::RawInput::default(), |ctx| {
                 let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(spot);
-                Heartbeat.draw(&painter, &painter, &Activity { liveness: Liveness::Receiving, updates: updates.clone(), since_last: Some(0.0), doing: "Thinking".into() }, &stage, 100.0);
+                Heartbeat.draw(
+                    &painter,
+                    &painter,
+                    &Activity { liveness: Liveness::Receiving, updates: updates.clone(), since_last: Some(0.0), doing: "Thinking".into() },
+                    &stage,
+                    100.0,
+                );
             });
-            output.shapes.iter().filter_map(|c| if let egui::Shape::Path(p) = &c.shape { Some(p.points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min)) } else { None }).collect::<Vec<f32>>()
+            output
+                .shapes
+                .iter()
+                .filter_map(|c| {
+                    if let egui::Shape::Path(p) = &c.shape {
+                        Some(p.points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<f32>>()
         };
         assert_eq!(blips(vec![(92.0, 1), (98.0, 1)]).len(), 2, "two, far apart");
         let one = blips(vec![(99.0, 1)]);

@@ -23,7 +23,17 @@ impl CockpitApp {
     pub(super) fn item_actions(&self, here: Here) -> Vec<Action> {
         let Some((plan, item)) = self.item_here(here) else { return Vec::new() };
         let choices = ItemState::ALL.into_iter().map(|s| Choice::new(s.name(), s.name())).collect();
-        vec![Action::new("plan.item_state", format!("Set {item}'s state"), "Open, decided, done or dropped: the plan keeps it", ShellCommand::ItemState(plan, item)).param(Param::Choice(choices)).group(Group::Act).importance(MINOR)]
+        vec![
+            Action::new(
+                "plan.item_state",
+                format!("Set {item}'s state"),
+                "Open, decided, done or dropped: the plan keeps it",
+                ShellCommand::ItemState(plan, item),
+            )
+            .param(Param::Choice(choices))
+            .group(Group::Act)
+            .importance(MINOR),
+        ]
     }
 
     /// Sets an item's state (`value`: its name); what came of it is said.

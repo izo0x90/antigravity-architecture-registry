@@ -53,13 +53,26 @@ fn the_service_skips_what_the_parent_repos_ignore_files_and_nah_ignore_skip() {
     assert!(service.index_status().stale.is_empty(), "ignored paths are never out of date: {:?}", service.index_status().stale);
     // Search.
     let found = service.search("out", SearchKind::Files, &arch_graph::Source::Code, Some(50), None).unwrap();
-    assert!(found.hits.iter().all(|h| !format!("{h:?}").contains("generated/") && !format!("{h:?}").contains("target/")), "{:?}", found.hits);
+    assert!(
+        found.hits.iter().all(|h| !format!("{h:?}").contains("generated/") && !format!("{h:?}").contains("target/")),
+        "{:?}",
+        found.hits
+    );
     // Where a plan may put code.
     let plan = PlanId::new("p").unwrap();
     service.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     let placed = service.apply(
         &plan,
-        PlanOp::AddComponent { name: "later".into(), type_name: "function".into(), description: "x".into(), parent: None, file: Some("generated/later.rs".into()), signature: None, schemas: None, spec: None },
+        PlanOp::AddComponent {
+            name: "later".into(),
+            type_name: "function".into(),
+            description: "x".into(),
+            parent: None,
+            file: Some("generated/later.rs".into()),
+            signature: None,
+            schemas: None,
+            spec: None,
+        },
     );
     assert!(placed.is_err_and(|e| e.to_string().contains("ignored")), "a plan can't put code where ingestion never reads");
 }
@@ -76,7 +89,13 @@ fn open(root: &Path) -> ArchitectureService {
 }
 
 fn found(service: &ArchitectureService, query: &str) -> Vec<String> {
-    service.search(query, SearchKind::Files, &arch_graph::Source::Code, Some(5), None).unwrap().hits.into_iter().filter_map(|h| h.file).collect()
+    service
+        .search(query, SearchKind::Files, &arch_graph::Source::Code, Some(5), None)
+        .unwrap()
+        .hits
+        .into_iter()
+        .filter_map(|h| h.file)
+        .collect()
 }
 
 #[test]
@@ -127,7 +146,9 @@ fn a_changed_ignore_rule_changes_what_is_read() {
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample"), &root);
     let service = open(&root);
     service.ingest(&root).unwrap();
-    let has = |service: &ArchitectureService, file: &str| service.observed().unwrap().components().any(|c| c.file().is_some_and(|f| f.as_str() == file));
+    let has = |service: &ArchitectureService, file: &str| {
+        service.observed().unwrap().components().any(|c| c.file().is_some_and(|f| f.as_str() == file))
+    };
     assert!(has(&service, "src/util.rs"));
     // The project starts ignoring a file: it leaves the graph and search.
     std::fs::create_dir_all(root.join(".nah")).unwrap();

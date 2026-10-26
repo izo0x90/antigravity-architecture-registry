@@ -75,7 +75,12 @@ impl CockpitApp {
         let stale: std::collections::BTreeSet<BufferKind> = saved_kinds.filter(|k| !current(*k)).collect();
         if !stale.is_empty() {
             let names: Vec<&str> = stale.iter().map(BufferKind::name).collect();
-            self.note = Some(format!("The saved layout's {} {} from another version of the cockpit: starting {} new.", names.join(", "), if names.len() == 1 { "buffer is" } else { "buffers are" }, if names.len() == 1 { "it" } else { "them" }));
+            self.note = Some(format!(
+                "The saved layout's {} {} from another version of the cockpit: starting {} new.",
+                names.join(", "),
+                if names.len() == 1 { "buffer is" } else { "buffers are" },
+                if names.len() == 1 { "it" } else { "them" }
+            ));
         }
         for (buffer, kept) in saved.kept.iter().filter(|(b, _)| current(b.kind)) {
             self.desk.ensure(*buffer);

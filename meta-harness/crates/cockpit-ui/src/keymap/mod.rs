@@ -171,8 +171,17 @@ impl Chord {
     pub fn press(&self) -> (egui::Modifiers, Vec<egui::Event>, Vec<egui::Event>) {
         let physical = self.physical();
         let shifted = matches!(&self.key, ChordKey::Text(t) if t.chars().all(|c| c.is_uppercase()));
-        let modifiers = egui::Modifiers { alt: self.alt, shift: self.shift || shifted, ctrl: self.ctrl, command: self.ctrl, mac_cmd: false };
-        let key = |pressed| physical.map(|key| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: if pressed { modifiers } else { egui::Modifiers::NONE } });
+        let modifiers =
+            egui::Modifiers { alt: self.alt, shift: self.shift || shifted, ctrl: self.ctrl, command: self.ctrl, mac_cmd: false };
+        let key = |pressed| {
+            physical.map(|key| egui::Event::Key {
+                key,
+                physical_key: Some(key),
+                pressed,
+                repeat: false,
+                modifiers: if pressed { modifiers } else { egui::Modifiers::NONE },
+            })
+        };
         let typed = match &self.key {
             ChordKey::Text(t) => Some(t.clone()),
             ChordKey::Key(Key::Space) if !self.ctrl && !self.alt => Some(" ".to_owned()),
@@ -195,7 +204,10 @@ impl Chord {
     /// As egui's shortcut (a text box's return key), when it's a named key.
     pub fn shortcut(&self) -> Option<egui::KeyboardShortcut> {
         let ChordKey::Key(key) = &self.key else { return None };
-        Some(egui::KeyboardShortcut::new(egui::Modifiers { alt: self.alt, shift: self.shift, ctrl: self.ctrl, command: self.ctrl, mac_cmd: false }, *key))
+        Some(egui::KeyboardShortcut::new(
+            egui::Modifiers { alt: self.alt, shift: self.shift, ctrl: self.ctrl, command: self.ctrl, mac_cmd: false },
+            *key,
+        ))
     }
 
     pub fn released(&self, input: &egui::InputState) -> bool {
@@ -403,7 +415,14 @@ pub const AUTO_KEYS: &str = "123456789abcdefghijklmnopqrstuvwxyz";
 impl KeymapConfig {
     /// The keys outside the views' bindings, as views read them.
     pub fn local(&self) -> LocalKeys {
-        LocalKeys { list: self.list.clone(), input: self.input.clone(), pointer: self.pointer.clone(), leader: self.leader.clone(), back: self.back.clone(), browser_keys: self.ctrl_keys() }
+        LocalKeys {
+            list: self.list.clone(),
+            input: self.input.clone(),
+            pointer: self.pointer.clone(),
+            leader: self.leader.clone(),
+            back: self.back.clone(),
+            browser_keys: self.ctrl_keys(),
+        }
     }
 
     /// The keys with ctrl the cockpit binds (alone, not with shift or alt:
@@ -425,7 +444,11 @@ impl KeymapConfig {
     /// The binding for an action: by id, then aliases, then the closest wildcard.
     /// Every bound gesture is one the cockpit knows.
     pub fn check_gestures(&self) -> Result<(), String> {
-        match self.bind.iter().find_map(|(id, b)| b.gestures.iter().find(|g| !crate::touch::BINDABLE.contains(&g.as_str())).map(|g| (id, g))) {
+        match self
+            .bind
+            .iter()
+            .find_map(|(id, b)| b.gestures.iter().find(|g| !crate::touch::BINDABLE.contains(&g.as_str())).map(|g| (id, g)))
+        {
             Some((id, g)) => Err(format!("keymap.bind.\"{id}\": no gesture `{g}` (there are {})", crate::touch::BINDABLE.join(", "))),
             None => Ok(()),
         }

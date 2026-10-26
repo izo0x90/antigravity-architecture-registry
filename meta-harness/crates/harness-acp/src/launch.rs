@@ -67,7 +67,12 @@ pub struct ProcessLauncher {
 
 impl From<&harness_contracts::Launch> for ProcessLauncher {
     fn from(launch: &harness_contracts::Launch) -> Self {
-        Self { program: PathBuf::from(&launch.program), args: launch.args.clone(), env: launch.env.clone(), env_remove: launch.env_remove.clone() }
+        Self {
+            program: PathBuf::from(&launch.program),
+            args: launch.args.clone(),
+            env: launch.env.clone(),
+            env_remove: launch.env_remove.clone(),
+        }
     }
 }
 

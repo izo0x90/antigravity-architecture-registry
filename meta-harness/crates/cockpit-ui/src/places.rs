@@ -14,7 +14,10 @@ pub struct Link {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum To {
     /// A file (from the project's folder), at a line when it says one.
-    File { path: String, line: Option<u32> },
+    File {
+        path: String,
+        line: Option<u32>,
+    },
     Url(String),
 }
 
@@ -127,7 +130,9 @@ pub fn path_and_lines(word: &str) -> Option<(&str, Option<(u32, u32)>)> {
 fn has_extension(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     match name.rsplit_once('.') {
-        Some((stem, ext)) => !stem.is_empty() && ext.len() <= 8 && ext.chars().all(char::is_alphanumeric) && ext.starts_with(char::is_alphabetic),
+        Some((stem, ext)) => {
+            !stem.is_empty() && ext.len() <= 8 && ext.chars().all(char::is_alphanumeric) && ext.starts_with(char::is_alphabetic)
+        }
         None => false,
     }
 }
@@ -143,15 +148,26 @@ mod tests {
     #[test]
     fn files_lines_and_web_links_are_found_where_they_are() {
         let found = links("error: src/a.rs:12:5: expected `;` (see https://doc.rust-lang.org/x).", "/p", Names::Bare);
-        assert_eq!(found.iter().map(|l| (l.col, l.to.clone())).collect::<Vec<_>>(), [(7, file("src/a.rs", Some(12))), (40, To::Url("https://doc.rust-lang.org/x".into()))]);
+        assert_eq!(
+            found.iter().map(|l| (l.col, l.to.clone())).collect::<Vec<_>>(),
+            [(7, file("src/a.rs", Some(12))), (40, To::Url("https://doc.rust-lang.org/x".into()))]
+        );
         assert_eq!(links("Cargo.toml  src", "/p", Names::Bare)[0], Link { col: 0, len: 10, to: file("Cargo.toml", None) });
-        assert_eq!(links("/p/crates/x/lib.rs:3", "/p", Names::Bare)[0].to, file("crates/x/lib.rs", Some(3)), "an absolute path in the project is the project's");
+        assert_eq!(
+            links("/p/crates/x/lib.rs:3", "/p", Names::Bare)[0].to,
+            file("crates/x/lib.rs", Some(3)),
+            "an absolute path in the project is the project's"
+        );
         assert_eq!(links("./build.sh", "/p", Names::Bare)[0].to, file("build.sh", None));
         assert!(links("version 1.2.3 took 0.5s, done.", "/p", Names::Bare).is_empty(), "numbers and sentences aren't files");
         assert!(links("--release -v", "/p", Names::Bare).is_empty(), "flags aren't");
         assert!(links("a.rs:x", "/p", Names::Bare).is_empty(), "a line is a number");
         let prose = |text: &str| links(text, "", Names::Placed).into_iter().map(|l| l.to).collect::<Vec<_>>();
-        assert_eq!(prose("Use read/write locks, and/or edit **src/lock.rs** (see a.rs:3, /etc/hosts)."), [file("src/lock.rs", None), file("a.rs", Some(3))], "in prose: files with an extension, emphasis aside; no absolute path with no folder known");
+        assert_eq!(
+            prose("Use read/write locks, and/or edit **src/lock.rs** (see a.rs:3, /etc/hosts)."),
+            [file("src/lock.rs", None), file("a.rs", Some(3))],
+            "in prose: files with an extension, emphasis aside; no absolute path with no folder known"
+        );
         assert_eq!(path_and_lines("src/a.rs:10-20"), Some(("src/a.rs", Some((10, 20)))));
         assert_eq!(path_and_lines("src/a.rs:7:3"), Some(("src/a.rs", Some((7, 7)))));
         assert_eq!((path_and_lines("src/a.rs"), path_and_lines("src/a.rs:9-x")), (Some(("src/a.rs", None)), None));

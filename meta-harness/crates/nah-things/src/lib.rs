@@ -186,7 +186,14 @@ impl Things {
     /// The things' logs in `logs`; a growing thing's kept up to
     /// `grown_most` bytes.
     pub fn open(logs: &Path, grown_most: u64) -> Arc<Self> {
-        Arc::new(Self { owners: RwLock::default(), notes: RwLock::default(), logs: Arc::new(Logs::open(logs, "tagged")), growing: Mutex::default(), grown_most, ready: AtomicBool::new(false) })
+        Arc::new(Self {
+            owners: RwLock::default(),
+            notes: RwLock::default(),
+            logs: Arc::new(Logs::open(logs, "tagged")),
+            growing: Mutex::default(),
+            grown_most,
+            ready: AtomicBool::new(false),
+        })
     }
 
     /// An owner of things, from now on (the things noted named as it
@@ -368,7 +375,9 @@ impl Things {
     pub fn glimpse(&self, subject: &Subject, kept: Option<&Kept>, most: usize) -> (Held, Option<(String, u64)>) {
         let held = self.held(subject, kept);
         let text = match kept {
-            Some(kept) => self.logs.head(kept, most.saturating_mul(4)).map_err(|e| tracing::warn!("A noted thing's log couldn't be read: {e}")).ok(),
+            Some(kept) => {
+                self.logs.head(kept, most.saturating_mul(4)).map_err(|e| tracing::warn!("A noted thing's log couldn't be read: {e}")).ok()
+            }
             None => self.owner(subject).and_then(|o| o.now(subject)).map(|t| {
                 let lines = t.lines().count() as u64;
                 (t, lines)
@@ -386,7 +395,12 @@ impl Things {
             Some(kept) => self.logs.lines(kept, from, to).map_err(|e| tracing::warn!("A noted thing's log couldn't be read: {e}")).ok(),
             None => self.owner(subject).and_then(|o| o.now(subject)).map(|text| {
                 let all: Vec<&str> = text.lines().collect();
-                let shown = all.iter().skip(from.saturating_sub(1) as usize).take((to + 1).saturating_sub(from) as usize).map(|l| (*l).to_owned()).collect();
+                let shown = all
+                    .iter()
+                    .skip(from.saturating_sub(1) as usize)
+                    .take((to + 1).saturating_sub(from) as usize)
+                    .map(|l| (*l).to_owned())
+                    .collect();
                 (shown, all.len() as u64)
             }),
         };
@@ -462,7 +476,9 @@ impl Things {
                 let room = (most - written) as usize;
                 let fits = (0..=room.min(more.len())).rev().find(|at| more.is_char_boundary(*at)).unwrap_or(0);
                 let size = if most % (1 << 20) == 0 { format!("{} MB", most >> 20) } else { format!("{most} bytes") };
-                let _ = file.write_all(format!("{}\n(the rest isn't kept: past the {size} a growing thing's log keeps here)\n", &more[..fits]).as_bytes());
+                let _ = file.write_all(
+                    format!("{}\n(the rest isn't kept: past the {size} a growing thing's log keeps here)\n", &more[..fits]).as_bytes(),
+                );
                 cut.store(true, Ordering::Relaxed);
                 return false;
             }
@@ -527,7 +543,11 @@ impl Things {
                 continue;
             }
             let Some(said) = self.owner(subject).and_then(|o| o.now(subject)) else { continue };
-            found.extend(said.lines().zip(1..).filter(|(l, _)| matches(l, text)).take(most).map(|(l, line)| Found { which, line, text: l.to_owned() }));
+            found.extend(said.lines().zip(1..).filter(|(l, _)| matches(l, text)).take(most).map(|(l, line)| Found {
+                which,
+                line,
+                text: l.to_owned(),
+            }));
         }
         found.sort_by_key(|f| (f.which, f.line));
         found.truncate(most);
@@ -611,7 +631,11 @@ mod tests {
         assert_eq!(things.said(&noted.subject, Some(&kept)).1.as_deref(), Some("text of lines 500 to 501\nmore\n"));
         owner.grow("past the cap\n");
         assert_eq!(owner.followers(), 0, "no longer followed");
-        assert_eq!(things.said(&noted.subject, Some(&kept)).1.unwrap(), "text of lines 500 to 501\nmore\npast the c\n(the rest isn't kept: past the 40 bytes a growing thing's log keeps here)\n", "what fits, then said so");
+        assert_eq!(
+            things.said(&noted.subject, Some(&kept)).1.unwrap(),
+            "text of lines 500 to 501\nmore\npast the c\n(the rest isn't kept: past the 40 bytes a growing thing's log keeps here)\n",
+            "what fits, then said so"
+        );
         // Another note points into it: kept; none does: removed.
         let path = dir.path().join("tagged").join(&kept.file);
         things.let_go(&[&kept]);
@@ -622,7 +646,10 @@ mod tests {
         // Already past the cap when noted: what fits, said so; not followed.
         let small = self::things(10);
         let noted = small.things.note(&lines(500, 501), &header).unwrap();
-        assert_eq!((small.things.said(&noted.subject, noted.kept.as_ref()).1.unwrap(), small.owner.followers()), ("text of li\n(the rest isn't kept: past the 10 bytes a growing thing's log keeps here)\n".to_owned(), 0));
+        assert_eq!(
+            (small.things.said(&noted.subject, noted.kept.as_ref()).1.unwrap(), small.owner.followers()),
+            ("text of li\n(the rest isn't kept: past the 10 bytes a growing thing's log keeps here)\n".to_owned(), 0)
+        );
     }
 
     #[test]
@@ -667,7 +694,11 @@ mod tests {
         owner.grow("error: 1\nok\nerror: 2\n");
         let among = [(&a.subject, a.kept.as_ref()), (&b.subject, b.kept.as_ref())];
         let (found, partial) = things.find("error", &among, 10);
-        assert_eq!((found, partial), (vec![Found { which: 1, line: 2, text: "error: 1".into() }, Found { which: 1, line: 4, text: "error: 2".into() }], false), "lines of the thing, not of its file");
+        assert_eq!(
+            (found, partial),
+            (vec![Found { which: 1, line: 2, text: "error: 1".into() }, Found { which: 1, line: 4, text: "error: 2".into() }], false),
+            "lines of the thing, not of its file"
+        );
         assert!(things.find("ERROR", &among, 10).0.is_empty(), "capitals heeded");
         assert_eq!(things.find("text of", &among, 1).0.len(), 1, "the first `most`");
         owner.grow("error: 3\n");
@@ -710,7 +741,10 @@ mod tests {
         let text = format!("you: hi\n• Bash\n{DETAIL}a\n{DETAIL}b\ndone");
         assert_eq!(things.fold(&lines(1, 1), &text, "`full`"), text, "a terminal's lines never");
         let detailed = Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first: 7, last: 7, command: None };
-        assert_eq!(things.fold(&detailed, &text, "`full`"), format!("you: hi\n• Bash\n{DETAIL}(2 lines left out: `full` gives them)\ndone"));
+        assert_eq!(
+            things.fold(&detailed, &text, "`full`"),
+            format!("you: hi\n• Bash\n{DETAIL}(2 lines left out: `full` gives them)\ndone")
+        );
     }
 
     #[test]
@@ -724,6 +758,10 @@ mod tests {
     fn it_depends_on_no_owner_and_no_kind_of_note() {
         let manifest = include_str!("../Cargo.toml");
         let local: Vec<&str> = manifest.lines().filter(|l| l.contains("path = ")).map(|l| l.split('=').next().unwrap().trim()).collect();
-        assert_eq!(local, ["arch-search", "harness-contracts", "nah-things"], "searching, the shared types, and itself (its tests' testing feature)");
+        assert_eq!(
+            local,
+            ["arch-search", "harness-contracts", "nah-things"],
+            "searching, the shared types, and itself (its tests' testing feature)"
+        );
     }
 }

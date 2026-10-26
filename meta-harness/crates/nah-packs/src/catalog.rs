@@ -142,7 +142,10 @@ impl Pack {
 
     /// One of its files as text.
     pub fn text(&self, file: &str) -> Result<&str, PackError> {
-        let bytes = self.files.get(file).ok_or_else(|| PackError::Manifest { pack: self.name().to_owned(), reason: format!("no file '{file}'") })?;
+        let bytes = self
+            .files
+            .get(file)
+            .ok_or_else(|| PackError::Manifest { pack: self.name().to_owned(), reason: format!("no file '{file}'") })?;
         std::str::from_utf8(bytes).map_err(|e| PackError::Manifest { pack: self.name().to_owned(), reason: format!("{file}: {e}") })
     }
 }
@@ -200,13 +203,28 @@ impl Catalog {
             if let Some(server) = pack.manifest.language.as_ref().and_then(|l| l.server.as_ref())
                 && packs.get(server).map(Pack::kind) != Some(Kind::Server)
             {
-                return Err(PackError::Manifest { pack: pack.name().to_owned(), reason: format!("its server '{server}' isn't a server pack") });
+                return Err(PackError::Manifest {
+                    pack: pack.name().to_owned(),
+                    reason: format!("its server '{server}' isn't a server pack"),
+                });
             }
         }
         let secs = std::time::Duration::from_secs;
-        let timeouts = Timeouts { download: secs(index.install.download_timeout_s), run: secs(index.install.run_timeout_s), check: secs(index.install.check_timeout_s) };
+        let timeouts = Timeouts {
+            download: secs(index.install.download_timeout_s),
+            run: secs(index.install.run_timeout_s),
+            check: secs(index.install.check_timeout_s),
+        };
         let harness_overrides = index.harnesses.overrides.iter().map(|p| places.path(p)).collect::<Result<_, _>>()?;
-        Ok(Self { platforms, packs, root: places.path(&index.install.root)?, lock_path: places.path(&index.install.lock)?, timeouts, harness_overrides, project: places.project.clone() })
+        Ok(Self {
+            platforms,
+            packs,
+            root: places.path(&index.install.root)?,
+            lock_path: places.path(&index.install.lock)?,
+            timeouts,
+            harness_overrides,
+            project: places.project.clone(),
+        })
     }
 
     pub fn get(&self, name: &str) -> Result<&Pack, PackError> {
@@ -233,7 +251,13 @@ fn read_tree(dir: &Path) -> Result<BTreeMap<String, Vec<u8>>, PackError> {
             if path.is_dir() {
                 stack.push(path);
             } else {
-                let relative = path.strip_prefix(dir).unwrap_or(&path).components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
+                let relative = path
+                    .strip_prefix(dir)
+                    .unwrap_or(&path)
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
                 let bytes = std::fs::read(&path).map_err(|e| PackError::Config(format!("{}: {e}", path.display())))?;
                 out.insert(relative, bytes);
             }
@@ -260,7 +284,8 @@ fn in_a_pack(files: &BTreeMap<String, Vec<u8>>, file: &str) -> bool {
 /// The packs among `files`: each folder holding a `pack.toml`, with the
 /// files under it. Packs don't nest.
 fn packs_in(files: &BTreeMap<String, Vec<u8>>, origin: &str, platforms: &Platforms) -> Result<Vec<Pack>, PackError> {
-    let folders: Vec<String> = files.keys().filter_map(|f| f.strip_suffix(MANIFEST)).filter(|d| d.is_empty() || d.ends_with('/')).map(str::to_owned).collect();
+    let folders: Vec<String> =
+        files.keys().filter_map(|f| f.strip_suffix(MANIFEST)).filter(|d| d.is_empty() || d.ends_with('/')).map(str::to_owned).collect();
     for a in &folders {
         if let Some(b) = folders.iter().find(|b| *b != a && b.starts_with(a.as_str())) {
             return Err(PackError::Config(format!("{origin}: pack '{b}' is inside pack '{a}'")));
@@ -271,8 +296,12 @@ fn packs_in(files: &BTreeMap<String, Vec<u8>>, origin: &str, platforms: &Platfor
         let manifest_path = format!("{folder}{MANIFEST}");
         let text = std::str::from_utf8(&files[&manifest_path]).map_err(|e| PackError::Config(format!("{origin}/{manifest_path}: {e}")))?;
         let manifest = Manifest::parse(text).map_err(|reason| PackError::Manifest { pack: format!("{origin}/{manifest_path}"), reason })?;
-        let own: BTreeMap<String, Vec<u8>> =
-            files.iter().filter_map(|(path, bytes)| path.strip_prefix(folder.as_str()).filter(|p| *p != MANIFEST).map(|p| (p.to_owned(), bytes.clone()))).collect();
+        let own: BTreeMap<String, Vec<u8>> = files
+            .iter()
+            .filter_map(|(path, bytes)| {
+                path.strip_prefix(folder.as_str()).filter(|p| *p != MANIFEST).map(|p| (p.to_owned(), bytes.clone()))
+            })
+            .collect();
         manifest.validate(platforms, &own.keys().cloned().collect())?;
         out.push(Pack { manifest, files: own, origin: format!("{origin}/{folder}") });
     }

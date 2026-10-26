@@ -9,13 +9,13 @@ use agent_client_protocol::schema::v1 as acp;
 use agent_client_protocol::{Agent, ByteStreams, ConnectionTo, Handled, UntypedMessage};
 use async_trait::async_trait;
 use harness_contracts::{
-    ApprovalDecision, ApprovalOption, Capabilities, InstanceId, McpServer, McpTransport, NativeId, RequestKind,
-    RequestResponse, SessionConfig, Thread, ThreadStatus,
+    ApprovalDecision, ApprovalOption, Capabilities, InstanceId, McpServer, McpTransport, NativeId, RequestKind, RequestResponse,
+    SessionConfig, Thread, ThreadStatus,
 };
 use harness_core::{HarnessError, ProviderAdapter, Result, SessionRuntime};
 
-use crate::convert;
 use crate::control::AcpDeclaredCapabilities;
+use crate::convert;
 use crate::launch::AcpLauncher;
 use crate::profile::Profile;
 use crate::questions::Form;
@@ -79,7 +79,8 @@ impl AcpAdapter {
         let cx = handle_rx.await.map_err(|_| HarnessError::Provider { reason: "agent connection failed to start".into() })?;
 
         let init = cx.send_request(initialize).block_task().await.map_err(acp_error)?;
-        let init: acp::InitializeResponse = serde_json::from_value(init).map_err(|e| HarnessError::Provider { reason: format!("its answer to initialize: {e}") })?;
+        let init: acp::InitializeResponse =
+            serde_json::from_value(init).map_err(|e| HarnessError::Provider { reason: format!("its answer to initialize: {e}") })?;
         let declared = AcpDeclaredCapabilities::of(&init, &self.profile);
         // Before a replay: how its messages' pieces are read back.
         {
@@ -96,32 +97,38 @@ impl AcpAdapter {
         let agent = &init.agent_capabilities;
         let mcp: Vec<acp::McpServer> = config.mcp_servers.iter().map(|s| mcp_server(s, agent.mcp_capabilities.sse)).collect();
         let meta = self.profile.session_meta();
-        let opening = async { match &config.resume {
-            // Prefer load: it replays the history into the stream.
-            Some(id) if agent.load_session => {
-                let native = acp::SessionId::new(id.as_str().to_owned());
-                let loaded = cx
-                    .send_request(acp::LoadSessionRequest::new(native.clone(), cwd).mcp_servers(mcp).meta(meta))
-                    .block_task()
-                    .await
-                    .map_err(acp_error)?;
-                Ok((native, loaded.modes, loaded.config_options))
+        let opening = async {
+            match &config.resume {
+                // Prefer load: it replays the history into the stream.
+                Some(id) if agent.load_session => {
+                    let native = acp::SessionId::new(id.as_str().to_owned());
+                    let loaded = cx
+                        .send_request(acp::LoadSessionRequest::new(native.clone(), cwd).mcp_servers(mcp).meta(meta))
+                        .block_task()
+                        .await
+                        .map_err(acp_error)?;
+                    Ok((native, loaded.modes, loaded.config_options))
+                }
+                Some(id) if agent.session_capabilities.resume.is_some() => {
+                    let native = acp::SessionId::new(id.as_str().to_owned());
+                    let resumed = cx
+                        .send_request(acp::ResumeSessionRequest::new(native.clone(), cwd).mcp_servers(mcp).meta(meta))
+                        .block_task()
+                        .await
+                        .map_err(acp_error)?;
+                    Ok((native, resumed.modes, resumed.config_options))
+                }
+                Some(_) => Err(HarnessError::Unsupported { operation: "resuming sessions" }),
+                None => {
+                    let created = cx
+                        .send_request(acp::NewSessionRequest::new(cwd).mcp_servers(mcp).meta(meta))
+                        .block_task()
+                        .await
+                        .map_err(acp_error)?;
+                    Ok((created.session_id, created.modes, created.config_options))
+                }
             }
-            Some(id) if agent.session_capabilities.resume.is_some() => {
-                let native = acp::SessionId::new(id.as_str().to_owned());
-                let resumed = cx
-                    .send_request(acp::ResumeSessionRequest::new(native.clone(), cwd).mcp_servers(mcp).meta(meta))
-                    .block_task()
-                    .await
-                    .map_err(acp_error)?;
-                Ok((native, resumed.modes, resumed.config_options))
-            }
-            Some(_) => Err(HarnessError::Unsupported { operation: "resuming sessions" }),
-            None => {
-                let created = cx.send_request(acp::NewSessionRequest::new(cwd).mcp_servers(mcp).meta(meta)).block_task().await.map_err(acp_error)?;
-                Ok((created.session_id, created.modes, created.config_options))
-            }
-        } };
+        };
         let (native_id, modes, config_options) = tokio::select! {
             opened = opening => opened?,
             Some(_) = asks_login => return Err(HarnessError::AuthRequired { reason: NOT_SIGNED_IN.into() }),
@@ -146,7 +153,12 @@ impl AcpAdapter {
 
         let session = AcpSession {
             thread_id: config.thread_id.clone(),
-            link: Arc::new(Link { cx, native_id, shared, sending: if declared.declared.pieces { crate::pieces::Sending::AsPieces } else { crate::pieces::Sending::InText } }),
+            link: Arc::new(Link {
+                cx,
+                native_id,
+                shared,
+                sending: if declared.declared.pieces { crate::pieces::Sending::AsPieces } else { crate::pieces::Sending::InText },
+            }),
             declared: declared.declared,
             supports_close: agent.session_capabilities.close.is_some(),
             connection,
@@ -202,7 +214,11 @@ fn form_options(submit: &str) -> Vec<ApprovalOption> {
 /// Opens a request and waits for the user's response (None: cancelled,
 /// e.g. its turn ended, or `withdrawn` by the agent: then it's no longer
 /// asked).
-async fn ask(shared: &Shared, withdrawn: agent_client_protocol::RequestCancellation, open: impl FnOnce(&mut SessionState) -> harness_contracts::RequestId) -> Option<RequestResponse> {
+async fn ask(
+    shared: &Shared,
+    withdrawn: agent_client_protocol::RequestCancellation,
+    open: impl FnOnce(&mut SessionState) -> harness_contracts::RequestId,
+) -> Option<RequestResponse> {
     let (id, rx) = {
         let mut state = lock(&shared.state);
         let id = open(&mut state);
@@ -237,7 +253,12 @@ type Streams = ByteStreams<Box<dyn futures::AsyncWrite + Send + Unpin>, Box<dyn 
 
 /// Registers the client-side handlers and runs the connection until the
 /// task is aborted, handing the connection out through `handle_tx`.
-async fn run_connection(transport: Streams, shared: Arc<Shared>, files: Option<WorkspaceFs>, handle_tx: tokio::sync::oneshot::Sender<ConnectionTo<Agent>>) {
+async fn run_connection(
+    transport: Streams,
+    shared: Arc<Shared>,
+    files: Option<WorkspaceFs>,
+    handle_tx: tokio::sync::oneshot::Sender<ConnectionTo<Agent>>,
+) {
     let (on_update, on_permission, on_question, on_other) = (shared.clone(), shared.clone(), shared.clone(), shared.clone());
     let (on_read, on_write) = (files.clone(), files);
     let result = agent_client_protocol::Client
@@ -275,7 +296,11 @@ async fn run_connection(transport: Streams, shared: Arc<Shared>, files: Option<W
                     state.tool_call_update(&req.tool_call);
                     let kind = state.tool_kind(&native_tool);
                     let asked = crate::classify::permission(&shared.profile.settings.questions, &native_tool, &kind, &req.options);
-                    let auto = if matches!(asked, RequestKind::Approval { .. }) { shared.profile.auto_approve(&policy, &kind, &req.options) } else { None };
+                    let auto = if matches!(asked, RequestKind::Approval { .. }) {
+                        shared.profile.auto_approve(&policy, &kind, &req.options)
+                    } else {
+                        None
+                    };
                     (asked, auto)
                 };
                 if let Some(option) = auto {
@@ -285,7 +310,14 @@ async fn run_connection(transport: Streams, shared: Arc<Shared>, files: Option<W
                 cx.spawn(async move {
                     let response = ask(&shared, withdrawn, |state| {
                         let title = req.tool_call.fields.title.clone().unwrap_or_else(|| "Permission requested".into());
-                        state.open_request(Some(&native_tool), asked, title, None, shared.profile.approval_options(asked, &req.options), Vec::new())
+                        state.open_request(
+                            Some(&native_tool),
+                            asked,
+                            title,
+                            None,
+                            shared.profile.approval_options(asked, &req.options),
+                            Vec::new(),
+                        )
                     })
                     .await;
                     match response.and_then(|r| r.option_id) {
@@ -310,12 +342,32 @@ async fn run_connection(transport: Streams, shared: Arc<Shared>, files: Option<W
                             let form = Form::new(&form_mode.requested_schema, &req.message, shared.profile.custom_suffix());
                             let tool = tool(&form_mode.scope);
                             let questions = form.questions.clone();
-                            let response = ask(&shared, withdrawn, |state| state.open_request(tool.as_deref(), RequestKind::Question, req.message.clone(), None, form_options("Answer"), questions)).await;
+                            let response = ask(&shared, withdrawn, |state| {
+                                state.open_request(
+                                    tool.as_deref(),
+                                    RequestKind::Question,
+                                    req.message.clone(),
+                                    None,
+                                    form_options("Answer"),
+                                    questions,
+                                )
+                            })
+                            .await;
                             responder.respond(elicitation_answer(Some(&form), response))
                         }
                         acp::ElicitationMode::Url(url_mode) => {
                             let tool = tool(&url_mode.scope);
-                            let response = ask(&shared, withdrawn, |state| state.open_request(tool.as_deref(), RequestKind::Link, req.message.clone(), Some(url_mode.url.clone()), form_options("Done"), Vec::new())).await;
+                            let response = ask(&shared, withdrawn, |state| {
+                                state.open_request(
+                                    tool.as_deref(),
+                                    RequestKind::Link,
+                                    req.message.clone(),
+                                    Some(url_mode.url.clone()),
+                                    form_options("Done"),
+                                    Vec::new(),
+                                )
+                            })
+                            .await;
                             responder.respond(elicitation_answer(None, response))
                         }
                         _ => responder.respond(acp::CreateElicitationResponse::new(acp::ElicitationAction::Decline)),
@@ -331,7 +383,8 @@ async fn run_connection(transport: Streams, shared: Arc<Shared>, files: Option<W
                     return responder.respond_with_error(agent_client_protocol::Error::method_not_found());
                 };
                 cx.spawn(async move {
-                    let read = tokio::task::spawn_blocking(move || fs.read_text_file(&req.path.display().to_string(), req.line, req.limit)).await;
+                    let read =
+                        tokio::task::spawn_blocking(move || fs.read_text_file(&req.path.display().to_string(), req.line, req.limit)).await;
                     match read.map_err(|e| HarnessError::Provider { reason: e.to_string() }).and_then(|r| r) {
                         Ok(content) => responder.respond(acp::ReadTextFileResponse::new(content)),
                         Err(e) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(e.to_string())),
@@ -346,7 +399,8 @@ async fn run_connection(transport: Streams, shared: Arc<Shared>, files: Option<W
                     return responder.respond_with_error(agent_client_protocol::Error::method_not_found());
                 };
                 cx.spawn(async move {
-                    let written = tokio::task::spawn_blocking(move || fs.write_text_file(&req.path.display().to_string(), &req.content)).await;
+                    let written =
+                        tokio::task::spawn_blocking(move || fs.write_text_file(&req.path.display().to_string(), &req.content)).await;
                     match written.map_err(|e| HarnessError::Provider { reason: e.to_string() }).and_then(|r| r) {
                         Ok(()) => responder.respond(acp::WriteTextFileResponse::new()),
                         Err(e) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(e.to_string())),

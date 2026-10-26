@@ -22,12 +22,16 @@ pub(crate) struct Terminals {
 const MOST_BACK: u64 = 2000;
 const LAST_COMMANDS: usize = 10;
 
-
 impl Terminals {
     pub(crate) fn schemas(trees: &TreeConfig) -> Vec<ToolDef> {
         let _ = trees;
         vec![
-            tool(Capability::ViewRead, "terminals", "The user's terminals (shells the server runs): each one's id, title, whether its shell runs, its folder and size.", json!({ "type": "object", "properties": {} })),
+            tool(
+                Capability::ViewRead,
+                "terminals",
+                "The user's terminals (shells the server runs): each one's id, title, whether its shell runs, its folder and size.",
+                json!({ "type": "object", "properties": {} }),
+            ),
             tool(
                 Capability::ViewRead,
                 "terminal_read",
@@ -44,7 +48,9 @@ impl Terminals {
     }
 
     fn terminals(&self) -> Result<&Arc<crate::terminals::Terminals>, ServiceError> {
-        self.terminals.as_ref().ok_or_else(|| ServiceError::InvalidOp("this server runs no shells (it was started with --no-shells)".into()))
+        self.terminals
+            .as_ref()
+            .ok_or_else(|| ServiceError::InvalidOp("this server runs no shells (it was started with --no-shells)".into()))
     }
 }
 
@@ -77,7 +83,9 @@ fn key(name: &str) -> Result<TerminalInput, String> {
         "pagedown" => TermKey::PageDown,
         "insert" => TermKey::Insert,
         "delete" => TermKey::Delete,
-        f if f.len() > 1 && f.starts_with('f') && f[1..].parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)) => TermKey::F(f[1..].parse().unwrap_or(1)),
+        f if f.len() > 1 && f.starts_with('f') && f[1..].parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)) => {
+            TermKey::F(f[1..].parse().unwrap_or(1))
+        }
         _ if last.chars().count() == 1 => TermKey::Char(last.chars().next().unwrap_or(' ')),
         _ => return Err(format!("{name:?} isn't a key this knows")),
     };
@@ -92,7 +100,12 @@ impl ToolSet for Terminals {
 
     async fn call(&self, name: &str, args: Value, _caller: &crate::mcp::McpCaller) -> Result<String, ServiceError> {
         let terminals = self.terminals()?;
-        let id = || args["terminal"].as_str().map(TerminalId::new).ok_or_else(|| ServiceError::InvalidOp("`terminal` (its id, from `terminals`) is needed".into()));
+        let id = || {
+            args["terminal"]
+                .as_str()
+                .map(TerminalId::new)
+                .ok_or_else(|| ServiceError::InvalidOp("`terminal` (its id, from `terminals`) is needed".into()))
+        };
         let missing = |e: crate::terminals::TerminalError| ServiceError::InvalidOp(e.to_string());
         match name {
             "terminals" => {
@@ -146,18 +159,29 @@ impl ToolSet for Terminals {
 fn read(open: &crate::terminals::Open, args: &Value) -> Result<String, ServiceError> {
     let commands = open.commands();
     if let Some(number) = args["command"].as_u64() {
-        let no_such = || ServiceError::InvalidOp(format!("there's no command {number} (kept while its lines are: terminal_read lists them)"));
+        let no_such =
+            || ServiceError::InvalidOp(format!("there's no command {number} (kept while its lines are: terminal_read lists them)"));
         let command = commands.iter().find(|c| c.id == number).ok_or_else(no_such)?;
-        let (output, left_out) = open.command_output(number, MOST_BACK).ok_or_else(|| ServiceError::InvalidOp(format!("command {number}'s output can't be read while a program has the whole screen")))?;
+        let (output, left_out) = open.command_output(number, MOST_BACK).ok_or_else(|| {
+            ServiceError::InvalidOp(format!("command {number}'s output can't be read while a program has the whole screen"))
+        })?;
         let cut = if left_out > 0 { format!("({left_out} lines before these left out)\n") } else { String::new() };
         return Ok(format!("{}\n{cut}{output}", crate::terminals::in_words(command)));
     }
     let back = args["back"].as_u64().unwrap_or(0).min(MOST_BACK) as u32;
-    let text = if args["numbered"].as_bool().unwrap_or(false) { open.numbered(back).into_iter().map(|(n, row)| format!("{n}\t{row}")).collect::<Vec<_>>().join("\n") } else { open.text(back) };
+    let text = if args["numbered"].as_bool().unwrap_or(false) {
+        open.numbered(back).into_iter().map(|(n, row)| format!("{n}\t{row}")).collect::<Vec<_>>().join("\n")
+    } else {
+        open.text(back)
+    };
     let mut out = if text.is_empty() { "(nothing on its screen)".to_owned() } else { text };
-    let ran: Vec<String> = commands.iter().rev().filter(|c| c.output.is_some()).take(LAST_COMMANDS).map(crate::terminals::in_words).collect();
+    let ran: Vec<String> =
+        commands.iter().rev().filter(|c| c.output.is_some()).take(LAST_COMMANDS).map(crate::terminals::in_words).collect();
     if !ran.is_empty() {
-        out.push_str(&format!("\n\nIts last commands (newest first; `command` reads one's output; tag one as `terminal {} command <number>`):\n", open.info().id));
+        out.push_str(&format!(
+            "\n\nIts last commands (newest first; `command` reads one's output; tag one as `terminal {} command <number>`):\n",
+            open.info().id
+        ));
         out.push_str(&ran.join("\n"));
     }
     Ok(out)

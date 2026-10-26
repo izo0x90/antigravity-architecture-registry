@@ -5,7 +5,14 @@ use super::*;
 #[test]
 fn places_a_server_gave_that_couldnt_be_read_are_shown_in_every_state() {
     for state in [arch_graph::ServerState::Ready, arch_graph::ServerState::Starting, arch_graph::ServerState::Failed] {
-        let s = arch_graph::ServerStatus { language: "rust".into(), server: "rust-analyzer".into(), state, reason: Some("why".into()), dropped_positions: 3, ..Default::default() };
+        let s = arch_graph::ServerStatus {
+            language: "rust".into(),
+            server: "rust-analyzer".into(),
+            state,
+            reason: Some("why".into()),
+            dropped_positions: 3,
+            ..Default::default()
+        };
         assert!(server_line(&s).contains("3 places it gave couldn't be read"), "{state:?}: {}", server_line(&s));
     }
 }
@@ -16,7 +23,8 @@ fn the_size_note_offers_its_fixes_as_buttons() {
     focus(&ctx, &mut app, BufferKind::Graph);
     let cut_tree = || {
         let mut tree = crate::graph::tests::sample_tree();
-        tree.cut = Some(arch_graph::tree::Cut { reason: arch_graph::tree::CutReason::Budget, starts_left_out: 0, shown: 2, asked: 3, hidden: 7 });
+        tree.cut =
+            Some(arch_graph::tree::Cut { reason: arch_graph::tree::CutReason::Budget, starts_left_out: 0, shown: 2, asked: 3, hidden: 7 });
         tree
     };
     app.desk.graph_mut().set_tree(cut_tree());
@@ -41,7 +49,11 @@ fn graph_draws_server_views_with_loading_and_empty_states() {
     *app.desk.graph_mut() = loading();
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("Loading the architecture"), "{text}");
-    let empty = crate::graph::tests::tree_of(&arch_graph::Graph::default(), None, arch_graph::tree::TreeRequest { view: arch_graph::tree::ViewKind::Calls, ..Default::default() });
+    let empty = crate::graph::tests::tree_of(
+        &arch_graph::Graph::default(),
+        None,
+        arch_graph::tree::TreeRequest { view: arch_graph::tree::ViewKind::Calls, ..Default::default() },
+    );
     *app.desk.graph_mut() = showing(empty);
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("Nothing to show in this view yet"), "{text}");
@@ -71,11 +83,24 @@ fn graph_and_code_link_both_ways() {
     assert!(!app.bound_actions().iter().any(|b| b.action.id == "link.follow"), "no follow action");
     // Gutter marks come from the file's components.
     let mut file_comp = crate::graph::tests::sample_graph().component(&ComponentId::new("rust:a::log")).unwrap().clone();
-    file_comp.anchor = Some(CodeAnchor { language: "rust".into(), file: RepoPath::new("src/b.rs").unwrap(), symbol: "a::log".into(), syntax_kind: "function_item".into(), span: Span { start_line: 7, end_line: 9, start_byte: 70, end_byte: 90 }, content_hash: String::new() });
+    file_comp.anchor = Some(CodeAnchor {
+        language: "rust".into(),
+        file: RepoPath::new("src/b.rs").unwrap(),
+        symbol: "a::log".into(),
+        syntax_kind: "function_item".into(),
+        span: Span { start_line: 7, end_line: 9, start_byte: 70, end_byte: 90 },
+        content_hash: String::new(),
+    });
     file_comp.placeholders.push(Span { start_line: 8, end_line: 8, start_byte: 80, end_byte: 87 });
-    let mut missing = Relation::new(RelationKind::Calls, ComponentId::new("rust:a::log"), ComponentId::new("rust:a::save"), Provenance::PLANNED);
+    let mut missing =
+        Relation::new(RelationKind::Calls, ComponentId::new("rust:a::log"), ComponentId::new("rust:a::save"), Provenance::PLANNED);
     missing.order = Some(0);
-    let view = arch_graph::FileView { file: "src/b.rs".into(), components: vec![(file_comp, arch_graph::Alignment::Present)], relations: vec![(missing, arch_graph::Alignment::Missing)], stale: false };
+    let view = arch_graph::FileView {
+        file: "src/b.rs".into(),
+        components: vec![(file_comp, arch_graph::Alignment::Present)],
+        relations: vec![(missing, arch_graph::Alignment::Missing)],
+        stale: false,
+    };
     let marks = crate::code::gutter_marks(&view);
     assert!(matches!(marks[&7][..], [crate::code::Mark::Starts(_, _), crate::code::Mark::MissingCall(_, _)]));
     assert!(matches!(marks[&8][..], [crate::code::Mark::Placeholder(_)]));
@@ -129,7 +154,10 @@ fn find_in_the_code_works_from_anywhere_and_starts_afresh() {
     let find = app.palette_actions().into_iter().find(|b| b.action.id == "graph.find").unwrap();
     app.open_palette(&find);
     for _ in 0..3 {
-        assert!(!texts(&frame(&ctx, &mut app, vec![])).contains("runner_fn"), "opened again: nothing of the search before, from its first frame");
+        assert!(
+            !texts(&frame(&ctx, &mut app, vec![])).contains("runner_fn"),
+            "opened again: nothing of the search before, from its first frame"
+        );
     }
 }
 
@@ -191,15 +219,31 @@ fn indexing_shows_its_state_everywhere_and_can_be_run_from_the_cockpit() {
     crate::status::set(app.config.status.clone());
     // Re-index actions: changed files, from scratch, the open file.
     let bound = app.bound_actions();
-    let leader = |id: &str| bound.iter().find(|b| b.action.id == id).and_then(|b| b.leader.clone()).map(|l| l.into_iter().collect::<String>());
-    assert_eq!((leader("index.changed"), leader("index.rebuild"), leader("index.file")), (Some("Ir".into()), Some("IR".into()), Some("If".into())));
+    let leader =
+        |id: &str| bound.iter().find(|b| b.action.id == id).and_then(|b| b.leader.clone()).map(|l| l.into_iter().collect::<String>());
+    assert_eq!(
+        (leader("index.changed"), leader("index.rebuild"), leader("index.file")),
+        (Some("Ir".into()), Some("IR".into()), Some("If".into()))
+    );
     assert!(bound.iter().any(|b| b.action.id == "index.file" && b.action.label.contains("src/a.rs")), "names the open file");
     // The light: indexing with progress.
     told(&app, index_event(arch_graph::IndexStatus { state: arch_graph::IndexState::Indexing, done: 3, total: 10, ..Default::default() }));
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("INDEX") && text.contains("indexing 3 of 10"), "{text}");
     // Done, but two files changed since: one word for it everywhere.
-    let stale = arch_graph::IndexStatus { stale: vec!["src/a.rs".into(), "src/b.rs".into()], last: Some(arch_graph::IndexSummary { millis: 40, files: 10, parsed: 2, components: 30, relations: 50, unresolved: 1, at: "now".into() }), ..Default::default() };
+    let stale = arch_graph::IndexStatus {
+        stale: vec!["src/a.rs".into(), "src/b.rs".into()],
+        last: Some(arch_graph::IndexSummary {
+            millis: 40,
+            files: 10,
+            parsed: 2,
+            components: 30,
+            relations: 50,
+            unresolved: 1,
+            at: "now".into(),
+        }),
+        ..Default::default()
+    };
     told(&app, index_event(stale));
     focus(&ctx, &mut app, BufferKind::Code);
     let text = texts(&frame(&ctx, &mut app, vec![]));
@@ -210,7 +254,14 @@ fn indexing_shows_its_state_everywhere_and_can_be_run_from_the_cockpit() {
     assert!(text.contains("fn run() {"), "and still shows the code (nothing waits)");
     // The spec's code and the graph's cards say it the same way.
     let mut anchored = crate::spec::tests::detail(&ComponentId::new("rust:a::step"), &ComponentId::new("rust:a::save"));
-    anchored.component.anchor = Some(CodeAnchor { language: "rust".into(), file: RepoPath::new("src/b.rs").unwrap(), symbol: "a::step".into(), syntax_kind: "function_item".into(), span: Span { start_line: 1, end_line: 2, start_byte: 0, end_byte: 1 }, content_hash: String::new() });
+    anchored.component.anchor = Some(CodeAnchor {
+        language: "rust".into(),
+        file: RepoPath::new("src/b.rs").unwrap(),
+        symbol: "a::step".into(),
+        syntax_kind: "function_item".into(),
+        span: Span { start_line: 1, end_line: 2, start_byte: 0, end_byte: 1 },
+        content_hash: String::new(),
+    });
     anchored.code = Some("fn step() {}".into());
     app.desk.spec_mut().detail = Some(anchored);
     frame(&ctx, &mut app, vec![]);
@@ -224,13 +275,18 @@ fn indexing_shows_its_state_everywhere_and_can_be_run_from_the_cockpit() {
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("2 out of date"), "the graph's cards: {text}");
     // A failed run says so.
-    told(&app, index_event(arch_graph::IndexStatus { state: arch_graph::IndexState::Failed, error: Some("disk".into()), ..Default::default() }));
+    told(
+        &app,
+        index_event(arch_graph::IndexStatus { state: arch_graph::IndexState::Failed, error: Some("disk".into()), ..Default::default() }),
+    );
     assert!(texts(&frame(&ctx, &mut app, vec![])).contains("indexing failed"));
     // Every state names a real icon and colour (config is checked).
-    assert!(UiConfig::with_overrides("[status.stale]\nword = \"old\"\nicon = \"nope\"\ncolor = \"warn\"\n").unwrap_err().contains("unknown icon"));
+    assert!(
+        UiConfig::with_overrides("[status.stale]\nword = \"old\"\nicon = \"nope\"\ncolor = \"warn\"\n")
+            .unwrap_err()
+            .contains("unknown icon")
+    );
 }
-
-
 
 /// The changes view: `Space b f` shows it; Enter on a change opens its
 /// file at the changed line in the code view.
@@ -240,7 +296,20 @@ fn enter_on_a_change_opens_its_file_at_the_line() {
     let (ctx, mut app) = full_app();
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"space b f"}"#).unwrap();
     assert_eq!(app.desk.panels.focused_kind(), BufferKind::Changes, "Space b f shows the changes");
-    let list = ChangeList { comparison: Comparison::default(), files: vec![ChangedFile { path: "src/a.rs".into(), old_path: None, status: FileStatus::Modified, group: Group::Unstaged, added: 1, removed: 0, binary: false }], offset: 0, total: 1 };
+    let list = ChangeList {
+        comparison: Comparison::default(),
+        files: vec![ChangedFile {
+            path: "src/a.rs".into(),
+            old_path: None,
+            status: FileStatus::Modified,
+            group: Group::Unstaged,
+            added: 1,
+            removed: 0,
+            binary: false,
+        }],
+        offset: 0,
+        total: 1,
+    };
     app.desk.shared.changes.take_list_for_test(list);
     app.desk.share();
     app.desk.changes_mut().move_to("f:Unstaged:src/a.rs");
@@ -270,7 +339,10 @@ fn g_x_on_a_message_compares_its_turns_changes() {
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"g x"}"#).unwrap();
     assert_eq!(app.desk.panels.focused_kind(), BufferKind::Chat, "the timeline hasn't seen it: nothing to go to");
     let turn = Comparison { from: Point::Snapshot("1-a".into()), to: Point::Snapshot("2-b".into()) };
-    app.desk.shared.changes.take_timeline_for_test(Timeline { windows: vec![], turns: vec![TurnChanges { thread: "t".into(), turn: "turn".into(), comparison: turn.clone(), files: 3, alongside: vec![] }] });
+    app.desk.shared.changes.take_timeline_for_test(Timeline {
+        windows: vec![],
+        turns: vec![TurnChanges { thread: "t".into(), turn: "turn".into(), comparison: turn.clone(), files: 3, alongside: vec![] }],
+    });
     frame(&ctx, &mut app, Vec::new());
     assert_eq!(app.desk.chat().turn_files.get("turn"), Some(&3), "the chat knows how much each turn changed");
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"g x"}"#).unwrap();
@@ -298,7 +370,11 @@ fn a_settings_picker_lists_its_choices_as_the_action_list_does_and_picks_one() {
     let repaint = frame(&ctx, &mut app, vec![]);
     assert!(repaint.viewport_output.values().any(|v| v.repaint_delay.is_zero()), "the bars are drawn again at once");
     let shown = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(matches!(app.input_mode, InputMode::Choosing { .. }) && shown.contains("CHOOSING") && shown.contains("Escape closes"), "{:?}: {shown}", app.input_mode);
+    assert!(
+        matches!(app.input_mode, InputMode::Choosing { .. }) && shown.contains("CHOOSING") && shown.contains("Escape closes"),
+        "{:?}: {shown}",
+        app.input_mode
+    );
     let selected = app.desk.graph().selection.clone();
     frame(&ctx, &mut app, key("j"));
     assert_eq!(app.desk.graph().selection, selected, "the panel's keys stand aside");

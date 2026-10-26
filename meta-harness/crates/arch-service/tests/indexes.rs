@@ -28,14 +28,24 @@ fn sample() -> (tempfile::TempDir, std::path::PathBuf, ArchitectureService) {
     let root = dir.path().join("sample");
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample"), &root);
     let facts = arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap();
-    let service = ArchitectureService::open(&root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap();
+    let service =
+        ArchitectureService::open(&root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts)
+            .unwrap();
     service.ingest(&root).unwrap();
     (dir, root, service)
 }
 
 /// The stages the last answer of kind `what` ran.
 fn stages(service: &ArchitectureService, what: &str) -> Vec<String> {
-    service.perf().unwrap().recent.iter().rev().find(|t| t.what == what).map(|t| t.stages.iter().map(|s| s.stage.clone()).collect()).unwrap_or_default()
+    service
+        .perf()
+        .unwrap()
+        .recent
+        .iter()
+        .rev()
+        .find(|t| t.what == what)
+        .map(|t| t.stages.iter().map(|s| s.stage.clone()).collect())
+        .unwrap_or_default()
 }
 
 #[test]
@@ -70,7 +80,21 @@ fn the_data_flow_index_the_symbol_list_and_the_badges_are_built_once_per_snapsho
     service.tree(&flows).unwrap();
     assert!(!stages(&service, "tree").contains(&"badges".to_owned()));
     let plan = PlanId::new("p").unwrap();
-    service.apply(&plan, PlanOp::AddComponent { name: "check".into(), type_name: "function".into(), description: "Checks.".into(), parent: Some(arch_graph::ComponentId::for_symbol("rust", "sample")), file: None, signature: None, schemas: None, spec: None }).unwrap();
+    service
+        .apply(
+            &plan,
+            PlanOp::AddComponent {
+                name: "check".into(),
+                type_name: "function".into(),
+                description: "Checks.".into(),
+                parent: Some(arch_graph::ComponentId::for_symbol("rust", "sample")),
+                file: None,
+                signature: None,
+                schemas: None,
+                spec: None,
+            },
+        )
+        .unwrap();
     service.tree(&flows).unwrap();
     assert!(stages(&service, "tree").contains(&"badges".to_owned()));
 }
@@ -85,10 +109,14 @@ fn expand_walks_only_the_asked_branch_and_says_nothing_already_shown() {
     let added = service.expand(&request, &card, 1).unwrap();
     // The tree sent is kept: only the branch is walked, then merged into it.
     let expand_stages = stages(&service, "expand");
-    assert!(expand_stages.iter().any(|s| s == "branch") && !expand_stages.iter().any(|s| s == "held" || s == "walk"), "no whole tree is walked: {expand_stages:?}");
+    assert!(
+        expand_stages.iter().any(|s| s == "branch") && !expand_stages.iter().any(|s| s == "held" || s == "walk"),
+        "no whole tree is walked: {expand_stages:?}"
+    );
     assert!(added.cards.iter().all(|c| !shown.contains(&c.key)), "only new cards");
     // The same cards a deeper tree adds under it.
-    let deeper = service.tree(&TreeRequest { opened: vec![arch_graph::tree::Opened { card: card.clone(), levels: 1 }], ..request.clone() }).unwrap();
+    let deeper =
+        service.tree(&TreeRequest { opened: vec![arch_graph::tree::Opened { card: card.clone(), levels: 1 }], ..request.clone() }).unwrap();
     let mut new_in_deeper: Vec<String> = deeper.cards.iter().map(|c| c.key.clone()).filter(|k| !shown.contains(k)).collect();
     let mut expanded: Vec<String> = added.cards.iter().map(|c| c.key.clone()).collect();
     new_in_deeper.sort();
@@ -109,7 +137,10 @@ fn the_layout_keeps_to_limits_toml_layout_ms_and_a_cut_answer_says_so() {
     let mut limits = arch_service::Limits::defaults().unwrap();
     limits.layout_ms = 0;
     let facts = arch_service::open_facts(&root, &limits).unwrap();
-    let hurried = ArchitectureService::open(&root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap().with_limits(limits);
+    let hurried =
+        ArchitectureService::open(&root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts)
+            .unwrap()
+            .with_limits(limits);
     hurried.ingest(&root).unwrap();
     let tree = hurried.tree(&request).unwrap();
     let cut = tree.cut.expect("cut by the layout's limit");

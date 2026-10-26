@@ -38,17 +38,46 @@ fn flow(a: &str, b: &str, data: &str) -> Relation {
 /// Plan flows run -> step; step turns it into a Report for save.
 fn sample() -> Graph {
     let mut g = Graph::default();
-    for (s, ty) in [("app", "module"), ("app::run", "function"), ("app::step", "function"), ("app::save", "function"), ("app::log", "function"), ("lib", "module"), ("lib::util", "function"), ("lib::Plan", "class"), ("lib::Report", "class")] {
+    for (s, ty) in [
+        ("app", "module"),
+        ("app::run", "function"),
+        ("app::step", "function"),
+        ("app::save", "function"),
+        ("app::log", "function"),
+        ("lib", "module"),
+        ("lib::util", "function"),
+        ("lib::Plan", "class"),
+        ("lib::Report", "class"),
+    ] {
         let mut c = code(s, ty);
         if s == "app::step" {
-            c.signature = Some(Signature { params: vec![Param { name: "plan".into(), ty: Some("&Plan".into()), optional: false, variadic: false }], returns: Some("Report".into()), qualifiers: vec![] });
+            c.signature = Some(Signature {
+                params: vec![Param { name: "plan".into(), ty: Some("&Plan".into()), optional: false, variadic: false }],
+                returns: Some("Report".into()),
+                qualifiers: vec![],
+            });
         }
         g.upsert_component(c, Provenance::OBSERVED);
     }
-    for (a, b) in [("app", "app::run"), ("app", "app::step"), ("app", "app::save"), ("app", "app::log"), ("lib", "lib::util"), ("lib", "lib::Plan"), ("lib", "lib::Report")] {
+    for (a, b) in [
+        ("app", "app::run"),
+        ("app", "app::step"),
+        ("app", "app::save"),
+        ("app", "app::log"),
+        ("lib", "lib::util"),
+        ("lib", "lib::Plan"),
+        ("lib", "lib::Report"),
+    ] {
         g.upsert_relation(rel(RelationKind::Contains, a, b));
     }
-    for r in [call("app::run", "app::step", 0), call("app::run", "app::log", 1), call("app::step", "app::save", 0), call("app::save", "app::step", 0), call("app::step", "lib::util", 1), call("app::log", "lib::util", 0)] {
+    for r in [
+        call("app::run", "app::step", 0),
+        call("app::run", "app::log", 1),
+        call("app::step", "app::save", 0),
+        call("app::save", "app::step", 0),
+        call("app::step", "lib::util", 1),
+        call("app::log", "lib::util", 0),
+    ] {
         g.upsert_relation(r);
     }
     for r in [flow("app::run", "app::step", "&Plan"), flow("app::step", "app::save", "Report"), flow("app::step", "app::log", "()")] {
@@ -71,12 +100,34 @@ struct Fixture {
 impl Fixture {
     /// `app::run` is the program's main; `app::step` handles a route.
     fn new(graph: Graph) -> Self {
-        let entries = vec![EntryPoint { id: id("app::run"), why: "main".into() }, EntryPoint { id: id("app::step"), why: "http /api/step".into() }];
-        Fixture { graph, plan: None, others: BTreeMap::new(), config: TreeConfig::defaults().unwrap(), types: TypeSystem::defaults().unwrap(), budget: 400, link_budget: 300, entries }
+        let entries =
+            vec![EntryPoint { id: id("app::run"), why: "main".into() }, EntryPoint { id: id("app::step"), why: "http /api/step".into() }];
+        Fixture {
+            graph,
+            plan: None,
+            others: BTreeMap::new(),
+            config: TreeConfig::defaults().unwrap(),
+            types: TypeSystem::defaults().unwrap(),
+            budget: 400,
+            link_budget: 300,
+            entries,
+        }
     }
 
     fn input(&self) -> Input<'_, Graph> {
-        Input { graph: &self.graph, plan: self.plan.as_ref(), other_plans: &self.others, config: &self.config, types: &self.types, budget: self.budget, link_budget: self.link_budget, out_of_time: &|| false, layout_out_of_time: &|| false, flows: None, entries: &self.entries }
+        Input {
+            graph: &self.graph,
+            plan: self.plan.as_ref(),
+            other_plans: &self.others,
+            config: &self.config,
+            types: &self.types,
+            budget: self.budget,
+            link_budget: self.link_budget,
+            out_of_time: &|| false,
+            layout_out_of_time: &|| false,
+            flows: None,
+            entries: &self.entries,
+        }
     }
 
     fn tree(&self, request: TreeRequest) -> Tree {
@@ -120,7 +171,10 @@ fn contains_is_boxes_in_boxes_from_the_top() {
     // Up: what holds it.
     let up = f.tree(ask(ViewKind::Contains, Some("app::step"), Way::Up, 3));
     assert_eq!(keys(&up), vec!["step", "app"]);
-    assert_eq!(f.tree(ask(ViewKind::Contains, Some("app::step"), Way::Down, 1)).path.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), vec!["app"]);
+    assert_eq!(
+        f.tree(ask(ViewKind::Contains, Some("app::step"), Way::Down, 1)).path.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(),
+        vec!["app"]
+    );
 }
 
 #[test]
@@ -345,7 +399,12 @@ fn a_plans_data_flow_starts_from_the_data_it_brings() {
 #[test]
 fn trees_lay_out_spaced_and_lines_stay_out_of_cards() {
     let f = Fixture::new(sample());
-    for request in [ask(ViewKind::Calls, Some("app::run"), Way::Down, 4), ask(ViewKind::Calls, Some("lib::util"), Way::Up, 4), ask(ViewKind::DataFlow, None, Way::Down, 4), ask(ViewKind::Contains, None, Way::Down, 3)] {
+    for request in [
+        ask(ViewKind::Calls, Some("app::run"), Way::Down, 4),
+        ask(ViewKind::Calls, Some("lib::util"), Way::Up, 4),
+        ask(ViewKind::DataFlow, None, Way::Down, 4),
+        ask(ViewKind::Contains, None, Way::Down, 3),
+    ] {
         let tree = f.tree(request);
         clean(&tree);
         assert!(tree.size.0 > 0.0 && tree.size.1 > 0.0);
@@ -483,7 +542,10 @@ fn the_layout_has_its_own_time_limit_and_a_cut_answer_says_so() {
         lay_out(&mut tree, &f.config.layout, &late);
         let cut = tree.cut.clone().expect("the layout cut it");
         assert_eq!((cut.reason, cut.starts_left_out), (CutReason::Time, 0), "{view:?}");
-        assert!(tree.cards.len() < cards && cut.hidden as usize == cards - tree.cards.len(), "{view:?}: what had no time is left out and counted");
+        assert!(
+            tree.cards.len() < cards && cut.hidden as usize == cards - tree.cards.len(),
+            "{view:?}: what had no time is left out and counted"
+        );
         assert!(tree.cards.iter().map(|c| c.more).sum::<u32>() > more, "{view:?}: the cards it was under say there's more");
         clean(&tree);
     }
@@ -513,7 +575,10 @@ fn only_the_components_asked_for_show_with_what_holds_them() {
     let mut boxes = keys(&on.tree(TreeRequest { only: Some(vec![id("app::run").0]), ..on_plan(ViewKind::Contains, None) }));
     boxes.sort();
     assert_eq!(boxes, vec!["app", "run"]);
-    assert!(f.tree(TreeRequest { only: Some(Vec::new()), ..ask(ViewKind::Contains, None, Way::Down, 2) }).cards.is_empty(), "none asked for: nothing");
+    assert!(
+        f.tree(TreeRequest { only: Some(Vec::new()), ..ask(ViewKind::Contains, None, Way::Down, 2) }).cards.is_empty(),
+        "none asked for: nothing"
+    );
 }
 
 #[test]

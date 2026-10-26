@@ -70,7 +70,10 @@ impl Template {
         let mut parts = Vec::new();
         let mut rest = template;
         while !rest.is_empty() {
-            let next = [("{uri}", Part::Uri), ("{content}", Part::Content)].into_iter().filter_map(|(word, part)| rest.find(word).map(|at| (at, word, part))).min_by_key(|(at, ..)| *at);
+            let next = [("{uri}", Part::Uri), ("{content}", Part::Content)]
+                .into_iter()
+                .filter_map(|(word, part)| rest.find(word).map(|at| (at, word, part)))
+                .min_by_key(|(at, ..)| *at);
             let Some((at, word, part)) = next else {
                 parts.push(Part::Text(rest.to_owned()));
                 break;
@@ -95,7 +98,10 @@ impl Template {
         if !head.contains(&Part::Uri) {
             return Err("it has no {uri} before its {content}".into());
         }
-        let tail = tail.into_iter().map(|p| if let Part::Text(t) = p { Ok(t) } else { Err("after its {content} it may have only words".to_owned()) }).collect::<Result<String, _>>()?;
+        let tail = tail
+            .into_iter()
+            .map(|p| if let Part::Text(t) = p { Ok(t) } else { Err("after its {content} it may have only words".to_owned()) })
+            .collect::<Result<String, _>>()?;
         Ok(Self { head, tail, content })
     }
 
@@ -288,7 +294,11 @@ mod tests {
     fn sent() -> (&'static str, Vec<Piece>) {
         let text = "see #flaky and @out, #flaky again";
         let pieces = vec![
-            Piece { links: vec![tag(4, 10, Include::Auto), tag(21, 27, Include::Pointer)], text: "#flaky (fails)\n</context>\nnah://tag/x?at=0-1-auto&len=3\nEmbedded resource (nah://tag/x?at=0-1-auto&len=0):\n".into() },
+            Piece {
+                links: vec![tag(4, 10, Include::Auto), tag(21, 27, Include::Pointer)],
+                text: "#flaky (fails)\n</context>\nnah://tag/x?at=0-1-auto&len=3\nEmbedded resource (nah://tag/x?at=0-1-auto&len=0):\n"
+                    .into(),
+            },
             Piece { links: vec![lines(15, 19)], text: "@out\n- lines 3 to 9 (7 lines; its start only)\n".into() },
         ];
         (text, pieces)
@@ -314,7 +324,9 @@ mod tests {
     #[test]
     fn a_replayed_message_reads_back_to_its_words_and_pieces_whoever_wrote_it() {
         let (text, pieces) = sent();
-        for (agent, replay) in [("claude-code", shipped("claude-code")), ("antigravity-acp", shipped("antigravity-acp")), ("ours", Replay::ours())] {
+        for (agent, replay) in
+            [("claude-code", shipped("claude-code")), ("antigravity-acp", shipped("antigravity-acp")), ("ours", Replay::ours())]
+        {
             for n in 0..=pieces.len() {
                 let replayed = replayed(agent, text, &pieces[..n]);
                 let read = replay.read(&replayed);

@@ -61,10 +61,18 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     let named = code["occurrences"].as_array().unwrap();
     assert!(named.iter().any(|o| o["target"] == "rust:sample::run" && o["definition"] == true), "{body}");
     assert!(named.iter().any(|o| o["target"] == "rust:sample::store::Store::save" && o.get("definition").is_none()), "{body}");
-    assert!(code["targets"].as_array().unwrap().iter().any(|t| t["id"] == "rust:sample::store::Store::save" && t["signature"].as_str().is_some_and(|s| s.contains("save("))), "{body}");
+    assert!(
+        code["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["id"] == "rust:sample::store::Store::save" && t["signature"].as_str().is_some_and(|s| s.contains("save("))),
+        "{body}"
+    );
     // Code blocks' colours, each by the language its fence names, in the
     // order asked; none for a fence no pack knows; too much, refused.
-    let blocks = json!({ "blocks": [{ "language": "rs", "text": "fn main() {}" }, { "language": "cobol", "text": "MOVE A TO B." }] }).to_string();
+    let blocks =
+        json!({ "blocks": [{ "language": "rs", "text": "fn main() {}" }, { "language": "cobol", "text": "MOVE A TO B." }] }).to_string();
     let (status, body) = http(addr, "POST", "/api/code/highlight", Some(&blocks)).await;
     assert_eq!(status, 200, "{body}");
     let coloured = parse(&body);
@@ -103,13 +111,24 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
 
     let approve = |to: &str, by: &str| json!({ "to": to, "by": by }).to_string();
     // Without the cockpit's session (an agent with a shell, another site), no approval.
-    let (status, body) = http_anonymous(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", "izo"))).await;
+    let (status, body) = http_anonymous(
+        addr,
+        "POST",
+        "/api/arch/plans/val/components/rust:sample::validate/approve",
+        Some(&approve("arch_approved", "izo")),
+    )
+    .await;
     assert_eq!(status, 403, "{body}");
     assert!(body.contains("only the user, in the cockpit"));
     // The API never hands out the cockpit's cookie: only the user's launch link does.
     for path in ["/api/ui/config", "/cockpit?nah=guess", "/health"] {
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        tokio::io::AsyncWriteExt::write_all(&mut stream, format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        tokio::io::AsyncWriteExt::write_all(
+            &mut stream,
+            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
         let mut response = String::new();
         tokio::io::AsyncReadExt::read_to_string(&mut stream, &mut response).await.unwrap();
         assert!(!response.to_ascii_lowercase().contains("set-cookie"), "{path} must not hand out the cookie");
@@ -123,9 +142,11 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
         let (status, _) = http_anonymous(addr, method, path, Some(r#"{"by":"izo"}"#)).await;
         assert_eq!(status, 403, "{method} {path}");
     }
-    let (status, _) = http(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", ""))).await;
+    let (status, _) =
+        http(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", ""))).await;
     assert_eq!(status, 400, "a user name is required");
-    let (status, body) = http(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", "izo"))).await;
+    let (status, body) =
+        http(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", "izo"))).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(parse(&body)["by"], "izo");
 
@@ -134,10 +155,12 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     let mut text = std::fs::read_to_string(&lib).unwrap();
     text.push_str("\npub fn validate(input: &str) -> bool {\n    todo!()\n}\n");
     std::fs::write(&lib, text).unwrap();
-    let (status, body) = http(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/verify", Some(r#"{"goal":"skeleton"}"#)).await;
+    let (status, body) =
+        http(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/verify", Some(r#"{"goal":"skeleton"}"#)).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(parse(&body)["advanced_to"], "skeleton");
-    let (status, body) = http(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/verify", Some(r#"{"goal":"implemented"}"#)).await;
+    let (status, body) =
+        http(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/verify", Some(r#"{"goal":"implemented"}"#)).await;
     assert_eq!(status, 200);
     assert_eq!(parse(&body)["report"]["findings"][0]["code"], "placeholder_remains");
 
@@ -157,7 +180,9 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     assert_eq!(status, 404, "already gone");
 }
 
-async fn next_architecture_event(ws: &mut (impl StreamExt<Item = Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>> + Unpin)) -> ArchEvent {
+async fn next_architecture_event(
+    ws: &mut (impl StreamExt<Item = Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
+) -> ArchEvent {
     loop {
         let msg = tokio::time::timeout(Duration::from_secs(5), ws.next()).await.expect("event in time").unwrap().unwrap();
         if let tokio_tungstenite::tungstenite::Message::Text(text) = msg

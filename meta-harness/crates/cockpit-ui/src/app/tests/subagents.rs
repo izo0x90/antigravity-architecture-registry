@@ -8,7 +8,9 @@
 
 use super::*;
 use crate::chat::tests::item;
-use harness_contracts::{AdapterEvent, ClientEvent, ItemBody, ItemId, ItemStatus, Subagent, SubagentId, SubagentStatus, ThreadId, TurnId, TurnItem};
+use harness_contracts::{
+    AdapterEvent, ClientEvent, ItemBody, ItemId, ItemStatus, Subagent, SubagentId, SubagentStatus, ThreadId, TurnId, TurnItem,
+};
 
 fn session(event: AdapterEvent) -> ClientEvent {
     ClientEvent::Session { event }
@@ -36,7 +38,23 @@ fn subagent(n: u32, at: u32, status: SubagentStatus, can_cancel: bool) -> Subage
 /// A step of the sub-agent whose item is `i{parent}`: a call, `title`.
 fn step(n: u32, parent: u32, title: &str) -> ClientEvent {
     session(AdapterEvent::ItemUpdated {
-        item: TurnItem { id: ItemId::new(format!("i{n}")), thread_id: ThreadId::new("t"), turn_id: TurnId::new("turn"), native_id: None, parent_id: Some(ItemId::new(format!("i{parent}"))), ordinal: n, status: ItemStatus::Completed, title: Some(title.into()), body: ItemBody::ToolCall { kind: harness_contracts::ToolKind::Read, name: "read".into(), input: None, output: vec![], locations: vec![] } },
+        item: TurnItem {
+            id: ItemId::new(format!("i{n}")),
+            thread_id: ThreadId::new("t"),
+            turn_id: TurnId::new("turn"),
+            native_id: None,
+            parent_id: Some(ItemId::new(format!("i{parent}"))),
+            ordinal: n,
+            status: ItemStatus::Completed,
+            title: Some(title.into()),
+            body: ItemBody::ToolCall {
+                kind: harness_contracts::ToolKind::Read,
+                name: "read".into(),
+                input: None,
+                output: vec![],
+                locations: vec![],
+            },
+        },
     })
 }
 
@@ -67,7 +85,10 @@ fn at(output: &egui::FullOutput, words: &str) -> egui::Pos2 {
 fn those_at_work_are_a_strip_of_chips_and_many_fold_into_how_many() {
     let (ctx, mut app) = chat_with(vec![subagent(1, 200, SubagentStatus::Running, true), subagent(2, 201, SubagentStatus::Waiting, false)]);
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("Helper 1 · Read file1.rs") && text.contains("Helper 2 · waiting on you"), "each a chip, what it's doing from its steps: {text}");
+    assert!(
+        text.contains("Helper 1 · Read file1.rs") && text.contains("Helper 2 · waiting on you"),
+        "each a chip, what it's doing from its steps: {text}"
+    );
     // Where each started: a line, its state; its step folded under it.
     assert!(text.contains("working") && text.contains("1 step by its sub-agent"), "{text}");
     // Many: one chip, how many; tapped, each; few again, folded again.
@@ -81,7 +102,12 @@ fn those_at_work_are_a_strip_of_chips_and_many_fold_into_how_many() {
     assert!(text.contains("Helper 1 · Read file1.rs") && text.contains("Helper 4 · Read file4.rs"), "{text}");
     // Two end, and their while in sight goes: few again; more again, folded.
     for n in 3..=4 {
-        told(&app, session(AdapterEvent::SubagentUpdated { subagent: Subagent { ended_ms: Some(crate::attention::now_ms()), ..subagent(n, 200 + n, SubagentStatus::Completed, false) } }));
+        told(
+            &app,
+            session(AdapterEvent::SubagentUpdated {
+                subagent: Subagent { ended_ms: Some(crate::attention::now_ms()), ..subagent(n, 200 + n, SubagentStatus::Completed, false) },
+            }),
+        );
     }
     frame_at(&ctx, &mut app, vec![], 100.0);
     frame_at(&ctx, &mut app, vec![], 120.0);
@@ -97,9 +123,15 @@ fn those_at_work_are_a_strip_of_chips_and_many_fold_into_how_many() {
 /// that had ended before it was seen never shows.
 #[test]
 fn one_seen_to_end_stays_a_while_and_one_ended_before_never_shows() {
-    let (ctx, mut app) = chat_with(vec![subagent(1, 200, SubagentStatus::Running, false), subagent(2, 201, SubagentStatus::Completed, false)]);
+    let (ctx, mut app) =
+        chat_with(vec![subagent(1, 200, SubagentStatus::Running, false), subagent(2, 201, SubagentStatus::Completed, false)]);
     frame_at(&ctx, &mut app, vec![], 10.0);
-    told(&app, session(AdapterEvent::SubagentUpdated { subagent: Subagent { ended_ms: Some(crate::attention::now_ms()), ..subagent(1, 200, SubagentStatus::Completed, false) } }));
+    told(
+        &app,
+        session(AdapterEvent::SubagentUpdated {
+            subagent: Subagent { ended_ms: Some(crate::attention::now_ms()), ..subagent(1, 200, SubagentStatus::Completed, false) },
+        }),
+    );
     let text = texts(&frame_at(&ctx, &mut app, vec![], 11.0));
     assert!(text.contains("Helper 1 · done") && !text.contains("Helper 2 ·"), "{text}");
     let text = texts(&frame_at(&ctx, &mut app, vec![], 30.0));
@@ -118,12 +150,32 @@ fn a_chip_opens_its_work_in_the_quick_look_and_it_stops_alone_where_it_can() {
     frame(&ctx, &mut app, key("i"));
     assert!(matches!(app.input_mode, InputMode::Insert { .. }));
     let chip = at(&frame(&ctx, &mut app, vec![]), "Helper 1 · Read file1.rs");
-    let button = |pressed| egui::Event::PointerButton { pos: chip, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
-    for (n, events) in [vec![egui::Event::PointerMoved(chip)], vec![button(true)], vec![button(false)], vec![button(true)], vec![button(false)], vec![], vec![], vec![]].into_iter().enumerate() {
+    let button =
+        |pressed| egui::Event::PointerButton { pos: chip, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    for (n, events) in [
+        vec![egui::Event::PointerMoved(chip)],
+        vec![button(true)],
+        vec![button(false)],
+        vec![button(true)],
+        vec![button(false)],
+        vec![],
+        vec![],
+        vec![],
+    ]
+    .into_iter()
+    .enumerate()
+    {
         frame_at(&ctx, &mut app, events, 50.0 + n as f64 * 0.05);
     }
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(app.quick_look.is_some() && text.contains("Sub-agent of") && text.contains("Task 1") && text.contains("Read file1.rs") && text.contains("Stop it"), "in the quick look: {text}");
+    assert!(
+        app.quick_look.is_some()
+            && text.contains("Sub-agent of")
+            && text.contains("Task 1")
+            && text.contains("Read file1.rs")
+            && text.contains("Stop it"),
+        "in the quick look: {text}"
+    );
     assert!(!text.contains("Looking at it."), "its work alone: {text}");
     assert_eq!(app.input_mode, InputMode::Normal, "typing under it stopped");
     // A step as it comes.
@@ -153,7 +205,8 @@ fn a_chip_opens_its_work_in_the_quick_look_and_it_stops_alone_where_it_can() {
 
 #[test]
 fn the_next_one_is_a_key_away_enter_opens_it_and_where_it_started_is_too() {
-    let (ctx, mut app) = chat_with(vec![subagent(1, 200, SubagentStatus::Completed, false), subagent(2, 201, SubagentStatus::Running, false)]);
+    let (ctx, mut app) =
+        chat_with(vec![subagent(1, 200, SubagentStatus::Completed, false), subagent(2, 201, SubagentStatus::Running, false)]);
     keys(&ctx, &mut app, "]a");
     let first = app.desk.chat().ui.cursor;
     keys(&ctx, &mut app, "]a");
@@ -173,7 +226,11 @@ fn the_next_one_is_a_key_away_enter_opens_it_and_where_it_started_is_too() {
 
 #[test]
 fn how_many_are_at_work_is_said_on_the_live_line_and_the_panels_top_line() {
-    let (_, app) = chat_with(vec![subagent(1, 200, SubagentStatus::Running, false), subagent(2, 201, SubagentStatus::Waiting, false), subagent(3, 202, SubagentStatus::Completed, false)]);
+    let (_, app) = chat_with(vec![
+        subagent(1, 200, SubagentStatus::Running, false),
+        subagent(2, 201, SubagentStatus::Waiting, false),
+        subagent(3, 202, SubagentStatus::Completed, false),
+    ]);
     assert_eq!(app.desk.chat().subagents_working(), 2);
     let status: Vec<String> = app.desk.view(BufferKind::Chat).status().into_iter().map(|s| s.text).collect();
     assert!(status.iter().any(|s| s.ends_with(" 2")), "{status:?}");

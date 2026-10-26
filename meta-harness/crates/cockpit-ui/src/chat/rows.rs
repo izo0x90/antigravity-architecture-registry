@@ -119,7 +119,8 @@ pub(crate) fn shape_facts<'a>(items: impl Iterator<Item = &'a TurnItem>) -> u64 
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for item in items {
-        (&item.id, std::mem::discriminant(&item.body), std::mem::discriminant(&item.status), &item.parent_id, &item.turn_id, folds(item)).hash(&mut hasher);
+        (&item.id, std::mem::discriminant(&item.body), std::mem::discriminant(&item.status), &item.parent_id, &item.turn_id, folds(item))
+            .hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -242,7 +243,8 @@ impl Folds {
             ItemBody::UserMessage { .. } => Own::HandedOn,
             _ => Own::Output,
         };
-        let own = (!row.folded && (folds(first) || row.nested > 0)).then(|| (Folding::Item { id: first.id.clone(), what }, self.item_open(first)));
+        let own = (!row.folded && (folds(first) || row.nested > 0))
+            .then(|| (Folding::Item { id: first.id.clone(), what }, self.item_open(first)));
         Here { run, own }
     }
 }
@@ -451,15 +453,41 @@ mod tests {
     use harness_contracts::{ContentBlock, ThreadId, ToolKind, TurnId};
 
     fn item(n: u32, turn: &str, body: ItemBody, status: ItemStatus) -> TurnItem {
-        TurnItem { id: ItemId::new(format!("i{n}")), thread_id: ThreadId::new("t"), turn_id: TurnId::new(turn), native_id: None, parent_id: None, ordinal: n, status, title: None, body }
+        TurnItem {
+            id: ItemId::new(format!("i{n}")),
+            thread_id: ThreadId::new("t"),
+            turn_id: TurnId::new(turn),
+            native_id: None,
+            parent_id: None,
+            ordinal: n,
+            status,
+            title: None,
+            body,
+        }
     }
 
     fn call(n: u32, turn: &str, kind: ToolKind) -> TurnItem {
-        item(n, turn, ItemBody::ToolCall { kind, name: "x".into(), input: None, output: vec![ContentBlock::Text { text: "out".into() }], locations: vec![] }, ItemStatus::Completed)
+        item(
+            n,
+            turn,
+            ItemBody::ToolCall {
+                kind,
+                name: "x".into(),
+                input: None,
+                output: vec![ContentBlock::Text { text: "out".into() }],
+                locations: vec![],
+            },
+            ItemStatus::Completed,
+        )
     }
 
     fn said(n: u32, turn: &str) -> TurnItem {
-        item(n, turn, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "hi".into() }], streaming: false }, ItemStatus::Completed)
+        item(
+            n,
+            turn,
+            ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "hi".into() }], streaming: false },
+            ItemStatus::Completed,
+        )
     }
 
     fn rows_of(items: &[&TurnItem], folds: &Folds) -> Vec<(usize, usize)> {
@@ -476,7 +504,17 @@ mod tests {
     /// open or folded at once; the rows found by item.
     #[test]
     fn a_run_of_calls_is_one_row_until_opened() {
-        let stream = [said(0, "a"), call(1, "a", ToolKind::Read), call(2, "a", ToolKind::Read), call(3, "a", ToolKind::Search), call(4, "a", ToolKind::Search), call(5, "a", ToolKind::Execute), said(6, "a"), call(7, "a", ToolKind::Read), call(8, "b", ToolKind::Read)];
+        let stream = [
+            said(0, "a"),
+            call(1, "a", ToolKind::Read),
+            call(2, "a", ToolKind::Read),
+            call(3, "a", ToolKind::Search),
+            call(4, "a", ToolKind::Search),
+            call(5, "a", ToolKind::Execute),
+            said(6, "a"),
+            call(7, "a", ToolKind::Read),
+            call(8, "b", ToolKind::Read),
+        ];
         let items: Vec<&TurnItem> = stream.iter().collect();
         let mut folds = Folds::default();
         let folded = shape(&items, &folds);
@@ -566,18 +604,36 @@ mod tests {
     /// own doesn't join a run with its neighbours.
     #[test]
     fn a_sub_agents_work_folds_under_its_call() {
-        let stream = [said(0, "a"), call(1, "a", ToolKind::Read), call(2, "a", ToolKind::Other), under(said(3, "a"), 2), under(call(4, "a", ToolKind::Read), 2), under(call(5, "a", ToolKind::Read), 2), under(call(6, "a", ToolKind::Other), 5), call(7, "a", ToolKind::Read), said(8, "a")];
+        let stream = [
+            said(0, "a"),
+            call(1, "a", ToolKind::Read),
+            call(2, "a", ToolKind::Other),
+            under(said(3, "a"), 2),
+            under(call(4, "a", ToolKind::Read), 2),
+            under(call(5, "a", ToolKind::Read), 2),
+            under(call(6, "a", ToolKind::Other), 5),
+            call(7, "a", ToolKind::Read),
+            said(8, "a"),
+        ];
         let items: Vec<&TurnItem> = stream.iter().collect();
         let nest = nesting(&items);
         assert_eq!((nest.depth.clone(), nest.end.clone()), (vec![0, 0, 0, 1, 1, 1, 2, 0, 0], vec![0, 1, 6, 3, 4, 6, 6, 7, 8]));
         let mut folds = Folds::default();
         let shape_of = |folds: &Folds| shape(&items, folds).rows.iter().map(|r| (r.first, r.last, r.depth, r.nested)).collect::<Vec<_>>();
-        assert_eq!(shape_of(&folds), [(0, 0, 0, 0), (1, 1, 0, 0), (2, 6, 0, 4), (7, 7, 0, 0), (8, 8, 0, 0)], "folded into its call's row; the calls around it alone");
+        assert_eq!(
+            shape_of(&folds),
+            [(0, 0, 0, 0), (1, 1, 0, 0), (2, 6, 0, 4), (7, 7, 0, 0), (8, 8, 0, 0)],
+            "folded into its call's row; the calls around it alone"
+        );
         let rows = shape(&items, &folds).rows;
         let here = folds.here(&rows[2], &[], items[2]);
         assert_eq!(here.unfolds().map(Folding::words).as_deref(), Some("its sub-agent's work"));
         folds.set(here.unfolds().unwrap(), Set::Open);
-        assert_eq!(shape_of(&folds), [(0, 0, 0, 0), (1, 1, 0, 0), (2, 2, 0, 4), (3, 3, 1, 0), (4, 4, 1, 0), (5, 6, 1, 1), (7, 7, 0, 0), (8, 8, 0, 0)], "open: its items a level in; a call with work of its own alone");
+        assert_eq!(
+            shape_of(&folds),
+            [(0, 0, 0, 0), (1, 1, 0, 0), (2, 2, 0, 4), (3, 3, 1, 0), (4, 4, 1, 0), (5, 6, 1, 1), (7, 7, 0, 0), (8, 8, 0, 0)],
+            "open: its items a level in; a call with work of its own alone"
+        );
     }
 
     /// Quiet: everything between two messages is one folded line, even one
@@ -587,12 +643,24 @@ mod tests {
     #[test]
     fn the_verbosity_says_what_shows_by_default() {
         let thought = item(1, "a", ItemBody::Reasoning { text: "hmm".into(), streaming: false }, ItemStatus::Completed);
-        let stream = [said(0, "a"), thought, call(2, "a", ToolKind::Read), failed(call(3, "a", ToolKind::Execute)), said(4, "a"), call(5, "a", ToolKind::Read), said(6, "a")];
+        let stream = [
+            said(0, "a"),
+            thought,
+            call(2, "a", ToolKind::Read),
+            failed(call(3, "a", ToolKind::Execute)),
+            said(4, "a"),
+            call(5, "a", ToolKind::Read),
+            said(6, "a"),
+        ];
         let items: Vec<&TurnItem> = stream.iter().collect();
         let mut quiet = Folds::default();
         quiet.set_verbosity(Verbosity::Quiet);
-        let shown: Vec<Option<String>> = shape(&items, &quiet).rows.iter().map(|r| r.folded.then(|| summary(&items[r.first..=r.last]))).collect();
-        assert_eq!(shown, [None, Some("Thought once, read 1 file, ran 1 command (1 failed)".into()), None, Some("Read 1 file".into()), None]);
+        let shown: Vec<Option<String>> =
+            shape(&items, &quiet).rows.iter().map(|r| r.folded.then(|| summary(&items[r.first..=r.last]))).collect();
+        assert_eq!(
+            shown,
+            [None, Some("Thought once, read 1 file, ran 1 command (1 failed)".into()), None, Some("Read 1 file".into()), None]
+        );
         let mut everything = Folds::default();
         everything.set_verbosity(Verbosity::Everything);
         assert_eq!(shape(&items, &everything).rows.len(), 7, "every one a row");
@@ -618,7 +686,18 @@ mod tests {
         sub.parent_id = Some(ItemId::new("task"));
         let ask = item(5, "a", ItemBody::Request { request_id: harness_contracts::RequestId::new("r") }, ItemStatus::Completed);
         let thought = item(7, "a", ItemBody::Reasoning { text: "hmm".into(), streaming: false }, ItemStatus::Completed);
-        let stream = [said(0, "a"), call(1, "a", ToolKind::Read), todo, task, sub, ask, call(6, "a", ToolKind::Read), thought, call(8, "a", ToolKind::Read), said(9, "a")];
+        let stream = [
+            said(0, "a"),
+            call(1, "a", ToolKind::Read),
+            todo,
+            task,
+            sub,
+            ask,
+            call(6, "a", ToolKind::Read),
+            thought,
+            call(8, "a", ToolKind::Read),
+            said(9, "a"),
+        ];
         let items: Vec<&TurnItem> = stream.iter().collect();
         let mut quiet = Folds::default();
         quiet.set_verbosity(Verbosity::Quiet);

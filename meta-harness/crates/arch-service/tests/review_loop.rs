@@ -70,13 +70,30 @@ fn setup() -> (tempfile::TempDir, std::path::PathBuf, ArchitectureService) {
                 description: "Checks input.".into(),
                 parent: Some(id("sample")),
                 file: None,
-                signature: Some(Signature { params: vec![Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] }),
+                signature: Some(Signature {
+                    params: vec![Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }],
+                    returns: Some("bool".into()),
+                    qualifiers: vec![],
+                }),
                 schemas: None,
                 spec: None,
             },
         )
         .unwrap();
-    service.apply(&pid(), PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::validate"), order: None, ports: None, note: None, expects: None }).unwrap();
+    service
+        .apply(
+            &pid(),
+            PlanOp::Relate {
+                kind: RelationKind::Calls,
+                source: id("sample::run"),
+                target: id("sample::validate"),
+                order: None,
+                ports: None,
+                note: None,
+                expects: None,
+            },
+        )
+        .unwrap();
     (dir, root, service)
 }
 
@@ -123,7 +140,11 @@ fn comments_a_plans_file_holds_go_to_the_discussions_as_its_read_and_hold_approv
     // Read before they're moved: they wait in the file, a save keeps them,
     // and they hold the plan's approvals.
     let s = open(&root);
-    s.apply(&pid(), PlanOp::Modify { id: id("sample::run"), description: Some("Validates first.".into()), signature: None, schemas: None, spec: None }).unwrap();
+    s.apply(
+        &pid(),
+        PlanOp::Modify { id: id("sample::run"), description: Some("Validates first.".into()), signature: None, schemas: None, spec: None },
+    )
+    .unwrap();
     assert_eq!(held(&root), Some(old.clone()), "saved with them still in it");
     let waiting = s.approve(&pid(), &id("sample::validate"), Stage::ArchApproved, &user()).unwrap_err().to_string();
     assert!(waiting.contains("holds comments from before discussions"), "{waiting}");
@@ -144,11 +165,18 @@ fn comments_a_plans_file_holds_go_to_the_discussions_as_its_read_and_hold_approv
     assert_eq!(s.plan(&pid()).unwrap().components.iter().filter(|c| c.name == "validate").count(), 1, "the rest of the plan as it was");
     // A file that comes with comments later (checked out, say): moved as
     // it's read; they hold nothing after.
-    with_comments(&root, json!([{ "id": "c9", "anchor": { "on": "plan" }, "author": { "kind": "user", "name": "izo" }, "text": "Later.", "at": "2026-10-08T00:00:00Z" }]));
+    with_comments(
+        &root,
+        json!([{ "id": "c9", "anchor": { "on": "plan" }, "author": { "kind": "user", "name": "izo" }, "text": "Later.", "at": "2026-10-08T00:00:00Z" }]),
+    );
     s.refresh(&[file(&root)]).unwrap();
     assert_eq!(moved.lock().unwrap().last(), Some(&("r".to_owned(), vec!["c9".to_owned()])), "moved as it's read");
     assert_eq!(held(&root), None, "the file is written without them");
-    assert!(s.approve(&pid(), &id("sample::validate"), Stage::ArchApproved, &user()).err().is_none_or(|e| !e.to_string().contains("holds comments")));
+    assert!(
+        s.approve(&pid(), &id("sample::validate"), Stage::ArchApproved, &user())
+            .err()
+            .is_none_or(|e| !e.to_string().contains("holds comments"))
+    );
 }
 
 #[test]
@@ -161,9 +189,16 @@ fn reviewing_snapshots_the_plan_and_later_changes_are_diffed() {
     let snapshot = s.mark_reviewed(&pid(), &user()).unwrap();
     assert_eq!(snapshot.by, "izo");
     assert!(s.review_diff(&pid()).unwrap().is_empty());
-    s.apply(&pid(), PlanOp::Modify { id: id("sample::run"), description: Some("Validates first.".into()), signature: None, schemas: None, spec: None }).unwrap();
+    s.apply(
+        &pid(),
+        PlanOp::Modify { id: id("sample::run"), description: Some("Validates first.".into()), signature: None, schemas: None, spec: None },
+    )
+    .unwrap();
     let diff = s.review_diff(&pid()).unwrap();
     assert_eq!(diff.since.as_deref(), Some(snapshot.at.as_str()));
-    assert!(diff.changes.iter().any(|c| matches!(c, Change::ComponentAdded { id: x } if x == &id("sample::run"))), "run joined the plan as modified: {diff:?}");
+    assert!(
+        diff.changes.iter().any(|c| matches!(c, Change::ComponentAdded { id: x } if x == &id("sample::run"))),
+        "run joined the plan as modified: {diff:?}"
+    );
     assert_eq!(diff.fields(&id("sample::run")), ["added".to_owned()].into_iter().collect());
 }

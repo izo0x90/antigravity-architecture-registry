@@ -36,8 +36,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use harness_contracts::{
-    CatalogUpdate, Capabilities, DriverKind, InstanceId, NativeId, ProviderSnapshot, RequestId,
-    RequestResponse, SavedSessionPage, SessionConfig, SteerInput, ThreadId, TurnId, TurnInput,
+    Capabilities, CatalogUpdate, DriverKind, InstanceId, NativeId, ProviderSnapshot, RequestId, RequestResponse, SavedSessionPage,
+    SessionConfig, SteerInput, ThreadId, TurnId, TurnInput,
 };
 use tokio::sync::watch;
 
@@ -116,7 +116,6 @@ pub trait AuthController: Send + Sync {
 
     async fn logout(&self) -> Result<()>;
 }
-
 
 /// Opens sessions. Stateless apart from what the instance gave it.
 #[async_trait]

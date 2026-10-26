@@ -8,8 +8,8 @@
 
 use harness_contracts::ItemBody;
 
-use super::*;
 use super::live::{span_changes, span_words};
+use super::*;
 use crate::agents::working_words;
 use crate::store::Seen;
 
@@ -43,7 +43,15 @@ impl ChatStreamState {
         let shown = |s: &&Seen| s.subagent.status.working() || s.ended_seen.is_some_and(|e| now - e < stays);
         // (None at work, none seen to end a moment ago: nothing to go
         // through.)
-        let Some(count) = self.thread().map(|v| if v.subagents_working() == 0 && v.last_seen_ended().is_none_or(|e| now - e >= stays) { 0 } else { v.subagents().iter().filter(shown).count() }) else { return };
+        let Some(count) = self.thread().map(|v| {
+            if v.subagents_working() == 0 && v.last_seen_ended().is_none_or(|e| now - e >= stays) {
+                0
+            } else {
+                v.subagents().iter().filter(shown).count()
+            }
+        }) else {
+            return;
+        };
         // (Few enough again: folded again once there are more.)
         if count <= CHIPS_MOST {
             self.ui.subagents_unfolded = false;
@@ -140,7 +148,11 @@ impl ChatStreamState {
         }
         drop(view);
         if self.shape().rows.is_empty() {
-            let words = if told_steps { "Its steps show here as they come." } else { "Its harness doesn't say which steps are its: they're in the agent's chat." };
+            let words = if told_steps {
+                "Its steps show here as they come."
+            } else {
+                "Its harness doesn't say which steps are its: they're in the agent's chat."
+            };
             ui.label(RichText::new(words).size(look.text_small).color(colors().muted));
         }
     }

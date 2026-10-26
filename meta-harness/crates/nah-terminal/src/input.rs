@@ -50,9 +50,8 @@ fn key_bytes(key: TermKey, mods: Mods, modes: Modes) -> Vec<u8> {
         }
     };
     // Tilde keys: `ESC [ n ~`, `ESC [ n ; m ~` with modifiers.
-    let tilde = |n: u8| -> Vec<u8> {
-        if any { format!("\x1b[{n};{}~", modifier(mods)).into_bytes() } else { format!("\x1b[{n}~").into_bytes() }
-    };
+    let tilde =
+        |n: u8| -> Vec<u8> { if any { format!("\x1b[{n};{}~", modifier(mods)).into_bytes() } else { format!("\x1b[{n}~").into_bytes() } };
     let alt = |bytes: Vec<u8>| -> Vec<u8> { if mods.alt { [vec![0x1b], bytes].concat() } else { bytes } };
     match key {
         TermKey::Up => cursor(b'A'),
@@ -137,7 +136,11 @@ mod tests {
     fn a_paste_is_bracketed_when_the_program_asks_and_cant_end_the_bracket() {
         let text = TerminalInput::Paste { text: "a\nb\x1b[201~c".into() };
         assert_eq!(encode(&text, Modes { bracketed_paste: true, ..Modes::default() }), b"\x1b[200~a\nb[201~c\x1b[201~");
-        assert_eq!(encode(&TerminalInput::Paste { text: "a\nb".into() }, Modes::default()), b"a\rb", "unbracketed: lines end as Enter sends them");
+        assert_eq!(
+            encode(&TerminalInput::Paste { text: "a\nb".into() }, Modes::default()),
+            b"a\rb",
+            "unbracketed: lines end as Enter sends them"
+        );
     }
 
     use proptest::prelude::*;

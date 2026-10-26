@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 use harness_contracts::{Scope, Skill};
-use harness_core::skills::{
-    discover_skills, FileRule, NameRule, OrderRule, SkillRoot, SkillRules, SkillsError,
-};
+use harness_core::skills::{FileRule, NameRule, OrderRule, SkillRoot, SkillRules, SkillsError, discover_skills};
 
 /// Where Antigravity looks, in its order.
 struct DiscoverSkillsInput {
@@ -55,18 +53,11 @@ impl TestWorkspace {
         let user_home = temp.path().join("home");
         fs::create_dir_all(&cwd).expect("create cwd");
         fs::create_dir_all(&user_home).expect("create home");
-        Self {
-            _temp: temp,
-            cwd,
-            user_home,
-        }
+        Self { _temp: temp, cwd, user_home }
     }
 
     fn input(&self) -> DiscoverSkillsInput {
-        DiscoverSkillsInput {
-            cwd: self.cwd.clone(),
-            user_home: self.user_home.clone(),
-        }
+        DiscoverSkillsInput { cwd: self.cwd.clone(), user_home: self.user_home.clone() }
     }
 }
 
@@ -82,15 +73,9 @@ fn test_does_not_read_user_skills_from_nested_project_or_from_dot_agents() {
         &ws.user_home.join(".gemini").join("config").join("skills").join("review"),
         "---\nname: review\ndescription: Review changes.\n---\n",
     );
-    write_skill(
-        &ws.user_home.join(".agents").join("skills").join("ignored"),
-        "---\nname: ignored\n---\n",
-    );
+    write_skill(&ws.user_home.join(".agents").join("skills").join("ignored"), "---\nname: ignored\n---\n");
 
-    let nested_input = DiscoverSkillsInput {
-        cwd: nested_cwd,
-        user_home: ws.user_home.clone(),
-    };
+    let nested_input = DiscoverSkillsInput { cwd: nested_cwd, user_home: ws.user_home.clone() };
 
     let skills = discover_antigravity_skills(&nested_input).expect("discover");
     assert_eq!(
@@ -104,22 +89,10 @@ fn test_does_not_read_user_skills_from_nested_project_or_from_dot_agents() {
     );
 
     // A project rooted at the home directory sees ~/.agents/skills as its own project scope
-    let home_input = DiscoverSkillsInput {
-        cwd: ws.user_home.clone(),
-        user_home: ws.user_home.clone(),
-    };
+    let home_input = DiscoverSkillsInput { cwd: ws.user_home.clone(), user_home: ws.user_home.clone() };
     let home_skills = discover_antigravity_skills(&home_input).expect("discover home");
-    let mapped: Vec<(String, Scope)> = home_skills
-        .into_iter()
-        .map(|s| (s.name, s.scope))
-        .collect();
-    assert_eq!(
-        mapped,
-        vec![
-            ("ignored".to_string(), Scope::Project),
-            ("review".to_string(), Scope::User),
-        ]
-    );
+    let mapped: Vec<(String, Scope)> = home_skills.into_iter().map(|s| (s.name, s.scope)).collect();
+    assert_eq!(mapped, vec![("ignored".to_string(), Scope::Project), ("review".to_string(), Scope::User),]);
 }
 
 /// Ported from AntigravitySkills.test.ts lines 69-95:
@@ -128,18 +101,9 @@ fn test_does_not_read_user_skills_from_nested_project_or_from_dot_agents() {
 fn test_reads_skill_names_descriptions_and_paths_from_native_roots() {
     let ws = TestWorkspace::new();
     let roots = [
-        (
-            ws.user_home.join(".gemini").join("config").join("skills"),
-            Scope::User,
-        ),
+        (ws.user_home.join(".gemini").join("config").join("skills"), Scope::User),
         (ws.cwd.join(".gemini").join("skills"), Scope::Project),
-        (
-            ws.user_home
-                .join(".gemini")
-                .join("antigravity-cli")
-                .join("skills"),
-            Scope::User,
-        ),
+        (ws.user_home.join(".gemini").join("antigravity-cli").join("skills"), Scope::User),
         (ws.cwd.join(".agents").join("skills"), Scope::Project),
     ];
 
@@ -147,16 +111,8 @@ fn test_reads_skill_names_descriptions_and_paths_from_native_roots() {
     for (index, (dir, scope)) in roots.iter().enumerate() {
         let name = format!("review-{}", index);
         let description = format!("Review changes in root {}.", index);
-        let skill_path = write_skill(
-            &dir.join(&name),
-            &format!("---\nname: {}\ndescription: {}\n---\n# Review\n", name, description),
-        );
-        expected.push(Skill {
-            name,
-            description: Some(description),
-            path: Some(skill_path.display().to_string()),
-            scope: *scope,
-        });
+        let skill_path = write_skill(&dir.join(&name), &format!("---\nname: {}\ndescription: {}\n---\n# Review\n", name, description));
+        expected.push(Skill { name, description: Some(description), path: Some(skill_path.display().to_string()), scope: *scope });
     }
 
     let mut skills = discover_antigravity_skills(&ws.input()).expect("discover");
@@ -179,10 +135,8 @@ fn test_returns_no_skills_when_native_roots_are_missing() {
 #[test]
 fn test_discovers_skills_from_legacy_workspace_root() {
     let ws = TestWorkspace::new();
-    let skill_path = write_skill(
-        &ws.cwd.join(".agent").join("skills").join("review"),
-        "---\nname: review\ndescription: Review changes.\n---\n",
-    );
+    let skill_path =
+        write_skill(&ws.cwd.join(".agent").join("skills").join("review"), "---\nname: review\ndescription: Review changes.\n---\n");
 
     let skills = discover_antigravity_skills(&ws.input()).expect("discover");
     assert_eq!(
@@ -204,19 +158,13 @@ fn test_uses_native_root_order_for_duplicate_names() {
     let roots = [
         ws.user_home.join(".gemini").join("config").join("skills"),
         ws.cwd.join(".gemini").join("skills"),
-        ws.user_home
-            .join(".gemini")
-            .join("antigravity-cli")
-            .join("skills"),
+        ws.user_home.join(".gemini").join("antigravity-cli").join("skills"),
         ws.cwd.join(".agents").join("skills"),
         ws.cwd.join(".agent").join("skills"),
     ];
 
     for (index, root) in roots.iter().enumerate() {
-        write_skill(
-            &root.join(format!("copy-{}", index)),
-            &format!("---\nname: review\ndescription: Copy {}.\n---\n", index),
-        );
+        write_skill(&root.join(format!("copy-{}", index)), &format!("---\nname: review\ndescription: Copy {}.\n---\n", index));
     }
 
     for (index, root) in roots.iter().enumerate() {
@@ -265,12 +213,7 @@ fn test_uses_the_filename_when_valid_frontmatter_has_no_name() {
     let skills = discover_antigravity_skills(&ws.input()).expect("discover");
     assert_eq!(
         skills,
-        vec![Skill {
-            name: "SKILL".to_string(),
-            description: None,
-            path: Some(skill_path.display().to_string()),
-            scope: Scope::Project,
-        }]
+        vec![Skill { name: "SKILL".to_string(), description: None, path: Some(skill_path.display().to_string()), scope: Scope::Project }]
     );
 
     // Lowercase filename
@@ -307,12 +250,7 @@ fn test_accepts_native_metadata_delimiters_after_leading_text() {
     let skills = discover_antigravity_skills(&ws.input()).expect("discover");
     assert_eq!(
         skills,
-        vec![Skill {
-            name: "review".to_string(),
-            description: None,
-            path: Some(skill_path.display().to_string()),
-            scope: Scope::Project,
-        }]
+        vec![Skill { name: "review".to_string(), description: None, path: Some(skill_path.display().to_string()), scope: Scope::Project }]
     );
 }
 
@@ -336,10 +274,7 @@ fn test_ignores_invalid_files_and_deeper_directories_but_keeps_native_hidden_ski
     }
 
     write_skill(&root.join("nested").join("deep"), "---\nname: too-deep\n---\n");
-    write_skill(
-        &ws.cwd.join(".claude").join("skills").join("wrong-provider"),
-        "---\nname: wrong-provider\n---\n",
-    );
+    write_skill(&ws.cwd.join(".claude").join("skills").join("wrong-provider"), "---\nname: wrong-provider\n---\n");
     fs::create_dir_all(root.join(".not-a-skill")).expect("create not skill");
     fs::write(root.join("README.md"), "Not a skill.").expect("write readme");
 
@@ -367,10 +302,7 @@ fn test_uses_native_uri_order_within_a_root_and_skips_invalid_higher_root() {
     let ws = TestWorkspace::new();
     let root = ws.cwd.join(".agents").join("skills");
 
-    write_skill(
-        &ws.user_home.join(".gemini").join("config").join("skills").join("review"),
-        "---\nname: [invalid\n---\n",
-    );
+    write_skill(&ws.user_home.join(".gemini").join("config").join("skills").join("review"), "---\nname: [invalid\n---\n");
 
     let native_order = [" space-copy", "!-copy", "ø-copy", "a-copy"];
     for name in native_order {
@@ -425,19 +357,11 @@ fn test_rejects_oversized_skill_instead_of_returning_incomplete_catalog() {
     let ws = TestWorkspace::new();
     let skill_path = write_skill(
         &ws.cwd.join(".agents").join("skills").join("oversized"),
-        &format!(
-            "---\nname: oversized\ndescription: Read a large skill.\n---\n{}",
-            "x".repeat(1_000_000)
-        ),
+        &format!("---\nname: oversized\ndescription: Read a large skill.\n---\n{}", "x".repeat(1_000_000)),
     );
 
     let result = discover_antigravity_skills(&ws.input());
-    assert_eq!(
-        result,
-        Err(SkillsError::OverBudget {
-            path: skill_path.display().to_string(),
-        })
-    );
+    assert_eq!(result, Err(SkillsError::OverBudget { path: skill_path.display().to_string() }));
 }
 
 /// Ported from AntigravitySkills.test.ts lines 323-343:
@@ -447,19 +371,11 @@ fn test_bounds_the_total_read_size_across_skills() {
     let ws = TestWorkspace::new();
     let root = ws.cwd.join(".agents").join("skills");
     for index in 0..9 {
-        write_skill(
-            &root.join(format!("large-{}", index)),
-            &format!("---\nname: large-{}\n---\n{}", index, "x".repeat(900_000)),
-        );
+        write_skill(&root.join(format!("large-{}", index)), &format!("---\nname: large-{}\n---\n{}", index, "x".repeat(900_000)));
     }
 
     let result = discover_antigravity_skills(&ws.input());
-    assert_eq!(
-        result,
-        Err(SkillsError::OverBudget {
-            path: root.join("large-8").join("SKILL.md").display().to_string(),
-        })
-    );
+    assert_eq!(result, Err(SkillsError::OverBudget { path: root.join("large-8").join("SKILL.md").display().to_string() }));
 }
 
 /// Claude Code names a skill by its folder unless its frontmatter names

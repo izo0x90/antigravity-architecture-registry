@@ -12,9 +12,9 @@ use arch_graph::tree::{Card, Line as TreeLine, LineKind, Rect as WorldRect, View
 
 use super::{Camera, GraphState, Load, NavChange};
 use crate::actions::{At, Control, RunCx, Style};
-use crate::hosted::{Status, Tone};
 use crate::feedback::FeedbackInspectorState;
 use crate::graph_style::{LegendEntry, Swatch, style};
+use crate::hosted::{Status, Tone};
 use crate::theme::colors;
 use crate::touch::Gesture;
 use crate::viewport::Show;
@@ -171,7 +171,8 @@ impl GraphState {
         let pad = crate::theme::look().space_xxxl;
         let r = card.rect;
         let (min, max) = self.zoom_limits();
-        let zoom = ((self.canvas.width() - pad * 2.0) / r.w.max(1.0)).min((self.canvas.height() - pad * 2.0) / r.h.max(1.0)).clamp(min, max);
+        let zoom =
+            ((self.canvas.width() - pad * 2.0) / r.w.max(1.0)).min((self.canvas.height() - pad * 2.0) / r.h.max(1.0)).clamp(min, max);
         let middle = Vec2::new(r.x + r.w / 2.0, r.y + r.h / 2.0) * zoom;
         self.aim(Camera { pan: self.canvas.size() / 2.0 - middle, zoom }, true);
         Ok(())
@@ -184,7 +185,10 @@ impl GraphState {
         let Some(card) = self.card(key) else { return };
         let camera = self.aimed();
         let z = camera.zoom;
-        let rect = Rect::from_min_size(self.canvas.min + camera.pan + Vec2::new(card.rect.x, card.rect.y) * z, Vec2::new(card.rect.w, card.rect.h) * z);
+        let rect = Rect::from_min_size(
+            self.canvas.min + camera.pan + Vec2::new(card.rect.x, card.rect.y) * z,
+            Vec2::new(card.rect.w, card.rect.h) * z,
+        );
         let room = crate::theme::look().space_xxxl.min(self.canvas.width().min(self.canvas.height()) / 4.0);
         let inside = self.canvas.shrink(room);
         let axis = |lo: f32, hi: f32, min: f32, max: f32| {
@@ -199,13 +203,20 @@ impl GraphState {
         };
         match show {
             Show::InView => {
-                let by = Vec2::new(axis(rect.left(), rect.right(), inside.left(), inside.right()), axis(rect.top(), rect.bottom(), inside.top(), inside.bottom()));
+                let by = Vec2::new(
+                    axis(rect.left(), rect.right(), inside.left(), inside.right()),
+                    axis(rect.top(), rect.bottom(), inside.top(), inside.bottom()),
+                );
                 if by != Vec2::ZERO {
                     self.aim(Camera { pan: camera.pan + by, zoom: z }, true);
                 }
             }
             Show::Middle => {
-                let by = if rect.width() > inside.width() || rect.height() > inside.height() { inside.min - rect.min } else { self.canvas.center() - rect.center() };
+                let by = if rect.width() > inside.width() || rect.height() > inside.height() {
+                    inside.min - rect.min
+                } else {
+                    self.canvas.center() - rect.center()
+                };
                 self.aim(Camera { pan: camera.pan + by, zoom: z }, false);
             }
         }
@@ -214,7 +225,12 @@ impl GraphState {
     /// The card under `pos`: the smallest (a box's part before the box).
     pub(crate) fn hit(&self, pos: Pos2) -> Option<String> {
         let tree = self.tree.as_ref()?;
-        tree.cards.iter().map(|c| (self.to_screen(&c.rect), &c.key)).filter(|(r, _)| r.contains(pos)).min_by(|a, b| a.0.area().total_cmp(&b.0.area())).map(|(_, k)| k.clone())
+        tree.cards
+            .iter()
+            .map(|c| (self.to_screen(&c.rect), &c.key))
+            .filter(|(r, _)| r.contains(pos))
+            .min_by(|a, b| a.0.area().total_cmp(&b.0.area()))
+            .map(|(_, k)| k.clone())
     }
 
     /// The "+N" count under `pos` (opening its card loads what it counts).
@@ -249,15 +265,31 @@ impl GraphState {
         let look = crate::theme::look();
         match (&self.tree, &self.load) {
             (None, Load::Failed(err)) => {
-                painter.text(canvas.center(), Align2::CENTER_CENTER, format!("Couldn't load the view: {err}"), FontId::proportional(look.text_title), colors().error);
+                painter.text(
+                    canvas.center(),
+                    Align2::CENTER_CENTER,
+                    format!("Couldn't load the view: {err}"),
+                    FontId::proportional(look.text_title),
+                    colors().error,
+                );
             }
             (None, _) => {
-                painter.text(canvas.center(), Align2::CENTER_CENTER, "Loading the architecture…", FontId::proportional(look.text_title), colors().muted);
+                painter.text(
+                    canvas.center(),
+                    Align2::CENTER_CENTER,
+                    "Loading the architecture…",
+                    FontId::proportional(look.text_title),
+                    colors().muted,
+                );
             }
             (Some(tree), _) if tree.cards.is_empty() => {
                 let why = match (tree.request.view, &tree.request.source) {
-                    _ if tree.request.only.is_some() => "Nothing the changes touch is in this view. Show everything, or compare something else.".to_owned(),
-                    (_, arch_graph::Source::Plan(p)) if !tree.request.full_code => format!("Plan {p} has nothing for this view yet. Show it in the full code, or pick another view."),
+                    _ if tree.request.only.is_some() => {
+                        "Nothing the changes touch is in this view. Show everything, or compare something else.".to_owned()
+                    }
+                    (_, arch_graph::Source::Plan(p)) if !tree.request.full_code => {
+                        format!("Plan {p} has nothing for this view yet. Show it in the full code, or pick another view.")
+                    }
                     _ => "Nothing to show in this view yet. Read the code in, or pick another view.".to_owned(),
                 };
                 painter.text(canvas.center(), Align2::CENTER_CENTER, why, FontId::proportional(look.text_title), colors().muted);
@@ -273,7 +305,13 @@ impl GraphState {
         if let Load::Failed(err) = &self.load
             && self.tree.is_some()
         {
-            painter.text(canvas.left_bottom() + Vec2::new(8.0, -8.0), Align2::LEFT_BOTTOM, format!("refresh failed: {err}"), FontId::proportional(look.text_body), colors().error);
+            painter.text(
+                canvas.left_bottom() + Vec2::new(8.0, -8.0),
+                Align2::LEFT_BOTTOM,
+                format!("refresh failed: {err}"),
+                FontId::proportional(look.text_body),
+                colors().error,
+            );
         }
         // Click or tap: a count opens its card; a card selects; a double
         // one opens it (on nothing: the whole tree fits).
@@ -321,7 +359,16 @@ impl GraphState {
                     _ => {}
                 }
             }
-            (i.multi_touch(), i.any_touches(), i.smooth_scroll_delta, notches, pinch, i.pointer.hover_pos(), i.pointer.velocity(), i.stable_dt.min(0.1))
+            (
+                i.multi_touch(),
+                i.any_touches(),
+                i.smooth_scroll_delta,
+                notches,
+                pinch,
+                i.pointer.hover_pos(),
+                i.pointer.velocity(),
+                i.stable_dt.min(0.1),
+            )
         });
         if let Some(touch) = touch.filter(|t| response.rect.contains(t.center_pos)) {
             (self.fling, self.pinching) = (Vec2::ZERO, true);
@@ -401,7 +448,8 @@ impl GraphState {
                 (ViewKind::DataFlow, Way::Up) => "where it came from",
             };
             ui.label(muted(format!("{source} · {way} ·")));
-            let name = |key: &str| self.card(key).map_or_else(|| key.rsplit([':', '.']).next().unwrap_or(key).to_owned(), |c| c.label.clone());
+            let name =
+                |key: &str| self.card(key).map_or_else(|| key.rsplit([':', '.']).next().unwrap_or(key).to_owned(), |c| c.label.clone());
             // The roots gone through, then the root (back along it: the
             // Path picker on the top line).
             ui.label(muted("start".into()));
@@ -500,8 +548,15 @@ impl GraphState {
             }
         }
         for (_, (at, n)) in stubs {
-            if self.visible(Rect::from_center_size(at, Vec2::splat(4.0))) && self.camera.zoom * crate::theme::look().text_small >= self.ui.min_text_px {
-                count_pill(painter, at + Vec2::new(4.0 + crate::theme::look().space_m * 4.0, 0.0), &format!("{} {n}", egui_phosphor::regular::ARROW_BEND_UP_RIGHT), colors().muted);
+            if self.visible(Rect::from_center_size(at, Vec2::splat(4.0)))
+                && self.camera.zoom * crate::theme::look().text_small >= self.ui.min_text_px
+            {
+                count_pill(
+                    painter,
+                    at + Vec2::new(4.0 + crate::theme::look().space_m * 4.0, 0.0),
+                    &format!("{} {n}", egui_phosphor::regular::ARROW_BEND_UP_RIGHT),
+                    colors().muted,
+                );
             }
         }
         // Boxes (Contains) outermost first: their parts draw over them.
@@ -543,7 +598,12 @@ impl GraphState {
         if selected && look.glow_width > 0.0 {
             for i in 1..=4 {
                 let t = i as f32 / 4.0;
-                painter.rect_stroke(rect.expand(look.glow_width * t), look.radius_l + look.glow_width * t, Stroke::new(look.glow_width / 4.0, theme.focus.gamma_multiply(look.glow_alpha * (1.0 - t))), StrokeKind::Outside);
+                painter.rect_stroke(
+                    rect.expand(look.glow_width * t),
+                    look.radius_l + look.glow_width * t,
+                    Stroke::new(look.glow_width / 4.0, theme.focus.gamma_multiply(look.glow_alpha * (1.0 - t))),
+                    StrokeKind::Outside,
+                );
             }
         }
         painter.rect_filled(rect, look.radius_l, fill.gamma_multiply(fade));
@@ -590,8 +650,12 @@ impl GraphState {
         }
         if !card.other_plans.is_empty() {
             let names: Vec<&str> = card.other_plans.iter().map(|p| p.0.as_str()).collect();
-            let galley = painter.layout_no_wrap(format!("also {}", names.join(", ")), FontId::proportional(look.text_tiny), theme.on_bright);
-            let chip = Rect::from_min_size(rect.left_top() + Vec2::new(look.space_s, -galley.size().y / 2.0 - look.space_hair), galley.size() + Vec2::new(look.space_s * 2.0, look.space_hair * 2.0));
+            let galley =
+                painter.layout_no_wrap(format!("also {}", names.join(", ")), FontId::proportional(look.text_tiny), theme.on_bright);
+            let chip = Rect::from_min_size(
+                rect.left_top() + Vec2::new(look.space_s, -galley.size().y / 2.0 - look.space_hair),
+                galley.size() + Vec2::new(look.space_s * 2.0, look.space_hair * 2.0),
+            );
             painter.rect_filled(chip, look.radius_pill, theme.special);
             painter.galley(chip.min + Vec2::new(look.space_s, look.space_hair), galley, theme.on_bright);
         }
@@ -599,8 +663,15 @@ impl GraphState {
             self.draw_marks(painter, rect, id);
             if let Some((added, removed)) = self.changed(id) {
                 // What the desk's comparison changed in it, at its bottom left.
-                let galley = painter.layout_no_wrap(format!("{} +{added} −{removed}", egui_phosphor::regular::GIT_DIFF), FontId::proportional(look.text_tiny), theme.text);
-                let chip = Rect::from_min_size(rect.left_bottom() + Vec2::new(look.space_s, -galley.size().y / 2.0 - look.space_hair), galley.size() + Vec2::new(look.space_s * 2.0, look.space_hair * 2.0));
+                let galley = painter.layout_no_wrap(
+                    format!("{} +{added} −{removed}", egui_phosphor::regular::GIT_DIFF),
+                    FontId::proportional(look.text_tiny),
+                    theme.text,
+                );
+                let chip = Rect::from_min_size(
+                    rect.left_bottom() + Vec2::new(look.space_s, -galley.size().y / 2.0 - look.space_hair),
+                    galley.size() + Vec2::new(look.space_s * 2.0, look.space_hair * 2.0),
+                );
                 painter.rect_filled(chip, look.radius_pill, theme.ok_bg);
                 painter.rect_stroke(chip, look.radius_pill, Stroke::new(look.line_thin, theme.ok), StrokeKind::Inside);
                 painter.galley(chip.min + Vec2::new(look.space_s, look.space_hair), galley, theme.text);
@@ -608,7 +679,13 @@ impl GraphState {
         }
         if self.card_stale(card) {
             let (glyph, _, color) = crate::status::look("stale");
-            painter.text(rect.right_top() + Vec2::new(-look.space_m, look.space_xs), Align2::RIGHT_TOP, glyph, FontId::proportional(look.text_small), color);
+            painter.text(
+                rect.right_top() + Vec2::new(-look.space_m, look.space_xs),
+                Align2::RIGHT_TOP,
+                glyph,
+                FontId::proportional(look.text_small),
+                color,
+            );
         }
         // Where the agent points: a ring, and a pulse going out from it.
         let pointed = self.agent.as_ref().and_then(|a| a.select.as_deref()) == Some(card.key.as_str());
@@ -618,7 +695,12 @@ impl GraphState {
             if look.pulse_seconds > 0.0 {
                 let beat = (time as f32 % look.pulse_seconds) / look.pulse_seconds;
                 let reach = look.space_s + look.glow_width * 2.0 * beat;
-                painter.rect_stroke(rect.expand(reach), look.radius_xl + reach, Stroke::new(look.line_thin, agent.gamma_multiply(1.0 - beat)), StrokeKind::Outside);
+                painter.rect_stroke(
+                    rect.expand(reach),
+                    look.radius_xl + reach,
+                    Stroke::new(look.line_thin, agent.gamma_multiply(1.0 - beat)),
+                    StrokeKind::Outside,
+                );
             }
         }
         pointed
@@ -627,7 +709,8 @@ impl GraphState {
     /// Whether a card's file changed since it was indexed.
     fn card_stale(&self, card: &Card) -> bool {
         let file = card.detail.split(':').next().unwrap_or_default();
-        !file.is_empty() && self.stale_files.iter().any(|s| s == file || file.strip_prefix(s.as_str()).is_some_and(|rest| rest.starts_with('/')))
+        !file.is_empty()
+            && self.stale_files.iter().any(|s| s == file || file.strip_prefix(s.as_str()).is_some_and(|rest| rest.starts_with('/')))
     }
 
     /// Review badges at the card's top right: a dot when it changed since the
@@ -637,7 +720,11 @@ impl GraphState {
         let z = self.camera.zoom.clamp(0.4, 1.0);
         let mut at = rect.right_top() + Vec2::new(-8.0, 8.0) * z;
         if mark.open > 0 {
-            let galley = painter.layout_no_wrap(format!("{}", mark.open), FontId::proportional(crate::theme::look().text_small * z), colors().on_bright);
+            let galley = painter.layout_no_wrap(
+                format!("{}", mark.open),
+                FontId::proportional(crate::theme::look().text_small * z),
+                colors().on_bright,
+            );
             let chip = Rect::from_center_size(at, galley.size() + Vec2::new(8.0, 2.0) * z);
             painter.rect_filled(chip, chip.height() / 2.0, colors().warn);
             painter.galley(chip.center() - galley.size() / 2.0, galley, colors().on_bright);
@@ -704,7 +791,13 @@ impl GraphState {
             painter.rect_filled(rect, look.radius_pill, theme.bg);
             painter.rect_stroke(rect, look.radius_pill, Stroke::new(look.line_thin, color), StrokeKind::Inside);
             if px >= self.ui.min_text_px {
-                painter.with_clip_rect(rect).text(rect.center(), Align2::CENTER_CENTER, &pill.text, FontId::proportional(px), theme.text_strong);
+                painter.with_clip_rect(rect).text(
+                    rect.center(),
+                    Align2::CENTER_CENTER,
+                    &pill.text,
+                    FontId::proportional(px),
+                    theme.text_strong,
+                );
             }
         }
     }
@@ -728,12 +821,16 @@ impl GraphState {
             }
             rows.push((None, Some(entry), painter.layout(entry.label.clone(), font.clone(), theme.text, text_w)));
         }
-        let width = rows.iter().map(|(head, _, g)| if head.is_some() { g.size().x + pad * 2.0 } else { g.size().x + pad * 2.0 + swatch_w + gap }).fold(0.0f32, f32::max).min(max_w);
+        let width = rows
+            .iter()
+            .map(|(head, _, g)| if head.is_some() { g.size().x + pad * 2.0 } else { g.size().x + pad * 2.0 + swatch_w + gap })
+            .fold(0.0f32, f32::max)
+            .min(max_w);
         let row_min = look.space_l + look.space_xs;
         let height: f32 = rows.iter().map(|(_, _, g)| g.size().y.max(row_min) + look.space_s).sum::<f32>() + pad * 2.0;
         let top = self.canvas.min.y + look.space_m;
         let left = self.canvas.max.x - width - look.space_m;
-                let rect = Rect::from_min_size(Pos2::new(left, top), Vec2::new(width, height)).intersect(self.canvas);
+        let rect = Rect::from_min_size(Pos2::new(left, top), Vec2::new(width, height)).intersect(self.canvas);
         painter.rect_filled(rect, look.radius_l, theme.overlay);
         let mut y = rect.min.y + pad;
         for (head, entry, galley) in rows {
@@ -748,7 +845,12 @@ impl GraphState {
                         Swatch::Line(line) => {
                             let points = [swatch.left_center(), swatch.right_center()];
                             if line.dashed {
-                                painter.extend(Shape::dashed_line(&points, Stroke::new(line.width, line.color), look.space_sm, look.space_s));
+                                painter.extend(Shape::dashed_line(
+                                    &points,
+                                    Stroke::new(line.width, line.color),
+                                    look.space_sm,
+                                    look.space_s,
+                                ));
                             } else {
                                 painter.line_segment(points, Stroke::new(line.width, line.color));
                             }
@@ -799,7 +901,14 @@ pub(super) struct Fitted {
 }
 
 impl Fitted {
-    pub(super) fn get(&mut self, text: &str, px: f32, width: f32, zoom: f32, fit: impl FnOnce(&str, f32) -> Option<String>) -> Option<String> {
+    pub(super) fn get(
+        &mut self,
+        text: &str,
+        px: f32,
+        width: f32,
+        zoom: f32,
+        fit: impl FnOnce(&str, f32) -> Option<String>,
+    ) -> Option<String> {
         if zoom != self.zoom {
             self.texts.clear();
             self.zoom = zoom;
@@ -886,5 +995,4 @@ impl crate::hosted::Hosted for GraphState {
             None => Vec::new(),
         }
     }
-
 }

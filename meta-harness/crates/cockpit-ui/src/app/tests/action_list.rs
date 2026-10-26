@@ -36,7 +36,10 @@ fn a_row_that_cant_run_here_says_why_and_one_without_a_value_runs() {
     focus(&ctx, &mut app, BufferKind::Spec);
     let (offered, _) = app.sheet_of(app.palette_actions());
     let asks = |o: &&crate::actions::Offered| !matches!(o.bound.action.param, Param::None | Param::Toggle { .. });
-    let refused = offered.iter().find(|o| !o.applies && asks(o) && o.bound.leader.is_some()).expect("one that asks for a value and doesn't apply here");
+    let refused = offered
+        .iter()
+        .find(|o| !o.applies && asks(o) && o.bound.leader.is_some())
+        .expect("one that asks for a value and doesn't apply here");
     let why = refused.refused().expect("refused");
     let refused = refused.bound.clone();
     let text = everything(&ctx, &mut app, &refused.action.label);
@@ -49,7 +52,11 @@ fn a_row_that_cant_run_here_says_why_and_one_without_a_value_runs() {
     app.run_bound(&refused, None, &ctx);
     assert_eq!(app.note.as_deref(), Some(why.as_str()));
 
-    let runs = offered.iter().find(|o| !o.applies && o.bound.action.param == Param::None && o.bound.origin == Origin::Shell).map(|o| o.bound.clone()).expect("one without a value that doesn't apply here");
+    let runs = offered
+        .iter()
+        .find(|o| !o.applies && o.bound.action.param == Param::None && o.bound.origin == Origin::Shell)
+        .map(|o| o.bound.clone())
+        .expect("one without a value that doesn't apply here");
     everything(&ctx, &mut app, &runs.action.label);
     app.ran.borrow_mut().clear();
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
@@ -68,7 +75,8 @@ fn everything_lists_the_keys_of_where_it_was_opened_from_and_nothing_left_over()
     // The top bar's button for the action list.
     let button = *drawn_containing(&frame(&ctx, &mut app, vec![]), "Action list  :").first().expect("the top bar's button");
     let button = button.center();
-    let tap = |pressed| egui::Event::PointerButton { pos: button, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    let tap =
+        |pressed| egui::Event::PointerButton { pos: button, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
     frame(&ctx, &mut app, vec![egui::Event::PointerMoved(button)]);
     frame(&ctx, &mut app, vec![tap(true)]);
     frame(&ctx, &mut app, vec![tap(false)]);
@@ -123,7 +131,10 @@ fn the_list_and_the_key_bar_say_one_line_and_a_menus_name_finds_its_actions() {
     assert!(tab.viewport_output.values().any(|v| v.repaint_delay.is_zero()), "drawn again at once");
     let switched = texts(&frame(&ctx, &mut app, vec![]));
     let keys = said(&app);
-    assert!(keys.iter().any(|k| k == "Tab: what applies here") && switched.lines().any(|l| l == "Tab: what applies here"), "the key bar after the switch: {switched}");
+    assert!(
+        keys.iter().any(|k| k == "Tab: what applies here") && switched.lines().any(|l| l == "Tab: what applies here"),
+        "the key bar after the switch: {switched}"
+    );
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains(&keys.join(" · ")), "under the list: {text}");
     let text = everything(&ctx, &mut app, "graph actions");

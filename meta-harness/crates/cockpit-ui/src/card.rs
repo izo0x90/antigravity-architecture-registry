@@ -15,8 +15,17 @@ pub enum Section {
 }
 
 impl Section {
-    pub const ALL: [Section; 9] =
-        [Section::Overview, Section::Signature, Section::Logic, Section::Invariants, Section::Relations, Section::Code, Section::Changes, Section::Placeholders, Section::Findings];
+    pub const ALL: [Section; 9] = [
+        Section::Overview,
+        Section::Signature,
+        Section::Logic,
+        Section::Invariants,
+        Section::Relations,
+        Section::Code,
+        Section::Changes,
+        Section::Placeholders,
+        Section::Findings,
+    ];
 
     /// The stable name notes use for it (`harness_contracts::CARD_SECTIONS`).
     pub fn key(self) -> &'static str {

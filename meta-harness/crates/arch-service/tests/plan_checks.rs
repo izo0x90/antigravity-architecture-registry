@@ -5,8 +5,8 @@
 use std::path::Path;
 
 use arch_graph::{
-    Component, ComponentId, FindingCode, ImplementationSpec, Invariant, InvariantKind, LogicStep, Plan, PlanId, ProposedLocation, Provenance,
-    Relation, RelationKind, RepoPath, Report, Schemas, SideEffect, Signature, Stage, Status, ToolRef, TypeSystem,
+    Component, ComponentId, FindingCode, ImplementationSpec, Invariant, InvariantKind, LogicStep, Plan, PlanId, ProposedLocation,
+    Provenance, Relation, RelationKind, RepoPath, Report, Schemas, SideEffect, Signature, Stage, Status, ToolRef, TypeSystem,
 };
 use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp};
 use serde_json::{Value, json};
@@ -85,7 +85,12 @@ fn comp(symbol: &str, type_name: &str) -> Component {
         status: Status::New,
         stage: Stage::Declared,
         anchor: None,
-        proposed: Some(ProposedLocation { language: "rust".into(), file: RepoPath::new("src/lib.rs").unwrap(), parent: Some(id("sample")), symbol: symbol.into() }),
+        proposed: Some(ProposedLocation {
+            language: "rust".into(),
+            file: RepoPath::new("src/lib.rs").unwrap(),
+            parent: Some(id("sample")),
+            symbol: symbol.into(),
+        }),
         signature: if matches!(type_name, "function" | "operation") { Some(Signature::default()) } else { None },
         schemas: Schemas::default(),
         spec: None,
@@ -136,12 +141,17 @@ fn type_rules_are_findings() {
     assert!(fields.contains(&"an interface can't have properties".to_owned()), "{fields:?}");
     let parents = messages(&report, FindingCode::DisallowedParent);
     assert_eq!(parents.len(), 1, "{parents:?}");
-    assert!(parents[0].contains("a class can't sit in rust:sample::Step::apply (an operation); it may sit in: module, class, function"), "{parents:?}");
+    assert!(
+        parents[0].contains("a class can't sit in rust:sample::Step::apply (an operation); it may sit in: module, class, function"),
+        "{parents:?}"
+    );
     let callers = messages(&report, FindingCode::NotExecutable);
     assert_eq!(callers, vec!["rust:sample::store::Store is a class, which can't call rust:sample::log"]);
     // A specialized type inherits its base's rules (is-a for parents too).
     let mut types = TypeSystem::defaults().unwrap();
-    types.extend_from_toml("[types.service]\nextends = \"class\"\n[types.handler]\nextends = \"function\"\nallowed_parents = [\"class\"]").unwrap();
+    types
+        .extend_from_toml("[types.service]\nextends = \"class\"\n[types.handler]\nextends = \"function\"\nallowed_parents = [\"class\"]")
+        .unwrap();
     let r = repo_with_types(types);
     let mut plan = Plan::new("special", "Specialized");
     let svc = comp("sample::Svc", "service");
@@ -162,7 +172,12 @@ fn type_rules_are_findings() {
 fn containment_implements_and_schema_ref_cycles_are_reported_with_their_loop() {
     let r = repo();
     let mut plan = Plan::new("loops", "Loops");
-    plan.components.extend([comp("sample::a", "module"), comp("sample::b", "module"), comp("sample::I", "interface"), comp("sample::J", "interface")]);
+    plan.components.extend([
+        comp("sample::a", "module"),
+        comp("sample::b", "module"),
+        comp("sample::I", "interface"),
+        comp("sample::J", "interface"),
+    ]);
     let mut node = comp("sample::Node", "class");
     node.schemas.properties = schema(json!({"next": "Edge?"}));
     let mut edge = comp("sample::Edge", "class");
@@ -252,7 +267,10 @@ fn planned_calls_are_checked_against_the_callees_real_signature() {
     };
     assert!(about("ok").is_empty(), "{:?}", about("ok"));
     assert_eq!(about("renamed"), vec!["parameter 's' isn't among the planned inputs", "planned input 'text' isn't a parameter of shout"]);
-    assert_eq!(about("extra"), vec!["shout takes 1 argument(s); the call passes 2 (2 required)", "planned input 'loud' isn't a parameter of shout"]);
+    assert_eq!(
+        about("extra"),
+        vec!["shout takes 1 argument(s); the call passes 2 (2 required)", "planned input 'loud' isn't a parameter of shout"]
+    );
     assert_eq!(about("typed"), vec!["parameter 's': &str doesn't carry integer"]);
     assert_eq!(about("returns"), vec!["returns String: String doesn't carry integer"]);
 }
@@ -262,15 +280,26 @@ fn spec_rules_cover_step_order_invariant_inheritance_tools_and_side_effects() {
     let r = repo();
     let mut plan = Plan::new("spec", "Spec");
     let inv = |name: &str, kind| Invariant { name: name.into(), kind, description: String::new() };
-    let step = |sequence, name: &str| LogicStep { sequence, name: name.into(), description: String::new(), algorithm: None, complexity: None, check: None };
+    let step = |sequence, name: &str| LogicStep {
+        sequence,
+        name: name.into(),
+        description: String::new(),
+        algorithm: None,
+        complexity: None,
+        check: None,
+    };
     let mut port = comp("sample::Port::write", "operation");
     port.schemas.side_effects = vec![SideEffect { target: "db".into(), description: String::new() }];
     port.spec = None;
     // Operations don't take specs; the interface's invariants live on a function it extends.
     let mut base = comp("sample::base_write", "function");
-    base.spec = Some(ImplementationSpec { invariants: vec![inv("durable", InvariantKind::PostCondition)], ..ImplementationSpec::default() });
+    base.spec =
+        Some(ImplementationSpec { invariants: vec![inv("durable", InvariantKind::PostCondition)], ..ImplementationSpec::default() });
     let mut write = comp("sample::write", "function");
-    write.schemas.side_effects = vec![SideEffect { target: "db".into(), description: String::new() }, SideEffect { target: "fs".into(), description: String::new() }];
+    write.schemas.side_effects = vec![
+        SideEffect { target: "db".into(), description: String::new() },
+        SideEffect { target: "fs".into(), description: String::new() },
+    ];
     write.spec = Some(ImplementationSpec {
         logic_steps: vec![step(1, "open"), step(1, "lock"), step(3, "flush")],
         invariants: vec![inv("durable", InvariantKind::StateInvariant), inv("fast", InvariantKind::Complexity)],
@@ -280,7 +309,8 @@ fn spec_rules_cover_step_order_invariant_inheritance_tools_and_side_effects() {
     let mut caller = comp("sample::save_all", "function");
     caller.spec = Some(ImplementationSpec { logic_steps: vec![step(1, "save"), step(2, "report")], ..ImplementationSpec::default() });
     let mut call = rel(RelationKind::Calls, "sample::save_all", "sample::write");
-    call.expects = Some(Schemas { side_effects: vec![SideEffect { target: "db".into(), description: String::new() }], ..Schemas::default() });
+    call.expects =
+        Some(Schemas { side_effects: vec![SideEffect { target: "db".into(), description: String::new() }], ..Schemas::default() });
     plan.components.extend([port, base, write, caller]);
     plan.relations.extend([
         rel(RelationKind::Implements, "sample::write", "sample::base_write"),
@@ -290,17 +320,26 @@ fn spec_rules_cover_step_order_invariant_inheritance_tools_and_side_effects() {
     let report = check(&r, plan);
     let order = messages(&report, FindingCode::LogicStepOrder);
     assert_eq!(order, vec!["logic step 1 appears 2 times", "logic steps must be numbered 1..2 without gaps; found [1, 3]"]);
-    assert_eq!(messages(&report, FindingCode::InvariantMismatch), vec!["invariant 'durable' is a state_invariant here but a post_condition in rust:sample::base_write"]);
+    assert_eq!(
+        messages(&report, FindingCode::InvariantMismatch),
+        vec!["invariant 'durable' is a state_invariant here but a post_condition in rust:sample::base_write"]
+    );
     assert_eq!(messages(&report, FindingCode::UnknownTool), vec!["validation tool 'nope' isn't defined"]);
     let effects = messages(&report, FindingCode::UndeclaredSideEffect);
     assert!(effects.contains(&"changes 'fs', which the interface it implements doesn't declare".to_owned()), "{effects:?}");
-    assert!(effects.contains(&"rust:sample::write also changes 'fs', which rust:sample::save_all doesn't expect".to_owned()), "{effects:?}");
+    assert!(
+        effects.contains(&"rust:sample::write also changes 'fs', which rust:sample::save_all doesn't expect".to_owned()),
+        "{effects:?}"
+    );
     assert!(
         report.findings.iter().filter(|f| f.code == FindingCode::UndeclaredSideEffect).all(|f| f.severity == arch_graph::Severity::Error),
         "undeclared side effects are errors, at the interface and at the call site"
     );
     assert_eq!(effects.len(), 2, "db is declared everywhere: {effects:?}");
-    assert!(report.findings.iter().all(|f| f.component() != Some(&id("sample::save_all")) || f.code == FindingCode::MissingTouchPoint), "steps 1..2 are fine");
+    assert!(
+        report.findings.iter().all(|f| f.component() != Some(&id("sample::save_all")) || f.code == FindingCode::MissingTouchPoint),
+        "steps 1..2 are fine"
+    );
 }
 
 fn add(r: &Repo, plan: &str, name: &str, type_name: &str, description: &str, signature: Option<Signature>) {
@@ -322,7 +361,12 @@ fn add(r: &Repo, plan: &str, name: &str, type_name: &str, description: &str, sig
 }
 
 fn relate(r: &Repo, plan: &str, a: &str, b: &str) {
-    r.service.apply(&pid(plan), PlanOp::Relate { kind: RelationKind::Calls, source: id(a), target: id(b), order: None, ports: None, note: None, expects: None }).unwrap();
+    r.service
+        .apply(
+            &pid(plan),
+            PlanOp::Relate { kind: RelationKind::Calls, source: id(a), target: id(b), order: None, ports: None, note: None, expects: None },
+        )
+        .unwrap();
 }
 
 #[test]
@@ -338,14 +382,18 @@ fn missing_required_details_block_approval_with_a_precise_list() {
     let report = r.service.validate(&pid("gate")).unwrap();
     let incomplete = messages(&report, FindingCode::SpecIncomplete);
     assert!(incomplete.contains(&"a function needs description, signature before approval".to_owned()), "{incomplete:?}");
-    assert!(incomplete.contains(&"a handler needs logic_steps, invariants before approval".to_owned()), "inherited and own: {incomplete:?}");
-    assert!(report.findings.iter().filter(|f| f.code == FindingCode::SpecIncomplete).all(|f| f.severity == arch_graph::Severity::Warning), "a warning while declared");
+    assert!(
+        incomplete.contains(&"a handler needs logic_steps, invariants before approval".to_owned()),
+        "inherited and own: {incomplete:?}"
+    );
+    assert!(
+        report.findings.iter().filter(|f| f.code == FindingCode::SpecIncomplete).all(|f| f.severity == arch_graph::Severity::Warning),
+        "a warning while declared"
+    );
     let err = r.service.approve(&pid("gate"), &id("sample::bare"), Stage::ArchApproved, &user()).unwrap_err().to_string();
     assert!(err.contains("a function needs description, signature before approval"), "{err}");
     // Filling in exactly what was listed unblocks it.
-    r.service
-        .apply(&pid("gate"), PlanOp::Remove { id: id("sample::bare") })
-        .unwrap();
+    r.service.apply(&pid("gate"), PlanOp::Remove { id: id("sample::bare") }).unwrap();
     add(&r, "gate", "bare", "function", "Now described.", Some(Signature::default()));
     relate(&r, "gate", "sample::run", "sample::bare");
     r.service.approve(&pid("gate"), &id("sample::bare"), Stage::ArchApproved, &user()).unwrap();
@@ -369,10 +417,18 @@ fn stage_transitions_enforce_validation_location_and_dependencies() {
     approve("sample::outer", Stage::PlanApproved).unwrap();
     approve("sample::inner", Stage::PlanApproved).unwrap();
     // Implementing outer needs inner's structure in the code first.
-    std::fs::write(r.root.join("src/lib.rs"), std::fs::read_to_string(r.root.join("src/lib.rs")).unwrap() + "\npub fn outer() -> bool {\n    inner()\n}\n\npub fn inner() -> bool {\n    todo!()\n}\n").unwrap();
+    std::fs::write(
+        r.root.join("src/lib.rs"),
+        std::fs::read_to_string(r.root.join("src/lib.rs")).unwrap()
+            + "\npub fn outer() -> bool {\n    inner()\n}\n\npub fn inner() -> bool {\n    todo!()\n}\n",
+    )
+    .unwrap();
     let v = r.service.verify(&pid("life"), &id("sample::outer"), Stage::Implemented).unwrap();
     assert_eq!(v.advanced_to, None);
-    assert_eq!(messages(&v.report, FindingCode::DependencyNotReady), vec!["Implemented needs rust:sample::inner at Skeleton or later; it is PlanApproved"]);
+    assert_eq!(
+        messages(&v.report, FindingCode::DependencyNotReady),
+        vec!["Implemented needs rust:sample::inner at Skeleton or later; it is PlanApproved"]
+    );
     assert_eq!(r.service.verify(&pid("life"), &id("sample::inner"), Stage::Skeleton).unwrap().advanced_to, Some(Stage::Skeleton));
     assert_eq!(r.service.verify(&pid("life"), &id("sample::outer"), Stage::Implemented).unwrap().advanced_to, Some(Stage::Implemented));
     // Validation: a component with errors can't be approved.
@@ -416,7 +472,11 @@ fn actionable_work_comes_in_dependency_order_and_changes_cascade_in_waves() {
         arch_service::next_actionable(&plan, &graph, r.service.types(), action).into_iter().map(|i| i.0).collect::<Vec<_>>()
     };
     assert_eq!(
-        arch_service::topological(&r.service.plan(&pid("q")).unwrap(), &r.service.graph(&arch_graph::Source::Plan(pid("q"))).unwrap(), r.service.types()),
+        arch_service::topological(
+            &r.service.plan(&pid("q")).unwrap(),
+            &r.service.graph(&arch_graph::Source::Plan(pid("q"))).unwrap(),
+            r.service.types()
+        ),
         vec![id("sample::a"), id("sample::d"), id("sample::b"), id("sample::c")],
         "dependencies first, ties by id"
     );
@@ -431,8 +491,10 @@ fn actionable_work_comes_in_dependency_order_and_changes_cascade_in_waves() {
     // Changing a's design sends it back for approval and its dependents back a step, in waves.
     let plan = r.service.plan(&pid("q")).unwrap();
     let graph = r.service.graph(&arch_graph::Source::Plan(pid("q"))).unwrap();
-    let waves: Vec<(String, Stage, Stage, u32)> =
-        arch_service::cascade(&mut plan.clone(), &graph, r.service.types(), &id("sample::a")).into_iter().map(|d| (d.id.0, d.from, d.to, d.wave)).collect();
+    let waves: Vec<(String, Stage, Stage, u32)> = arch_service::cascade(&mut plan.clone(), &graph, r.service.types(), &id("sample::a"))
+        .into_iter()
+        .map(|d| (d.id.0, d.from, d.to, d.wave))
+        .collect();
     assert_eq!(
         waves,
         vec![
@@ -442,12 +504,32 @@ fn actionable_work_comes_in_dependency_order_and_changes_cascade_in_waves() {
         ]
     );
     // The same happens through a plan edit.
-    r.service.apply(&pid("q"), PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::a"), target: id("sample::log"), order: None, ports: None, note: None, expects: None }).unwrap();
-    assert_eq!((stage(&r, "q", "sample::a"), stage(&r, "q", "sample::b"), stage(&r, "q", "sample::c")), (Stage::Declared, Stage::ArchApproved, Stage::ArchApproved));
+    r.service
+        .apply(
+            &pid("q"),
+            PlanOp::Relate {
+                kind: RelationKind::Calls,
+                source: id("sample::a"),
+                target: id("sample::log"),
+                order: None,
+                ports: None,
+                note: None,
+                expects: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        (stage(&r, "q", "sample::a"), stage(&r, "q", "sample::b"), stage(&r, "q", "sample::c")),
+        (Stage::Declared, Stage::ArchApproved, Stage::ArchApproved)
+    );
     assert_eq!(stage(&r, "q", "sample::d"), Stage::PlanApproved, "unrelated work keeps its approval");
     // Existing code changing shape cascades too: shout gains a parameter.
     let util = r.root.join("src/util.rs");
-    std::fs::write(&util, std::fs::read_to_string(&util).unwrap().replace("pub fn shout(s: &str) -> String", "pub fn shout(s: &str, loud: bool) -> String")).unwrap();
+    std::fs::write(
+        &util,
+        std::fs::read_to_string(&util).unwrap().replace("pub fn shout(s: &str) -> String", "pub fn shout(s: &str, loud: bool) -> String"),
+    )
+    .unwrap();
     let refresh = r.service.refresh(std::slice::from_ref(&util)).unwrap();
     let sent_back: Vec<(String, Stage)> = refresh.downgraded.iter().map(|(_, d)| (d.id.0.clone(), d.to)).collect();
     assert_eq!(sent_back, vec![("rust:sample::d".to_owned(), Stage::ArchApproved)]);
@@ -462,14 +544,26 @@ fn contracts_carry_location_signature_interfaces_invariants_steps_and_real_calle
     let mut port = comp("sample::Port", "interface");
     port.spec = None;
     let mut base = comp("sample::base_write", "function");
-    base.spec = Some(ImplementationSpec { invariants: vec![inv("durable", InvariantKind::PostCondition)], ..ImplementationSpec::default() });
+    base.spec =
+        Some(ImplementationSpec { invariants: vec![inv("durable", InvariantKind::PostCondition)], ..ImplementationSpec::default() });
     let mut write = comp("sample::write", "function");
-    write.signature = Some(Signature { params: vec![arch_graph::Param { name: "item".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] });
+    write.signature = Some(Signature {
+        params: vec![arch_graph::Param { name: "item".into(), ty: Some("&str".into()), optional: false, variadic: false }],
+        returns: Some("bool".into()),
+        qualifiers: vec![],
+    });
     write.schemas.inputs = schema(json!({"item": "str"}));
     write.schemas.side_effects = vec![SideEffect { target: "fs".into(), description: "writes the file".into() }];
     write.spec = Some(ImplementationSpec {
         pattern: Some("write-then-rename".into()),
-        logic_steps: vec![LogicStep { sequence: 1, name: "shout".into(), description: "Uppercase the item.".into(), algorithm: None, complexity: None, check: None }],
+        logic_steps: vec![LogicStep {
+            sequence: 1,
+            name: "shout".into(),
+            description: "Uppercase the item.".into(),
+            algorithm: None,
+            complexity: None,
+            check: None,
+        }],
         invariants: vec![inv("atomic", InvariantKind::PostCondition)],
         tasks: vec![arch_graph::Task { text: "fsync".into(), done: false }],
         ..ImplementationSpec::default()
@@ -477,11 +571,21 @@ fn contracts_carry_location_signature_interfaces_invariants_steps_and_real_calle
     let mut call = rel(RelationKind::Calls, "sample::write", "sample::util::shout");
     call.expects = Some(Schemas { inputs: schema(json!({"s": "str"})), ..Schemas::default() });
     plan.components.extend([port, base, write]);
-    plan.relations.extend([rel(RelationKind::Implements, "sample::write", "sample::base_write"), rel(RelationKind::Implements, "sample::base_write", "sample::Port"), call]);
+    plan.relations.extend([
+        rel(RelationKind::Implements, "sample::write", "sample::base_write"),
+        rel(RelationKind::Implements, "sample::base_write", "sample::Port"),
+        call,
+    ]);
     common::put_plan(&r.service, &r.root, &plan);
     let slice = r.service.contract(&pid("contract"), &id("sample::write")).unwrap();
-    assert_eq!(slice.interface_chain.iter().map(|n| n.id.0.as_str()).collect::<Vec<_>>(), vec!["rust:sample::base_write", "rust:sample::Port"]);
-    assert_eq!(slice.invariants.iter().map(|h| (h.from.0.as_str(), h.invariant.name.as_str())).collect::<Vec<_>>(), vec![("rust:sample::write", "atomic"), ("rust:sample::base_write", "durable")]);
+    assert_eq!(
+        slice.interface_chain.iter().map(|n| n.id.0.as_str()).collect::<Vec<_>>(),
+        vec!["rust:sample::base_write", "rust:sample::Port"]
+    );
+    assert_eq!(
+        slice.invariants.iter().map(|h| (h.from.0.as_str(), h.invariant.name.as_str())).collect::<Vec<_>>(),
+        vec![("rust:sample::write", "atomic"), ("rust:sample::base_write", "durable")]
+    );
     let shout = &slice.calls[0];
     assert!(shout.anchor.is_some() && shout.signature.is_some(), "real callee from the code");
     let md = slice.to_markdown();
@@ -521,7 +625,11 @@ fn logic_step_checks_run_during_validation_and_record_pass_or_fail() {
     };
     let mut parse = comp("sample::parse", "function");
     parse.spec = Some(ImplementationSpec {
-        logic_steps: vec![step(1, "read", Some("test -f src/lib.rs")), step(2, "split", Some("echo 'split is broken'; exit 3")), step(3, "free", None)],
+        logic_steps: vec![
+            step(1, "read", Some("test -f src/lib.rs")),
+            step(2, "split", Some("echo 'split is broken'; exit 3")),
+            step(3, "free", None),
+        ],
         ..ImplementationSpec::default()
     });
     plan.components.push(parse);
@@ -530,7 +638,10 @@ fn logic_step_checks_run_during_validation_and_record_pass_or_fail() {
     let failed = messages(&report, FindingCode::LogicCheckFailed);
     assert_eq!(failed, vec!["logic step 2 'split' check failed: split is broken"]);
     let severity = |code| report.findings.iter().find(|f| f.code == code).unwrap().severity;
-    assert_eq!((severity(FindingCode::LogicCheckPassed), severity(FindingCode::LogicCheckFailed)), (arch_graph::Severity::Info, arch_graph::Severity::Error));
+    assert_eq!(
+        (severity(FindingCode::LogicCheckPassed), severity(FindingCode::LogicCheckFailed)),
+        (arch_graph::Severity::Info, arch_graph::Severity::Error)
+    );
     // The shell is configurable (tools.toml `[logic_checks]`).
     let catalog = arch_service::ToolCatalog::from_toml("[logic_checks]\nshell = [\"bash\", \"-c\"]\ntimeout_secs = 5").unwrap();
     assert_eq!(catalog.logic_checks.shell, vec!["bash", "-c"]);
@@ -563,7 +674,12 @@ fn planned_data_flows_are_confirmed_missing_or_explicitly_unverifiable() {
     .unwrap();
     let flows = |symbol: &str| -> Vec<(FindingCode, String)> {
         let v = r.service.verify(&pid("flows"), &id(symbol), Stage::Implemented).unwrap();
-        v.report.findings.into_iter().filter(|f| matches!(f.code, FindingCode::DataFlowMissing | FindingCode::DataFlowUnverifiable)).map(|f| (f.code, f.message)).collect()
+        v.report
+            .findings
+            .into_iter()
+            .filter(|f| matches!(f.code, FindingCode::DataFlowMissing | FindingCode::DataFlowUnverifiable))
+            .map(|f| (f.code, f.message))
+            .collect()
     };
     assert!(flows("sample::consume").is_empty(), "produce -> consume is in the code: confirmed");
     let sink = flows("sample::sink");
@@ -584,7 +700,13 @@ fn the_data_flow_view_shows_data_with_its_steps_and_marks_planned_flows() {
     let r = repo();
     let tree = |request: TreeRequest| r.service.tree(&request).unwrap();
     // Data is the cards: where a Store comes from is Store::new, which takes nothing.
-    let store = tree(TreeRequest { view: ViewKind::DataFlow, root: Some("type:Store".into()), way: Way::Up, depth: Some(1), ..TreeRequest::default() });
+    let store = tree(TreeRequest {
+        view: ViewKind::DataFlow,
+        root: Some("type:Store".into()),
+        way: Way::Up,
+        depth: Some(1),
+        ..TreeRequest::default()
+    });
     assert_eq!(store.cards[0].kind, "data");
     assert!(store.card(&format!("start:{}", id("sample::store::Store::new"))).is_some(), "{:#?}", store.cards);
     // Planned flows beside the code's: one the code makes, one it doesn't.
@@ -607,9 +729,17 @@ fn the_data_flow_view_shows_data_with_its_steps_and_marks_planned_flows() {
     plan.relations.push(planned("sample::produce", "sample::consume", "text"));
     plan.relations.push(planned("sample::produce", "sample::sink", "x"));
     common::put_plan(&r.service, &r.root, &plan);
-    append_lib(&r, "\npub fn produce() -> String {\n    String::new()\n}\n\npub fn consume(text: &str) {\n    let _ = text;\n}\n\npub fn sink(x: &str) {\n    let _ = x;\n}\n\npub fn pipeline() {\n    let s = produce();\n    consume(&s);\n}\n");
+    append_lib(
+        &r,
+        "\npub fn produce() -> String {\n    String::new()\n}\n\npub fn consume(text: &str) {\n    let _ = text;\n}\n\npub fn sink(x: &str) {\n    let _ = x;\n}\n\npub fn pipeline() {\n    let s = produce();\n    consume(&s);\n}\n",
+    );
     r.service.ingest(&r.root).unwrap();
-    let flows = tree(TreeRequest { view: ViewKind::DataFlow, source: arch_graph::Source::Plan(pid("flows")), depth: Some(1), ..TreeRequest::default() });
+    let flows = tree(TreeRequest {
+        view: ViewKind::DataFlow,
+        source: arch_graph::Source::Plan(pid("flows")),
+        depth: Some(1),
+        ..TreeRequest::default()
+    });
     assert_eq!(flows.roots, vec!["type:String".to_owned()], "the plan's data: what produce returns");
     let to = |f: &str| flows.lines.iter().find(|l| l.kind == LineKind::Tree && l.to == format!("end:{}", id(f))).map(|l| l.mark);
     assert_eq!(to("sample::consume"), Some(Mark::Done), "planned and in the code");
@@ -626,7 +756,11 @@ fn append_lib(r: &Repo, code: &str) {
 }
 
 fn str_sig() -> Option<Signature> {
-    Some(Signature { params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] })
+    Some(Signature {
+        params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }],
+        returns: Some("bool".into()),
+        qualifiers: vec![],
+    })
 }
 
 #[test]
@@ -714,7 +848,10 @@ fn references_to_a_name_two_data_types_share_are_ambiguous() {
     load.schemas.outputs = schema(json!("Config"));
     plan.components.extend([a, b, load]);
     let report = check(&r, plan);
-    assert_eq!(messages(&report, FindingCode::AmbiguousSchemaRef), vec!["Config could be any of rust:sample::store::Config, rust:sample::util::Config"]);
+    assert_eq!(
+        messages(&report, FindingCode::AmbiguousSchemaRef),
+        vec!["Config could be any of rust:sample::store::Config, rust:sample::util::Config"]
+    );
 }
 
 #[test]
@@ -722,7 +859,12 @@ fn contracts_list_the_open_placeholders_in_the_code() {
     let r = repo();
     r.service.create_plan("later", "Later", "", arch_graph::PlanKind::Change).unwrap();
     // `later` exists in the code with a todo!() body.
-    r.service.apply(&pid("later"), PlanOp::Modify { id: id("sample::later"), description: Some("Finish it.".into()), signature: None, schemas: None, spec: None }).unwrap();
+    r.service
+        .apply(
+            &pid("later"),
+            PlanOp::Modify { id: id("sample::later"), description: Some("Finish it.".into()), signature: None, schemas: None, spec: None },
+        )
+        .unwrap();
     let slice = r.service.contract(&pid("later"), &id("sample::later")).unwrap();
     assert_eq!(slice.open_placeholders.len(), 1, "{slice:?}");
     let line = slice.open_placeholders[0].start_line;
@@ -738,7 +880,16 @@ fn proposed_files_outside_the_repo_are_rejected() {
             .service
             .apply(
                 &pid("out"),
-                PlanOp::AddComponent { name: "x".into(), type_name: "function".into(), description: String::new(), parent: Some(id("sample")), file: Some(file.into()), signature: None, schemas: None, spec: None },
+                PlanOp::AddComponent {
+                    name: "x".into(),
+                    type_name: "function".into(),
+                    description: String::new(),
+                    parent: Some(id("sample")),
+                    file: Some(file.into()),
+                    signature: None,
+                    schemas: None,
+                    spec: None,
+                },
             )
             .unwrap_err()
             .to_string();
@@ -765,7 +916,10 @@ fn implementing_needs_the_plan_approved_even_after_a_skeleton() {
     // Architecture approval plus a skeleton isn't enough: the user approves the plan first.
     let v = r.service.verify(&pid("skip"), &id("sample::validate"), Stage::Implemented).unwrap();
     assert_eq!(v.advanced_to, None);
-    assert_eq!(messages(&v.report, FindingCode::ApprovalRequired), vec!["rust:sample::validate can only be implemented once the user approves its plan (PlanApproved)"]);
+    assert_eq!(
+        messages(&v.report, FindingCode::ApprovalRequired),
+        vec!["rust:sample::validate can only be implemented once the user approves its plan (PlanApproved)"]
+    );
     r.service.approve(&pid("skip"), &id("sample::validate"), Stage::PlanApproved, &user()).unwrap();
     assert_eq!(r.service.verify(&pid("skip"), &id("sample::validate"), Stage::Implemented).unwrap().advanced_to, Some(Stage::Implemented));
 }
@@ -780,7 +934,14 @@ fn verification_rereads_vanished_files_and_changed_callees() {
     extra.stage = Stage::PlanApproved;
     plan.components.push(extra);
     plan.relations.push(rel(RelationKind::Calls, "sample::validate", "sample::store::Store::new"));
-    plan.approvals.push(arch_graph::Approval { component: id("sample::validate"), from: Stage::ArchApproved, to: Stage::PlanApproved, by: "izo".into(), at: "2026-10-03T00:00:00Z".into(), kind: arch_graph::ApprovalKind::Approved });
+    plan.approvals.push(arch_graph::Approval {
+        component: id("sample::validate"),
+        from: Stage::ArchApproved,
+        to: Stage::PlanApproved,
+        by: "izo".into(),
+        at: "2026-10-03T00:00:00Z".into(),
+        kind: arch_graph::ApprovalKind::Approved,
+    });
     common::put_plan(&r.service, &r.root, &plan);
     append_lib(&r, "\npub fn validate(input: &str) -> bool {\n    crate::store::Store::new();\n    !input.is_empty()\n}\n");
     let verify = || r.service.verify(&pid("fresh"), &id("sample::validate"), Stage::Implemented).unwrap();
@@ -809,7 +970,10 @@ fn placeholders_hidden_in_unplanned_helpers_block_implemented() {
     relate(&r, "hide", "sample::run", "sample::validate");
     r.service.approve(&pid("hide"), &id("sample::validate"), Stage::ArchApproved, &user()).unwrap();
     r.service.approve(&pid("hide"), &id("sample::validate"), Stage::PlanApproved, &user()).unwrap();
-    append_lib(&r, "\npub fn validate(input: &str) -> bool {\n    check_more(input)\n}\n\nfn check_more(input: &str) -> bool {\n    deeper(input)\n}\n\nfn deeper(input: &str) -> bool {\n    todo!()\n}\n");
+    append_lib(
+        &r,
+        "\npub fn validate(input: &str) -> bool {\n    check_more(input)\n}\n\nfn check_more(input: &str) -> bool {\n    deeper(input)\n}\n\nfn deeper(input: &str) -> bool {\n    todo!()\n}\n",
+    );
     let v = r.service.verify(&pid("hide"), &id("sample::validate"), Stage::Implemented).unwrap();
     assert_eq!(v.advanced_to, None);
     assert_eq!(
@@ -821,8 +985,14 @@ fn placeholders_hidden_in_unplanned_helpers_block_implemented() {
     std::fs::write(lib_rs(&r), text).unwrap();
     r.service.ingest(&r.root).unwrap();
     let reviewed = r.service.review(&pid("hide"), &id("sample::validate")).unwrap();
-    let blocking: Vec<&str> = reviewed.report.findings.iter().filter(|f| f.severity == arch_graph::Severity::Error).map(|f| f.message.as_str()).collect();
-    assert!(blocking.iter().any(|m| m.contains("calls rust:sample::deeper, which the plan doesn't mention and which still has 1 placeholder bodies")), "{blocking:?}");
+    let blocking: Vec<&str> =
+        reviewed.report.findings.iter().filter(|f| f.severity == arch_graph::Severity::Error).map(|f| f.message.as_str()).collect();
+    assert!(
+        blocking
+            .iter()
+            .any(|m| m.contains("calls rust:sample::deeper, which the plan doesn't mention and which still has 1 placeholder bodies")),
+        "{blocking:?}"
+    );
     // Skeletons may lean on placeholders.
     assert_eq!(r.service.verify(&pid("hide"), &id("sample::validate"), Stage::Skeleton).unwrap().advanced_to, Some(Stage::Skeleton));
 }
@@ -838,7 +1008,16 @@ fn concurrent_plan_edits_are_never_lost() {
                 service
                     .apply(
                         &pid("busy"),
-                        PlanOp::AddComponent { name: format!("worker{i}"), type_name: "function".into(), description: format!("Worker {i}."), parent: Some(id("sample")), file: None, signature: Some(Signature::default()), schemas: None, spec: None },
+                        PlanOp::AddComponent {
+                            name: format!("worker{i}"),
+                            type_name: "function".into(),
+                            description: format!("Worker {i}."),
+                            parent: Some(id("sample")),
+                            file: None,
+                            signature: Some(Signature::default()),
+                            schemas: None,
+                            spec: None,
+                        },
                     )
                     .unwrap();
             });
@@ -855,10 +1034,19 @@ fn signatures_compare_qualifiers_and_ignore_spacing() {
         returns: Some(returns.into()),
         qualifiers: qualifiers.iter().map(|q| q.to_string()).collect(),
     };
-    assert!(arch_service::signature_diff(&sig("&str", "Vec<String>", &[]), &sig("& str", "Vec< String >", &[]), &[]).is_empty(), "spacing doesn't matter");
+    assert!(
+        arch_service::signature_diff(&sig("&str", "Vec<String>", &[]), &sig("& str", "Vec< String >", &[]), &[]).is_empty(),
+        "spacing doesn't matter"
+    );
     assert!(!arch_service::signature_diff(&sig("&mut str", "u8", &[]), &sig("&mutstr", "u8", &[]), &[]).is_empty(), "word boundaries do");
-    assert_eq!(arch_service::signature_diff(&sig("&str", "bool", &[]), &sig("&str", "bool", &["async"]), &[]), vec!["qualifiers: planned none, code has async"]);
-    assert_eq!(arch_service::signature_diff(&sig("&str", "bool", &["unsafe"]), &sig("&str", "bool", &[]), &[]), vec!["qualifiers: planned unsafe, code has none"]);
+    assert_eq!(
+        arch_service::signature_diff(&sig("&str", "bool", &[]), &sig("&str", "bool", &["async"]), &[]),
+        vec!["qualifiers: planned none, code has async"]
+    );
+    assert_eq!(
+        arch_service::signature_diff(&sig("&str", "bool", &["unsafe"]), &sig("&str", "bool", &[]), &[]),
+        vec!["qualifiers: planned unsafe, code has none"]
+    );
 }
 
 #[test]
@@ -872,10 +1060,16 @@ fn every_interface_in_the_chain_with_a_shape_must_fit() {
     let mut imp = comp("sample::imp", "function");
     imp.schemas.inputs = schema(json!({"x": "int"}));
     plan.components.extend([ia, ib, imp]);
-    plan.relations.extend([rel(RelationKind::Implements, "sample::imp", "sample::IA::go"), rel(RelationKind::Implements, "sample::imp", "sample::IB::go")]);
+    plan.relations.extend([
+        rel(RelationKind::Implements, "sample::imp", "sample::IA::go"),
+        rel(RelationKind::Implements, "sample::imp", "sample::IB::go"),
+    ]);
     let found = messages(&check(&r, plan), FindingCode::SchemaMismatch);
     assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].starts_with("doesn't fit rust:sample::IB::go it implements: inputs: x: type string where integer is expected"), "{found:?}");
+    assert!(
+        found[0].starts_with("doesn't fit rust:sample::IB::go it implements: inputs: x: type string where integer is expected"),
+        "{found:?}"
+    );
 }
 
 #[test]
@@ -884,7 +1078,18 @@ fn containment_follows_type_rules_and_each_component_has_one_container() {
     r.service.create_plan("c", "Containment", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "c", "helper2", "function", "Helps.", str_sig());
     let relate_contains = |a: &str, b: &str| {
-        r.service.apply(&pid("c"), PlanOp::Relate { kind: RelationKind::Contains, source: id(a), target: id(b), order: None, ports: None, note: None, expects: None })
+        r.service.apply(
+            &pid("c"),
+            PlanOp::Relate {
+                kind: RelationKind::Contains,
+                source: id(a),
+                target: id(b),
+                order: None,
+                ports: None,
+                note: None,
+                expects: None,
+            },
+        )
     };
     let err = relate_contains("sample::helper2", "sample::store").unwrap_err().to_string();
     assert!(err.contains("is a function, which can't contain rust:sample::store (a module)"), "{err}");
@@ -930,15 +1135,36 @@ message = "log through the logger"
     r.service.create_plan("l", "Logic", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "l", "parse2", "function", "Parses.", str_sig());
     relate(&r, "l", "sample::run", "sample::parse2");
-    let step = LogicStep { sequence: 1, name: "split".into(), description: String::new(), algorithm: None, complexity: None, check: Some("echo nope; exit 1".into()) };
+    let step = LogicStep {
+        sequence: 1,
+        name: "split".into(),
+        description: String::new(),
+        algorithm: None,
+        complexity: None,
+        check: Some("echo nope; exit 1".into()),
+    };
     r.service
-        .apply(&pid("l"), PlanOp::Modify { id: id("sample::parse2"), description: None, signature: None, schemas: None, spec: Some(ImplementationSpec { logic_steps: vec![step], ..ImplementationSpec::default() }) })
+        .apply(
+            &pid("l"),
+            PlanOp::Modify {
+                id: id("sample::parse2"),
+                description: None,
+                signature: None,
+                schemas: None,
+                spec: Some(ImplementationSpec { logic_steps: vec![step], ..ImplementationSpec::default() }),
+            },
+        )
         .unwrap();
     let err = r.service.approve(&pid("l"), &id("sample::parse2"), Stage::ArchApproved, &user()).unwrap_err().to_string();
     assert!(err.contains("logic step 1 'split' check failed: nope"), "{err}");
     // Changes to code that breaks a project rule can't be approved either.
     r.service.create_plan("m", "Modify log", "", arch_graph::PlanKind::Change).unwrap();
-    r.service.apply(&pid("m"), PlanOp::Modify { id: id("sample::log"), description: Some("Logs.".into()), signature: None, schemas: None, spec: None }).unwrap();
+    r.service
+        .apply(
+            &pid("m"),
+            PlanOp::Modify { id: id("sample::log"), description: Some("Logs.".into()), signature: None, schemas: None, spec: None },
+        )
+        .unwrap();
     let err = r.service.approve(&pid("m"), &id("sample::log"), Stage::ArchApproved, &user()).unwrap_err().to_string();
     assert!(err.contains("[no-println] log through the logger"), "{err}");
 }
@@ -953,19 +1179,27 @@ fn contracts_show_inherited_resolved_shapes_tools_effects_and_data_flows() {
     let mut port = comp("sample::Saver::save", "operation");
     port.schemas.inputs = schema(json!({"who": "User"}));
     let mut save = comp("sample::save_user", "function");
-    save.spec = Some(ImplementationSpec { validation: vec![ToolRef { tool: "clippy".into(), targets: vec!["src/lib.rs".into()], args: None }], ..ImplementationSpec::default() });
+    save.spec = Some(ImplementationSpec {
+        validation: vec![ToolRef { tool: "clippy".into(), targets: vec!["src/lib.rs".into()], args: None }],
+        ..ImplementationSpec::default()
+    });
     let mut produce = comp("sample::load_user", "function");
     produce.schemas.outputs = schema(json!("User"));
     plan.components.extend([user_type, port, save, produce]);
     let mut call = rel(RelationKind::Calls, "sample::save_user", "sample::log");
-    call.expects = Some(Schemas { side_effects: vec![SideEffect { target: "stdout".into(), description: "prints".into() }], ..Schemas::default() });
+    call.expects =
+        Some(Schemas { side_effects: vec![SideEffect { target: "stdout".into(), description: "prints".into() }], ..Schemas::default() });
     let mut flow = rel(RelationKind::DataFlow, "sample::load_user", "sample::save_user");
     flow.ports = Some(("return".into(), "who".into()));
     plan.relations.extend([rel(RelationKind::Implements, "sample::save_user", "sample::Saver::save"), call, flow]);
     common::put_plan(&r.service, &r.root, &plan);
     let slice = r.service.contract(&pid("k"), &id("sample::save_user")).unwrap();
     assert_eq!(slice.data.inputs_from, Some(id("sample::Saver::save")), "inherited from the interface");
-    assert_eq!(slice.data.inputs.as_ref().unwrap()["properties"]["who"]["properties"]["name"], json!({"type": "string"}), "the $ref is resolved");
+    assert_eq!(
+        slice.data.inputs.as_ref().unwrap()["properties"]["who"]["properties"]["name"],
+        json!({"type": "string"}),
+        "the $ref is resolved"
+    );
     assert_eq!(slice.validation[0].tool, "clippy");
     assert_eq!(slice.data_in.len(), 1);
     assert_eq!(slice.data_in[0].ports, Some(("return".into(), "who".into())));
@@ -1000,5 +1234,8 @@ fn calls_that_cant_be_proven_are_reported_not_linked() {
     let call = unproven.iter().find(|c| c.caller == id("sample::store::store_each")).expect("s.save on an untyped receiver");
     assert_eq!(call.candidates, vec![id("sample::store::Store::save")]);
     let graph = service.observed().unwrap();
-    assert!(!graph.outgoing(&id("sample::store::store_each"), Some(RelationKind::Calls)).any(|c| c.target == id("sample::store::Store::save")), "never guessed");
+    assert!(
+        !graph.outgoing(&id("sample::store::store_each"), Some(RelationKind::Calls)).any(|c| c.target == id("sample::store::Store::save")),
+        "never guessed"
+    );
 }

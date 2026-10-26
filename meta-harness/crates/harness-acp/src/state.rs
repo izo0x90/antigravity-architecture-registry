@@ -7,9 +7,9 @@ use std::collections::{HashMap, VecDeque};
 
 use agent_client_protocol::schema::v1 as acp;
 use harness_contracts::{
-    AdapterEvent, ApprovalOption, CatalogUpdate, ContentBlock, Failure, ItemBody, ItemId, ItemStatus,
-    NativeId, PlanArtifact, PlanBody, PlanId, PlanStatus, Question, RequestId, RequestKind, RequestStatus,
-    RuntimeRequest, SignIn, Thread, ThreadStatus, ToolKind, Turn, TurnId, TurnInput, TurnItem, TurnStatus, Usage,
+    AdapterEvent, ApprovalOption, CatalogUpdate, ContentBlock, Failure, ItemBody, ItemId, ItemStatus, NativeId, PlanArtifact, PlanBody,
+    PlanId, PlanStatus, Question, RequestId, RequestKind, RequestStatus, RuntimeRequest, SignIn, Thread, ThreadStatus, ToolKind, Turn,
+    TurnId, TurnInput, TurnItem, TurnStatus, Usage,
 };
 use tokio::sync::broadcast;
 
@@ -306,7 +306,12 @@ impl SessionState {
         let mut cancelled = Vec::new();
         if at == 0 {
             self.close_all_streams();
-            cancelled = self.requests.iter().filter(|r| r.status == RequestStatus::Pending && r.turn_id.as_ref().is_some_and(|t| chain.contains(t))).map(|r| r.id.clone()).collect();
+            cancelled = self
+                .requests
+                .iter()
+                .filter(|r| r.status == RequestStatus::Pending && r.turn_id.as_ref().is_some_and(|t| chain.contains(t)))
+                .map(|r| r.id.clone())
+                .collect();
             for id in &cancelled {
                 self.set_request_status(id, RequestStatus::Cancelled);
             }
@@ -391,7 +396,14 @@ impl SessionState {
         self.push_item_in(turn_id, body, status, title, native)
     }
 
-    fn push_item_in(&mut self, turn_id: TurnId, body: ItemBody, status: ItemStatus, title: Option<String>, native: Option<String>) -> ItemId {
+    fn push_item_in(
+        &mut self,
+        turn_id: TurnId,
+        body: ItemBody,
+        status: ItemStatus,
+        title: Option<String>,
+        native: Option<String>,
+    ) -> ItemId {
         let item = TurnItem {
             id: ItemId::new(new_id()),
             thread_id: self.thread.id.clone(),
@@ -500,7 +512,9 @@ impl SessionState {
             acp::SessionUpdate::Plan(plan) => self.plan(plan),
             acp::SessionUpdate::AvailableCommandsUpdate(update) => {
                 self.catalog.commands = Some(convert::commands(update));
-                self.emit(AdapterEvent::CatalogUpdated { update: CatalogUpdate { commands: self.catalog.commands.clone(), ..CatalogUpdate::default() } });
+                self.emit(AdapterEvent::CatalogUpdated {
+                    update: CatalogUpdate { commands: self.catalog.commands.clone(), ..CatalogUpdate::default() },
+                });
             }
             // The app-level runtime mode is mapped by the session (it needs the flavor).
             acp::SessionUpdate::CurrentModeUpdate(update) => {
@@ -701,7 +715,15 @@ impl SessionState {
 
     /// Something the agent waits on the user for: about a tool call
     /// (`native_tool_id`), with options to choose or questions to answer.
-    pub fn open_request(&mut self, native_tool_id: Option<&str>, kind: RequestKind, title: String, detail: Option<String>, options: Vec<ApprovalOption>, questions: Vec<Question>) -> RequestId {
+    pub fn open_request(
+        &mut self,
+        native_tool_id: Option<&str>,
+        kind: RequestKind,
+        title: String,
+        detail: Option<String>,
+        options: Vec<ApprovalOption>,
+        questions: Vec<Question>,
+    ) -> RequestId {
         let item_id = native_tool_id.and_then(|id| self.tool_items.get(id).cloned());
         // Its call's sender's (a sub-agent's request nests where its call is).
         self.parent = item_id.as_ref().and_then(|id| self.item_index.get(id)).and_then(|&at| self.items[at].parent_id.clone());
@@ -807,7 +829,9 @@ mod tests {
         assert!(s.turns.iter().all(|t| t.status == TurnStatus::Completed));
         let by_turn = |n: usize| s.items.iter().filter(|i| i.turn_id == s.turns[n].id).map(|i| &i.body).collect::<Vec<_>>();
         assert!(matches!(by_turn(0).as_slice(), [ItemBody::UserMessage { text, .. }, ItemBody::AssistantMessage { .. }] if text == "q1"));
-        assert!(matches!(by_turn(1).as_slice(), [ItemBody::UserMessage { text, .. }, ItemBody::AssistantMessage { .. }] if text == "q2 cont"));
+        assert!(
+            matches!(by_turn(1).as_slice(), [ItemBody::UserMessage { text, .. }, ItemBody::AssistantMessage { .. }] if text == "q2 cont")
+        );
         assert!(!s.turn_running());
     }
 
@@ -830,7 +854,14 @@ mod tests {
         let second = s.begin_turn(&TurnInput::of("two"));
         assert_eq!(s.turns[1].status, TurnStatus::Queued);
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("for one")));
-        let ask = s.open_request(None, RequestKind::Approval { action: harness_contracts::ToolAction::Tool }, "ok?".into(), None, Vec::new(), Vec::new());
+        let ask = s.open_request(
+            None,
+            RequestKind::Approval { action: harness_contracts::ToolAction::Tool },
+            "ok?".into(),
+            None,
+            Vec::new(),
+            Vec::new(),
+        );
         assert_eq!(s.request(&ask).and_then(|r| r.turn_id.clone()), Some(first.clone()), "asked in the running turn");
         assert_eq!(s.end_turn(&first, TurnStatus::Completed, None), vec![ask.clone()], "what the turn still asked ends with it");
         assert_eq!((s.turns[1].status, s.thread.status), (TurnStatus::Running, ThreadStatus::Running));
@@ -858,7 +889,9 @@ mod tests {
         turns.sort_by_key(|t| t.ordinal);
         let text = |b: &ItemBody| match b {
             ItemBody::UserMessage { text, .. } => format!("you: {text}"),
-            ItemBody::AssistantMessage { content, .. } => content.iter().map(|c| if let ContentBlock::Text { text } = c { text.clone() } else { String::new() }).collect(),
+            ItemBody::AssistantMessage { content, .. } => {
+                content.iter().map(|c| if let ContentBlock::Text { text } = c { text.clone() } else { String::new() }).collect()
+            }
             _ => String::new(),
         };
         turns.iter().map(|t| (t.ordinal, t.status, s.items.iter().filter(|i| i.turn_id == t.id).map(|i| text(&i.body)).collect())).collect()
@@ -876,18 +909,37 @@ mod tests {
         let (_, item) = s.inject(&TurnInput::of("also this")).unwrap();
         // Before the agent says it took it: still the turn that runs.
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("still on the first")));
-        let ask = s.open_request(None, RequestKind::Approval { action: harness_contracts::ToolAction::Tool }, "ok?".into(), None, Vec::new(), Vec::new());
+        let ask = s.open_request(
+            None,
+            RequestKind::Approval { action: harness_contracts::ToolAction::Tool },
+            "ok?".into(),
+            None,
+            Vec::new(),
+            Vec::new(),
+        );
         let went_on = s.steered(&item).unwrap();
         assert_eq!(s.active_turn(), Some(&went_on), "what the agent says now is the new turn's");
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("done both")));
-        assert_eq!(s.request(&ask).and_then(|r| r.turn_id.clone()), Some(first.clone()), "asked before it took the message: the first turn's");
-        assert_eq!(s.end_turn(&first, TurnStatus::Completed, None), vec![ask], "the prompt's end ends the turn it went on in, and what it asked");
+        assert_eq!(
+            s.request(&ask).and_then(|r| r.turn_id.clone()),
+            Some(first.clone()),
+            "asked before it took the message: the first turn's"
+        );
+        assert_eq!(
+            s.end_turn(&first, TurnStatus::Completed, None),
+            vec![ask],
+            "the prompt's end ends the turn it went on in, and what it asked"
+        );
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("and later")));
         s.end_turn(&queued, TurnStatus::Completed, None);
         let live = turns(&s);
         assert_eq!(
             live.iter().map(|(n, status, said)| (*n, *status, said.join(" | "))).collect::<Vec<_>>(),
-            [(1, TurnStatus::Completed, "you: start | working | still on the first | ".to_owned()), (2, TurnStatus::Completed, "you: also this | done both".into()), (3, TurnStatus::Completed, "you: later | and later".into())],
+            [
+                (1, TurnStatus::Completed, "you: start | working | still on the first | ".to_owned()),
+                (2, TurnStatus::Completed, "you: also this | done both".into()),
+                (3, TurnStatus::Completed, "you: later | and later".into())
+            ],
             "(the request asked is an item of the turn it was asked in)"
         );
         // The same session replayed: the same turns, by the same numbers.
@@ -906,12 +958,17 @@ mod tests {
     #[test]
     fn messages_replayed_one_after_the_other_are_told_apart_by_their_ids() {
         let mut s = state();
-        let of = |text: &str, id: &str| acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(text))).message_id(acp::MessageId::new(id));
+        let of = |text: &str, id: &str| {
+            acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(text))).message_id(acp::MessageId::new(id))
+        };
         s.apply(&acp::SessionUpdate::UserMessageChunk(of("stopped", "m1")));
         s.apply(&acp::SessionUpdate::UserMessageChunk(of("next ", "m2")));
         s.apply(&acp::SessionUpdate::UserMessageChunk(of("one", "m2")));
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("answer")));
-        assert_eq!(turns(&s).into_iter().map(|(_, _, said)| said).collect::<Vec<_>>(), [vec!["you: stopped".to_owned()], vec!["you: next one".into(), "answer".into()]]);
+        assert_eq!(
+            turns(&s).into_iter().map(|(_, _, said)| said).collect::<Vec<_>>(),
+            [vec!["you: stopped".to_owned()], vec!["you: next one".into(), "answer".into()]]
+        );
     }
 
     /// A pack's replay, as it ships, and whether its chunks are whole messages.
@@ -919,7 +976,8 @@ mod tests {
         let path = format!("{}/../../packs/harness/{pack}/pack.toml", env!("CARGO_MANIFEST_DIR"));
         let manifest: toml::Value = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let replay = &manifest["provides"]["settings"]["replay"];
-        let whole = if replay.get("whole_chunks").and_then(toml::Value::as_bool).unwrap_or(false) { Chunks::Whole } else { Chunks::OfItsId };
+        let whole =
+            if replay.get("whole_chunks").and_then(toml::Value::as_bool).unwrap_or(false) { Chunks::Whole } else { Chunks::OfItsId };
         (crate::pieces::Replay::parse(replay["piece"].as_str().unwrap(), replay.get("listed").and_then(|l| l.as_str())).unwrap(), whole)
     }
 
@@ -931,14 +989,30 @@ mod tests {
     }
 
     fn yours(s: &SessionState) -> Vec<(String, Vec<Piece>)> {
-        s.items.iter().filter_map(|i| match &i.body { ItemBody::UserMessage { text, pieces } => Some((text.clone(), pieces.clone())), _ => None }).collect()
+        s.items
+            .iter()
+            .filter_map(|i| match &i.body {
+                ItemBody::UserMessage { text, pieces } => Some((text.clone(), pieces.clone())),
+                _ => None,
+            })
+            .collect()
     }
 
     /// "see #flaky and @a.rs": two pieces.
     fn sent() -> (String, Vec<Piece>) {
         let link = |start, end, to| harness_contracts::Link { start, end, to, include: harness_contracts::Include::Auto };
-        let flaky = Piece { links: vec![link(4, 10, harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("flaky") })], text: "#flaky\n- lines 1 to 2".into() };
-        let file = Piece { links: vec![link(15, 20, harness_contracts::Linked::Thing { subject: harness_contracts::Subject::CodeFile { path: "a.rs".into() } })], text: "@a.rs\n- a.rs:\n  fn a() {}".into() };
+        let flaky = Piece {
+            links: vec![link(4, 10, harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("flaky") })],
+            text: "#flaky\n- lines 1 to 2".into(),
+        };
+        let file = Piece {
+            links: vec![link(
+                15,
+                20,
+                harness_contracts::Linked::Thing { subject: harness_contracts::Subject::CodeFile { path: "a.rs".into() } },
+            )],
+            text: "@a.rs\n- a.rs:\n  fn a() {}".into(),
+        };
         ("see #flaky and @a.rs".into(), vec![flaky, file])
     }
 
@@ -949,7 +1023,9 @@ mod tests {
     #[test]
     fn a_replayed_message_of_yours_comes_back_to_its_words_and_pieces() {
         let (words, pieces) = sent();
-        let of = |text: &str, id: &str| acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(text))).message_id(acp::MessageId::new(id));
+        let of = |text: &str, id: &str| {
+            acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(text))).message_id(acp::MessageId::new(id))
+        };
 
         let mut s = replaying("claude-code");
         let mut chunks = vec![words.clone()];
@@ -991,7 +1067,9 @@ mod tests {
                 .filter_map(|b| match b {
                     acp::ContentBlock::Text(t) => Some(t.text),
                     acp::ContentBlock::Resource(r) => match r.resource {
-                        acp::EmbeddedResourceResource::TextResourceContents(c) => Some(crate::pieces::Replay::ours_written(&c.uri, &c.text)),
+                        acp::EmbeddedResourceResource::TextResourceContents(c) => {
+                            Some(crate::pieces::Replay::ours_written(&c.uri, &c.text))
+                        }
                         _ => None,
                     },
                     _ => None,
@@ -1007,7 +1085,12 @@ mod tests {
     /// replayed; each is read back once, as it ends, and made once.
     #[test]
     fn a_long_replay_reads_each_message_back_once() {
-        let link = harness_contracts::Link { start: 0, end: 6, to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("flaky") }, include: harness_contracts::Include::Whole };
+        let link = harness_contracts::Link {
+            start: 0,
+            end: 6,
+            to: harness_contracts::Linked::Tag { tag: harness_contracts::TagId::new("flaky") },
+            include: harness_contracts::Include::Whole,
+        };
         let piece = Piece { links: vec![link], text: "x".repeat(16_000) };
         let label = piece.label();
         let mut s = replaying("antigravity-acp");
@@ -1019,7 +1102,8 @@ mod tests {
             // Each of yours told once, as it's made.
             let mut told = 0;
             while let Ok(event) = events.try_recv() {
-                told += usize::from(matches!(event, AdapterEvent::ItemUpdated { item } if matches!(item.body, ItemBody::UserMessage { .. })));
+                told +=
+                    usize::from(matches!(event, AdapterEvent::ItemUpdated { item } if matches!(item.body, ItemBody::UserMessage { .. })));
             }
             assert_eq!(told, 1);
         }
@@ -1034,7 +1118,10 @@ mod tests {
     /// (recorded: `fixtures/`), read back to the words and pieces sent.
     #[test]
     fn a_recorded_replay_reads_back_to_what_was_sent() {
-        for (pack, fixture) in [("claude-code", include_str!("../fixtures/replay-claude-code-0.95.0.json")), ("antigravity-acp", include_str!("../fixtures/replay-antigravity-1.4.3.json"))] {
+        for (pack, fixture) in [
+            ("claude-code", include_str!("../fixtures/replay-claude-code-0.95.0.json")),
+            ("antigravity-acp", include_str!("../fixtures/replay-antigravity-1.4.3.json")),
+        ] {
             let recorded: serde_json::Value = serde_json::from_str(fixture).unwrap();
             let mut s = replaying(pack);
             for update in recorded["replayed"].as_array().unwrap() {
@@ -1042,7 +1129,12 @@ mod tests {
                 s.apply(&acp::SessionUpdate::UserMessageChunk(chunk));
             }
             s.replayed();
-            let sent: Vec<(String, String)> = recorded["pieces"].as_array().unwrap().iter().map(|p| (p["label"].as_str().unwrap().to_owned(), p["text"].as_str().unwrap().to_owned())).collect();
+            let sent: Vec<(String, String)> = recorded["pieces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| (p["label"].as_str().unwrap().to_owned(), p["text"].as_str().unwrap().to_owned()))
+                .collect();
             let read = yours(&s);
             assert_eq!(read.len(), 1, "{pack}: one message");
             assert_eq!(read[0].0, recorded["words"].as_str().unwrap(), "{pack}");

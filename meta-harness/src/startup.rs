@@ -39,9 +39,12 @@ pub fn check_cockpit_build() -> Result<(), StartError> {
 /// aren't the internet's (see `check_bind`).
 pub async fn listen(asked: Option<&str>, public: bool) -> Result<(tokio::net::TcpListener, String), StartError> {
     let addr: std::net::SocketAddr = match asked {
-        Some(asked) => asked.parse().map_err(|e| format!("--listen {asked}: not an address and port ({e}); e.g. 127.0.0.1:8080 or 100.101.102.103:8080"))?,
+        Some(asked) => asked
+            .parse()
+            .map_err(|e| format!("--listen {asked}: not an address and port ({e}); e.g. 127.0.0.1:8080 or 100.101.102.103:8080"))?,
         None => {
-            let port: u16 = std::env::var("PORT").or_else(|_| std::env::var("METAHARNESS_PORT")).ok().and_then(|p| p.parse().ok()).unwrap_or(8080);
+            let port: u16 =
+                std::env::var("PORT").or_else(|_| std::env::var("METAHARNESS_PORT")).ok().and_then(|p| p.parse().ok()).unwrap_or(8080);
             let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
             let ip: std::net::IpAddr = host.parse().map_err(|e| format!("HOST={host}: not an address ({e})"))?;
             std::net::SocketAddr::new(ip, port)
@@ -75,8 +78,12 @@ pub fn check_bind(ip: std::net::IpAddr) -> Result<(), String> {
     };
     match () {
         _ if private => Ok(()),
-        _ if ip.is_unspecified() => Err(format!("listening on {ip} takes every interface, the internet's too: listen on a private address (127.0.0.1, your LAN's, Tailscale's 100.x) with --listen, or pass --listen-public to mean it")),
-        _ => Err(format!("{ip} isn't a private address (loopback, a LAN, Tailscale's 100.64/10): pass --listen-public to listen on it anyway")),
+        _ if ip.is_unspecified() => Err(format!(
+            "listening on {ip} takes every interface, the internet's too: listen on a private address (127.0.0.1, your LAN's, Tailscale's 100.x) with --listen, or pass --listen-public to mean it"
+        )),
+        _ => Err(format!(
+            "{ip} isn't a private address (loopback, a LAN, Tailscale's 100.64/10): pass --listen-public to listen on it anyway"
+        )),
     }
 }
 
@@ -97,7 +104,8 @@ pub fn home_state() -> Result<nah_state::StateDb, StartError> {
 pub fn open_architecture() -> Result<ArchitectureService, StartError> {
     let root = repo_root()?;
     let nah = root.join(".nah");
-    let crate::project::AnalysisSetup { catalog, packs, types, rules, limits } = crate::project::analysis_setup(&root).map_err(|e| e.to_string())?;
+    let crate::project::AnalysisSetup { catalog, packs, types, rules, limits } =
+        crate::project::analysis_setup(&root).map_err(|e| e.to_string())?;
     let mut tools = ToolCatalog::default();
     if let Ok(text) = std::fs::read_to_string(nah.join("tools.toml")) {
         tools.extend_with(ToolCatalog::from_toml(&text)?);
@@ -187,7 +195,12 @@ pub fn changes(arch: &ArchitectureService) -> Option<Arc<nah_changes::Changes>> 
 /// The timeline over the project's changes, kept in its state database and
 /// following every session's turns (none without git). How long it keeps
 /// things: `.nah/changes.toml`'s `[timeline]`.
-pub fn timeline(arch: &ArchitectureService, changes: &Option<Arc<nah_changes::Changes>>, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>) -> Result<Option<Arc<nah_timeline::Timeline>>, StartError> {
+pub fn timeline(
+    arch: &ArchitectureService,
+    changes: &Option<Arc<nah_changes::Changes>>,
+    state: &Arc<nah_state::StateDb>,
+    hub: &Arc<EventHub>,
+) -> Result<Option<Arc<nah_timeline::Timeline>>, StartError> {
     let Some(changes) = changes else { return Ok(None) };
     let policy = match std::fs::read_to_string(arch.root().join(".nah/changes.toml")) {
         Ok(text) => nah_timeline::Policy::from_toml(&text)?,
@@ -212,7 +225,11 @@ pub fn reconcile_on_start(state: &nah_state::StateDb) -> Result<(), StartError> 
 }
 
 /// Notifications: from the event stream, kept in the state database.
-pub fn notifications(hub: &Arc<EventHub>, state: &Arc<nah_state::StateDb>, slots: &Arc<harness_core::SlotManager>) -> Result<Arc<nah_notify::NotifyHub>, StartError> {
+pub fn notifications(
+    hub: &Arc<EventHub>,
+    state: &Arc<nah_state::StateDb>,
+    slots: &Arc<harness_core::SlotManager>,
+) -> Result<Arc<nah_notify::NotifyHub>, StartError> {
     Ok(nah_notify::NotifyHub::start(hub.clone(), state.clone(), slots.clone(), Vec::new())?)
 }
 
@@ -256,7 +273,10 @@ pub fn terminal_settings(arch: &ArchitectureService) -> Result<TerminalSettings,
         return Err(".nah/terminals.toml: running_log_mb is 0: at least 1".into());
     }
     Ok(TerminalSettings {
-        terminals: crate::terminals::Settings { long: std::time::Duration::from_secs(settings.long_command_secs), scrollback: settings.scrollback_lines },
+        terminals: crate::terminals::Settings {
+            long: std::time::Duration::from_secs(settings.long_command_secs),
+            scrollback: settings.scrollback_lines,
+        },
         running_log: settings.running_log_mb.saturating_mul(1 << 20),
     })
 }
@@ -265,7 +285,13 @@ pub fn terminal_settings(arch: &ArchitectureService) -> Result<TerminalSettings,
 /// start-up hooks kept in the cache folder: they're written again at each
 /// start); those kept from the last run come back ended. Their lines and
 /// commands are things notes can be on.
-pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, things: &Arc<nah_things::Things>, settings: crate::terminals::Settings) -> Result<Arc<crate::terminals::Terminals>, StartError> {
+pub fn terminals(
+    arch: &ArchitectureService,
+    state: &Arc<nah_state::StateDb>,
+    hub: &Arc<EventHub>,
+    things: &Arc<nah_things::Things>,
+    settings: crate::terminals::Settings,
+) -> Result<Arc<crate::terminals::Terminals>, StartError> {
     let hooks = arch_service::cache_dir(arch.root())?.join("terminal-hooks");
     let terminals = crate::terminals::Terminals::load(arch.root().to_path_buf(), hooks, hub.clone(), state.clone(), settings)?;
     things.register(terminals.clone());
@@ -328,8 +354,20 @@ pub fn things(arch: &ArchitectureService, running_log: u64) -> Result<Arc<nah_th
 /// discussion is a thing too. A plan's component isn't approved while one
 /// on it isn't settled. Comments plans' files held before move in. The
 /// slot a discussion asks is told what's new in it.
-pub fn discussions(arch: &Arc<ArchitectureService>, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, things: &Arc<nah_things::Things>, slots: &Arc<harness_core::SlotManager>) -> Result<Arc<nah_discussions::Discussions>, StartError> {
-    let discussions = nah_discussions::Discussions::open(state.clone(), hub.clone(), things.clone(), &arch_service::state_dir(arch.root())?.join("discussions")).map_err(|e| e.to_string())?;
+pub fn discussions(
+    arch: &Arc<ArchitectureService>,
+    state: &Arc<nah_state::StateDb>,
+    hub: &Arc<EventHub>,
+    things: &Arc<nah_things::Things>,
+    slots: &Arc<harness_core::SlotManager>,
+) -> Result<Arc<nah_discussions::Discussions>, StartError> {
+    let discussions = nah_discussions::Discussions::open(
+        state.clone(),
+        hub.clone(),
+        things.clone(),
+        &arch_service::state_dir(arch.root())?.join("discussions"),
+    )
+    .map_err(|e| e.to_string())?;
     things.register(discussions.clone());
     // The agents in a discussion: by their slots' ids, named as they are.
     let named = Arc::downgrade(slots);
@@ -359,7 +397,11 @@ pub fn discussions(arch: &Arc<ArchitectureService>, state: &Arc<nah_state::State
 }
 
 /// Tags: kept in the state database, told on the event stream, on things.
-pub fn tags(state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, things: &Arc<nah_things::Things>) -> Result<Arc<nah_tags::Tags>, StartError> {
+pub fn tags(
+    state: &Arc<nah_state::StateDb>,
+    hub: &Arc<EventHub>,
+    things: &Arc<nah_things::Things>,
+) -> Result<Arc<nah_tags::Tags>, StartError> {
     nah_tags::Tags::open(state.clone(), hub.clone(), things.clone()).map_err(|e| e.to_string().into())
 }
 
@@ -377,7 +419,10 @@ pub fn access(project: &std::path::Path) -> Result<nah_access::Access, StartErro
 /// address, with its key (which says which slot is calling).
 pub fn our_tools(base_url: &str) -> harness_core::slots::OurServer {
     let url = format!("{base_url}/api/mcp/sse");
-    Arc::new(move |key: &str| McpServer { name: OUR_TOOLS.into(), transport: McpTransport::Sse { url: format!("{url}?key={key}"), headers: Vec::new() } })
+    Arc::new(move |key: &str| McpServer {
+        name: OUR_TOOLS.into(),
+        transport: McpTransport::Sse { url: format!("{url}?key={key}"), headers: Vec::new() },
+    })
 }
 
 /// The name agents see our tools under.
@@ -385,7 +430,10 @@ pub const OUR_TOOLS: &str = "nah-architecture";
 
 /// The tool servers listed for the cockpit: ours (no key) and the project's.
 pub fn tool_servers(base_url: &str, project: &std::path::Path) -> Arc<crate::tool_servers::ToolServerState> {
-    let ours = vec![McpServer { name: OUR_TOOLS.into(), transport: McpTransport::Sse { url: format!("{base_url}/api/mcp/sse"), headers: Vec::new() } }];
+    let ours = vec![McpServer {
+        name: OUR_TOOLS.into(),
+        transport: McpTransport::Sse { url: format!("{base_url}/api/mcp/sse"), headers: Vec::new() },
+    }];
     let tool_servers = Arc::new(crate::tool_servers::ToolServerState { ours, file: crate::tool_servers::ProjectToolServers::of(project) });
     if let Err(e) = tool_servers.project() {
         tracing::warn!("The project's tool servers can't be read: {e}");
@@ -397,7 +445,11 @@ pub fn tool_servers(base_url: &str, project: &std::path::Path) -> Arc<crate::too
 pub fn mcp_callers(slots: &Arc<harness_core::SlotManager>) -> crate::mcp::sse::Callers {
     let slots = slots.clone();
     Arc::new(move |key: &str| {
-        slots.holder(key).map(|h| crate::mcp::McpCaller { principal: nah_access::Principal::agent(&h.role), slot: Some(h.slot), label: h.name })
+        slots.holder(key).map(|h| crate::mcp::McpCaller {
+            principal: nah_access::Principal::agent(&h.role),
+            slot: Some(h.slot),
+            label: h.name,
+        })
     })
 }
 
@@ -414,7 +466,15 @@ pub fn slots(
     tool_servers: &Arc<crate::tool_servers::ToolServerState>,
 ) -> Result<Arc<harness_core::SlotManager>, StartError> {
     let project = tool_servers.clone();
-    Ok(harness_core::SlotManager::load(sessions.clone(), registry.clone(), hub.clone(), state.clone(), our_tools(base_url), Arc::new(move || project.project()), OPEN_WITHIN)?)
+    Ok(harness_core::SlotManager::load(
+        sessions.clone(),
+        registry.clone(),
+        hub.clone(),
+        state.clone(),
+        our_tools(base_url),
+        Arc::new(move || project.project()),
+        OPEN_WITHIN,
+    )?)
 }
 
 pub fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueConfig, StartError> {
@@ -427,7 +487,12 @@ pub fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueCon
 
 /// Serves until asked to stop. Stopping ends the agents' event streams,
 /// which would otherwise keep the graceful shutdown waiting.
-pub async fn serve(listener: tokio::net::TcpListener, app: axum::Router, streams: Option<Arc<crate::mcp::SseSessionManager>>, asked: crate::modules::Shutdown) -> Result<(), StartError> {
+pub async fn serve(
+    listener: tokio::net::TcpListener,
+    app: axum::Router,
+    streams: Option<Arc<crate::mcp::SseSessionManager>>,
+    asked: crate::modules::Shutdown,
+) -> Result<(), StartError> {
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             tokio::select! {
@@ -472,7 +537,20 @@ async fn shutdown_signal() {
 mod tests {
     #[test]
     fn a_server_listens_where_the_internet_isnt_unless_told() {
-        let allowed = ["127.0.0.1", "127.8.9.10", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.20", "100.64.0.1", "100.101.102.103", "100.127.255.255", "::1", "fd7a:115c:a1e0::1", "fe80::1"];
+        let allowed = [
+            "127.0.0.1",
+            "127.8.9.10",
+            "10.1.2.3",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.1.20",
+            "100.64.0.1",
+            "100.101.102.103",
+            "100.127.255.255",
+            "::1",
+            "fd7a:115c:a1e0::1",
+            "fe80::1",
+        ];
         for ip in allowed {
             assert_eq!(super::check_bind(ip.parse().unwrap()), Ok(()), "{ip}");
         }

@@ -122,7 +122,12 @@ impl Remote {
 }
 
 /// `GET /ws/cockpit?ticket=`: the cockpit's side.
-pub async fn socket(_: Ticketed, ws: WebSocketUpgrade, State(remote): State<Arc<Remote>>, State(stopping): State<crate::modules::Shutdown>) -> impl IntoResponse {
+pub async fn socket(
+    _: Ticketed,
+    ws: WebSocketUpgrade,
+    State(remote): State<Arc<Remote>>,
+    State(stopping): State<crate::modules::Shutdown>,
+) -> impl IntoResponse {
     ws.on_upgrade(move |socket| async move { stopping.or_stop(remote.serve(socket)).await })
 }
 

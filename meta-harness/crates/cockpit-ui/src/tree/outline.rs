@@ -27,13 +27,15 @@ pub struct CodeOutline {
 pub(crate) fn rows_of(tree: Tree) -> Rows {
     let cut = tree.cut.as_ref().map(|cut| {
         let why = if cut.reason == arch_graph::tree::CutReason::Time { "out of time" } else { "too big" };
-        let mut more = format!("It shows {} of {} levels; {} parts left out. Unfold a row to load what's in it.", cut.shown, cut.asked, cut.hidden);
+        let mut more =
+            format!("It shows {} of {} levels; {} parts left out. Unfold a row to load what's in it.", cut.shown, cut.asked, cut.hidden);
         if cut.starts_left_out > 0 {
             more.push_str(&format!(" {} top-level parts aren't shown.", cut.starts_left_out));
         }
         Status::new(format!("cut ({why})"), Tone::Warn).detail(more)
     });
-    let rows = tree.cards.into_iter().map(|c| RowData { key: c.key, label: c.label, kind: c.kind, parent: c.parent, more: c.more }).collect();
+    let rows =
+        tree.cards.into_iter().map(|c| RowData { key: c.key, label: c.label, kind: c.kind, parent: c.parent, more: c.more }).collect();
     Rows { rows, dropped: tree.dropped, cut }
 }
 
