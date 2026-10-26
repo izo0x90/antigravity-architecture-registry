@@ -459,6 +459,12 @@ impl SessionState {
     /// agent's own mode, when it's changed to it (its policy follows).
     pub fn session_update(&mut self, session: &str, update: convert::Update) -> Option<String> {
         let child = self.child(session);
+        // (Neither the agent's own session, once known, nor a sub-agent's
+        // it announced: nobody's here. Nothing of it is taken.)
+        let ours = self.thread.native_id.as_ref().is_none_or(|own| own.as_str() == session);
+        if !ours && child.is_none() {
+            return None;
+        }
         match update {
             convert::Update::Subagent(update) => self.subagent_update(session, update),
             convert::Update::Message(message) => self.session_message(message),

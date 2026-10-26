@@ -163,12 +163,16 @@ impl Template {
         if expected.is_some_and(|e| e != label) {
             return None;
         }
-        let content = text.get(pos..pos + len)?;
-        let end = pos + len;
+        let end = pos.checked_add(len)?;
+        let content = text.get(pos..end)?;
         let end = end + text.get(end..)?.starts_with(self.tail.as_str()).then_some(self.tail.len())?;
         Some((Piece { links, text: content.to_owned() }, end))
     }
 }
+
+/// The most labels a message read back has (no message is sent with
+/// more links than this).
+const PIECES_MOST: usize = 256;
 
 /// A label read, its links, and its content's length.
 type Labelled<'a> = (&'a str, Vec<Link>, usize);
@@ -209,6 +213,11 @@ impl Replay {
     pub fn read(&self, text: &str) -> Option<(String, Vec<Piece>)> {
         let first = self.listed.as_ref().unwrap_or(&self.piece);
         let needle = format!("{}{LABEL_START}", first.lead());
+        // (More labels than a message is sent with: none of ours, and not
+        // read through, however it's written.)
+        if text.matches(LABEL_START).nth(PIECES_MOST).is_some() {
+            return None;
+        }
         let mut from = 0;
         while let Some(found) = text.get(from..).and_then(|t| t.find(&needle)) {
             let at = from + found;
@@ -338,6 +347,26 @@ mod tests {
         assert_eq!(claude.read(&replayed("claude-code", &pasted, std::slice::from_ref(&real))), Some((pasted.clone(), vec![real])));
         // An agent's own resource (another scheme): not a piece.
         assert_eq!(antigravity.read("hi Embedded resource (file:///a.rs):\nfn a() {}"), None);
+    }
+
+    /// Text an agent wrote (a message to another agent, replayed as that
+    /// one's prompt) can't make the reading panic or take long: a label's
+    /// length too big to be one, or thousands of labels with no space.
+    #[test]
+    fn what_an_agent_writes_cant_break_the_reading() {
+        let claude = shipped("claude-code");
+        let huge = format!("hi\n<context ref=\"nah://tag/t?at=0-2-auto&len={}\">\nx\n</context>", u64::MAX);
+        for replay in [&claude, &Replay::ours()] {
+            assert_eq!(replay.read(&huge), None);
+        }
+        let started = std::time::Instant::now();
+        for many in [250, 5_000] {
+            let crowd = format!("hi {}", "nah://tag/t?at=0-2-auto&len=1".repeat(many));
+            for replay in [&claude, &shipped("antigravity-acp"), &Replay::ours()] {
+                assert_eq!(replay.read(&crowd), None);
+            }
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
     }
 
     #[test]

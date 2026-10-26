@@ -122,6 +122,10 @@ pub fn links_of(pieces: &[Piece]) -> Vec<Link> {
 /// What a piece's label starts with.
 pub const LABEL_START: &str = "nah://";
 
+/// The longest a label is read for (its subject's name, every span of its
+/// links): a longer one isn't one.
+const LABEL_MOST: usize = 16 * 1024;
+
 impl Piece {
     /// Its label: what it links, each place the message's text links it
     /// (and how it goes in), and how long its text is, in bytes: the label
@@ -145,12 +149,19 @@ impl Piece {
     /// label has no white space: it's never looked for past one.
     pub fn read_label(text: &str) -> Option<(Vec<Link>, usize, usize)> {
         let rest = text.strip_prefix(LABEL_START)?;
-        let word = &rest[..rest.find(char::is_whitespace).unwrap_or(rest.len())];
+        // (It ends at its length's digits, never further than a label goes:
+        // only what it is is read, whatever follows.)
+        let most = (0..=rest.len().min(LABEL_MOST)).rev().find(|at| rest.is_char_boundary(*at))?;
+        let len_at = rest[..most].find("&len=")?;
+        let digits = rest[len_at + 5..].bytes().take(20).take_while(u8::is_ascii_digit).count();
+        let word = &rest[..len_at + 5 + digits];
+        if word.contains(char::is_whitespace) {
+            return None;
+        }
         let (path, query) = word.split_once('?')?;
         let len_at = query.find("&len=")?;
-        let digits = query[len_at + 5..].bytes().take_while(u8::is_ascii_digit).count();
-        let len: usize = query[len_at + 5..len_at + 5 + digits].parse().ok()?;
-        let label_len = LABEL_START.len() + path.len() + 1 + len_at + 5 + digits;
+        let len: usize = query[len_at + 5..].parse().ok()?;
+        let label_len = LABEL_START.len() + word.len();
         let mut subject = None;
         let mut at = None;
         for pair in query[..len_at].split('&') {
@@ -187,29 +198,11 @@ fn include_word(include: Include) -> String {
 
 /// `text` with every byte but letters, digits and `-._~` as `%XX`.
 fn escaped(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for b in text.bytes() {
-        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
-            out.push(char::from(b));
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
+    urlencoding::encode(text).into_owned()
 }
 
 fn unescaped(text: &str) -> Option<String> {
-    let mut bytes = Vec::with_capacity(text.len());
-    let mut it = text.bytes();
-    while let Some(b) = it.next() {
-        if b == b'%' {
-            let hex = [it.next()?, it.next()?];
-            bytes.push(u8::from_str_radix(std::str::from_utf8(&hex).ok()?, 16).ok()?);
-        } else {
-            bytes.push(b);
-        }
-    }
-    String::from_utf8(bytes).ok()
+    urlencoding::decode(text).ok().map(std::borrow::Cow::into_owned)
 }
 
 impl Message {

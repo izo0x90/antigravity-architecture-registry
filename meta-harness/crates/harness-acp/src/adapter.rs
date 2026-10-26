@@ -86,6 +86,12 @@ impl AcpAdapter {
             let mut state = lock(&shared.state);
             state.replays_by(self.profile.replayed_pieces(&declared.declared), self.profile.chunks());
             state.subagents_started_by(self.profile.settings.subagents.started_by.clone());
+            // Resumed: its session's own updates are known by its id from the
+            // first one replayed.
+            if let Some(id) = &config.resume {
+                let native = NativeId::new(id.as_str().to_owned());
+                state.set_thread(|t| t.native_id = Some(native));
+            }
         }
         let agent = &init.agent_capabilities;
         let mcp: Vec<acp::McpServer> = config.mcp_servers.iter().map(|s| mcp_server(s, agent.mcp_capabilities.sse)).collect();

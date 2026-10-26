@@ -446,6 +446,20 @@ mod tests {
         assert!(state.subagents.iter().all(|s| !s.status.working()), "the agent gone, none at work");
     }
 
+    /// An update under a session that's neither the agent's own nor a
+    /// sub-agent's it announced is nobody's: not taken as the agent's.
+    #[test]
+    fn an_update_from_an_unknown_session_isnt_the_agents() {
+        let mut state = session("claude-code");
+        state.set_thread(|t| t.native_id = Some(harness_contracts::NativeId::new(PARENT)));
+        state.begin_turn(&TurnInput::of("go"));
+        let mode = serde_json::json!({ "sessionUpdate": "current_mode_update", "currentModeId": "plan" });
+        send(&mut state, &[on("stranger", says("not mine")), on("stranger", mode)]);
+        assert!(state.items.iter().all(|i| i.body.said().as_deref() != Some("not mine")) && state.thread.controls.current_mode.is_none());
+        send(&mut state, &[on(PARENT, says("mine"))]);
+        assert!(state.items.iter().any(|i| i.body.said().as_deref() == Some("mine")));
+    }
+
     /// A sub-agent's own settings, mode and title stay its own.
     #[test]
     fn a_sub_agents_session_settings_are_not_the_agents() {
