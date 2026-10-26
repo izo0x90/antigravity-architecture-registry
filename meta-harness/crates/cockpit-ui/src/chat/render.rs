@@ -267,10 +267,13 @@ impl ChatStreamState {
             } else {
                 // Its sub-agents at work, in sight (each opens over what
                 // you're on).
+                let strip = ui.cursor().top();
                 self.render_subagents(ui);
                 let start = ui.cursor().min;
                 let w = ui.available_width();
                 self.render_input(ui, typing, cx);
+                // (The box's controls, put over it, clear the strip too.)
+                self.ui.typing = self.ui.typing.map(|r| r.union(Rect::from_x_y_ranges(r.x_range(), strip..=r.top())));
                 let input = Rect::from_min_size(Pos2::new(start.x, start.y), Vec2::new(w, (ui.cursor().min.y - start.y).max(40.0)));
                 feedback.register_inspectable(ui, &format!("{host}:chat:input_bar"), input);
             }

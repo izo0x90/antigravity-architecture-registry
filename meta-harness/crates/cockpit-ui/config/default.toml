@@ -258,6 +258,7 @@ t = "Tags"
 
 "session.new" = { leader = "s n" }
 "session.resume" = { leader = "s r" }
+"session.resume_last" = { leader = "s l" }
 "session.delete" = { leader = "s d" }
 "session.switch" = { leader = "s t" }
 "session.stop" = { leader = "s s" }
@@ -360,6 +361,7 @@ t = "Tags"
 "discussion.settle" = { keys = ["a"] }
 "discussion.reopen" = { keys = ["x"] }
 "discussion.change" = { keys = ["e"] }
+"discussion.wake" = { keys = ["w"] }
 
 # Queue view: the plan's work, one job per component (Enter shows why a job
 # failed).

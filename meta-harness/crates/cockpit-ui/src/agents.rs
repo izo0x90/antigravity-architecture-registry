@@ -204,6 +204,8 @@ pub struct Agents {
     /// Why a slot's last session couldn't start (cleared as one starts):
     /// it can't run, everywhere it's named.
     cant_open: BTreeMap<SlotId, String>,
+    /// Which change of what it knows this is (an event, a reply, an act).
+    changes: u64,
     /// How far this clock is ahead of the server's (its least gap seen
     /// between an event happening and coming), in ms.
     skew_ms: Option<i64>,
@@ -239,6 +241,7 @@ impl Agents {
     /// Takes a server event (the shell, for every one), as of when it
     /// happened: on this clock, that long before now (never after).
     pub fn apply_stamped(&mut self, stamped: harness_contracts::Stamped) {
+        self.changes += 1;
         let harness_contracts::Stamped { at_ms, event } = stamped;
         // (Its server's clock and this one's differ by at most the least
         // gap seen between when it says a thing happened and when it came:
@@ -265,6 +268,12 @@ impl Agents {
             self.stopping.remove(&subagent.id);
         }
         self.store.apply(event, at);
+    }
+
+    /// Which change of what it knows this is: the same, nothing of it
+    /// changed.
+    pub fn changes(&self) -> u64 {
+        self.changes
     }
 
     /// Now, as the server's clock has it (this one's, less how far it's
@@ -421,6 +430,7 @@ impl Agents {
 
     /// Does what `slot`'s chat (or the inbox) asked.
     pub fn act(&mut self, slot: SlotId, act: Act, net: &NetClient, ctx: &egui::Context) {
+        self.changes += 1;
         let mailbox = self.mailbox.clone();
         let for_slot = slot.clone();
         let done = move |r: NetResult<()>| post(&mailbox, Reply::Done(for_slot, r));
@@ -558,6 +568,9 @@ impl Agents {
             net.tool_servers(ctx.clone(), move |result| post(&mailbox, Reply::Tools { result, saved: None }));
         }
         let replies = std::mem::take(&mut *self.mailbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        if !replies.is_empty() {
+            self.changes += 1;
+        }
         for reply in replies {
             match reply {
                 Reply::Opened(slot, Ok(opened)) => {

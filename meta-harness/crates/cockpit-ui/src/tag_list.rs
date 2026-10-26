@@ -428,12 +428,13 @@ impl Navigable for TagList {
         self.row(key).map(|row| row.tag().clone())
     }
 
-    /// Every tag and every thing it's on, folded or not (search finds a
-    /// thing under a folded tag; going to it unfolds the tag).
+    /// As of which change of the tags.
     fn items_changed(&self) -> Option<u64> {
         Some(self.tags.get().version())
     }
 
+    /// Every tag and every thing it's on, folded or not (search finds a
+    /// thing under a folded tag; going to it unfolds the tag).
     fn items(&self) -> Vec<Item> {
         let tags = self.tags.get();
         let mut out = Vec::new();

@@ -11,7 +11,8 @@
 //! - `[two-asks]`: asks two permissions at once (two sub-agents' edits),
 //!   then says each answer it got;
 //! - `[withdrawn]`: asks a permission, then withdraws it (as an agent does
-//!   for a sub-agent stopped while it asks);
+//!   for a sub-agent stopped while it asks), and waits until
+//!   [`MockAgent::release`];
 //! - `[sub-agent]`: starts a sub-agent the way its settings say its agent
 //!   tells of them (`subagents`): announced, with its own session (its
 //!   task, its settings, a message and a call under it, its end); or by
@@ -255,6 +256,7 @@ impl MockAgent {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             // (Dropped unanswered: withdrawn.)
             drop(asked);
+            self.hold.notified().await;
             return say(cx, "withdrawn");
         }
         // Two asked at once, as two sub-agents ask in parallel: each its

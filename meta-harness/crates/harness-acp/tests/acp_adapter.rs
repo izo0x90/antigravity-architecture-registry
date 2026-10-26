@@ -189,13 +189,15 @@ async fn two_permissions_asked_at_once_are_each_answered() {
 /// no longer asked.
 #[tokio::test]
 async fn a_request_the_agent_withdraws_is_no_longer_asked() {
-    let (session, _agent) = open(RuntimeMode::ApprovalRequired).await;
+    let (session, agent) = open(RuntimeMode::ApprovalRequired).await;
     let mut events = session.events();
     let mut seen = Vec::new();
     session.start_turn(say("[withdrawn]")).await.unwrap();
+    // (While its turn still runs: not its end cancelling what it asked.)
+    collect_until(&mut events, &mut seen, |e| matches!(e, AdapterEvent::RequestUpdated { request } if request.status == RequestStatus::Cancelled)).await;
+    assert!(!seen.iter().any(turn_ended(1)), "{seen:?}");
+    agent.release();
     collect_until(&mut events, &mut seen, turn_ended(1)).await;
-    let last = seen.iter().rev().find_map(|e| if let AdapterEvent::RequestUpdated { request } = e { Some(request.status) } else { None });
-    assert_eq!(last, Some(RequestStatus::Cancelled), "{seen:?}");
 }
 
 #[tokio::test]

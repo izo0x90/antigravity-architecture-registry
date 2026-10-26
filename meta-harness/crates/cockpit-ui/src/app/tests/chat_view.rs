@@ -692,6 +692,8 @@ fn messages_are_moved_through_and_searched() {
     }
     told(&app, sub);
     frame(&ctx, &mut app, vec![]);
+    // (Found again at most so often while the items change.)
+    std::thread::sleep(std::time::Duration::from_millis(600));
     assert_eq!(app.search_status().map(|(t, _)| t).as_deref(), Some("/needle4 2/3"), "found again once the items changed");
 }
 
@@ -839,16 +841,24 @@ fn in_a_bar_what_waits_shows_its_answers_while_youre_elsewhere() {
 /// request's title can be a whole command), by width; the others whole.
 #[test]
 fn the_key_bar_cuts_only_a_chip_too_wide_by_width() {
-    let (ctx, mut app) = full_app();
-    focus(&ctx, &mut app, BufferKind::Chat);
-    let long = format!("cat {}", "crates/a_long_folder/".repeat(12));
-    request("r1", &long, None, Some(100)).into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
-    for _ in 0..3 {
-        frame(&ctx, &mut app, vec![]);
-    }
-    let output = frame(&ctx, &mut app, vec![]);
-    let bar = drawn_texts(&output).into_iter().filter(|(_, rect, _)| rect.top() > SCREEN.y - 40.0).collect::<Vec<_>>();
-    let allow = bar.iter().find(|(t, ..)| t.starts_with("y Allow:")).unwrap_or_else(|| panic!("{bar:?}"));
-    assert!(allow.1.width() <= SCREEN.x / 3.0 + 1.0, "cut to its share: {allow:?}");
-    assert!(bar.iter().any(|(t, ..)| t == "i Type a prompt"), "the rest whole: {bar:?}");
+    // Its "Allow: …" chip, as the bar draws it, for a request asking `title`.
+    let chip = |title: &str| {
+        let (ctx, mut app) = full_app();
+        focus(&ctx, &mut app, BufferKind::Chat);
+        request("r1", title, None, Some(100)).into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
+        for _ in 0..3 {
+            frame(&ctx, &mut app, vec![]);
+        }
+        let output = frame(&ctx, &mut app, vec![]);
+        let bar = drawn_texts(&output).into_iter().filter(|(_, rect, _)| rect.top() > SCREEN.y - 40.0).collect::<Vec<_>>();
+        let allow = bar.iter().find(|(t, ..)| t.starts_with("y Allow:")).cloned().unwrap_or_else(|| panic!("{bar:?}"));
+        (allow, bar.iter().any(|(t, ..)| t == "i Type a prompt"))
+    };
+    // Longer than 40 characters, narrower than a third of the bar: whole.
+    let fits = "cargo test --workspace --all-targets -- --nocapture now";
+    let ((text, rect, _), rest) = chip(fits);
+    assert!(text.contains(fits) && rect.width() <= SCREEN.x / 3.0 && rest, "whole: {text:?}");
+    // Wider than its share: cut to it.
+    let ((text, rect, _), rest) = chip(&format!("cat {}", "crates/a_long_folder/".repeat(12)));
+    assert!(rect.width() <= SCREEN.x / 3.0 + 1.0 && rest, "cut to its share: {text:?} {rect:?}");
 }

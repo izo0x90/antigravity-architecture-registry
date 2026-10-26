@@ -27,6 +27,8 @@ enum ChatCommand {
     /// where it started.
     StopSubagent,
     SubagentStart,
+    /// (Never offered as available: no harness lets it be done.)
+    MessageSubagent,
     NewSlot,
     CloseSlot,
     CloseSession,
@@ -82,6 +84,14 @@ impl ActionProvider for ChatStreamState {
         // The banners' ways out, under them while they're where you are.
         let on_banners = self.on_banners();
         let banner = |action: Action, caption: &str, icon: Option<&'static str>| if on_banners { action.on_item(Button, caption, icon) } else { action };
+        // The agent's own settings (its harness, mode, model) on its row;
+        // shown alone, a sub-agent's, not there (they'd read as the
+        // sub-agent's): its keys and the action list still offer them.
+        let alone = self.ui.alone.is_some();
+        let agents_row = |caption: &str| {
+            let caption = caption.to_owned();
+            move |action: Action| if alone { action } else { action.setting(caption, None) }
+        };
 
         // Session
         let new = Action::new("session.new", "New session", "A fresh conversation in this agent slot (the last one is saved)", C::NewSession);
@@ -122,7 +132,7 @@ impl ActionProvider for ChatStreamState {
                     Choice::new(i.instance_id.to_string(), label).current(Some(&i.instance_id) == self.active_instance().as_ref())
                 })
                 .collect();
-            out.push(Action::new("instance.select", "Choose harness", "Which agent harness this slot's next session runs on", C::SelectInstance).param(Param::Choice(choices)).setting("Harness", None));
+            out.push(Action::new("instance.select", "Choose harness", "Which agent harness this slot's next session runs on", C::SelectInstance).param(Param::Choice(choices)).with(agents_row("Harness")));
         }
         if let Some(view) = view {
             out.push(Action::new("session.close", "Close session", "Ends it; it stays saved to resume", C::CloseSession));
@@ -148,15 +158,20 @@ impl ActionProvider for ChatStreamState {
         if self.subagent_here().is_some() {
             out.push(Action::new("chat.open_subagent", "Open the sub-agent", "Its steps as they come, what it was told, stopping it", C::OpenSubagent).focused().importance(crate::actions::PRIMARY).group(crate::actions::Group::GoTo).on_item(crate::actions::Style::Button, "Open", Some(icon::ROBOT)));
         }
-        if let Some(seen) = self.ui.alone.as_ref().and_then(|id| Some(self.thread()?.subagent(id)?.subagent.clone())) {
-            if seen.status.working() {
+        // (Only what's needed of it, read where it's kept.)
+        let alone = self.ui.alone.as_ref().and_then(|id| view.and_then(|v| v.subagent(id)).map(|s| (s.subagent.status.working(), s.subagent.can_cancel, agents.stopping(id))));
+        if let Some((working, can_cancel, stopping)) = alone {
+            if working {
                 let stop = Action::new("chat.stop_subagent", "Stop the sub-agent", "Stops its work alone; the agent's turn goes on", C::StopSubagent).focused().importance(crate::actions::PRIMARY).on_view(crate::actions::Style::Button, "Stop it", Some(icon::STOP));
-                out.push(match (seen.can_cancel, agents.stopping(&seen.id)) {
+                out.push(match (can_cancel, stopping) {
                     (true, false) => stop,
                     (true, true) => stop.when(crate::actions::When::Unavailable).detail("Stopping it…"),
                     (false, _) => stop.when(crate::actions::When::Unavailable).detail("Its harness can't stop one sub-agent alone: stopping the turn stops it"),
                 });
             }
+            // (No harness lets one sub-agent be messaged alone: said, never
+            // faked.)
+            out.push(Action::new("chat.message_subagent", "Message the sub-agent", "Its harness doesn't let one sub-agent be messaged alone: tell the agent", C::MessageSubagent).focused().importance(MINOR).when(crate::actions::When::Unavailable));
             out.push(Action::new("chat.subagent_start", "Where the sub-agent started", "Its line in the agent's chat, in a panel", C::SubagentStart).focused().group(crate::actions::Group::GoTo).on_view(crate::actions::Style::Button, "Where it started", Some(icon::ARROW_BEND_UP_LEFT)));
         }
         let any = self.thread().is_some_and(|v| !v.subagents().is_empty());
@@ -184,7 +199,7 @@ impl ActionProvider for ChatStreamState {
                         .iter()
                         .map(|m| Choice::new(&m.id, &m.name).detail(m.description.clone()).current(current.as_ref() == Some(&m.id)))
                         .collect();
-                    out.push(Action::new("mode.native", "Set session mode", "The harness's own modes (what it may do without asking)", C::NativeMode).param(Param::Choice(choices)).setting("Mode", None));
+                    out.push(Action::new("mode.native", "Set session mode", "The harness's own modes (what it may do without asking)", C::NativeMode).param(Param::Choice(choices)).with(agents_row("Mode")));
                 }
                 for control in &controls.config {
                     let (param, boolean) = match &control.kind {
@@ -206,7 +221,7 @@ impl ActionProvider for ChatStreamState {
                     let action = Action::new(format!("config.{}", control.id), format!("Set {}", control.name), description, C::SetConfig { option: control.id.clone(), boolean })
                         .alias(format!("config.category.{}", wire_name(&control.category)))
                         .param(param)
-                        .setting(&control.name, None);
+                        .with(agents_row(&control.name));
                     out.push(action);
                 }
             }
@@ -215,12 +230,12 @@ impl ActionProvider for ChatStreamState {
                     let model = self.model();
                     let default = Choice::new("", "default").current(model.is_none());
                     let choices = std::iter::once(default).chain(s.models.iter().map(|m| Choice::new(&m.id, &m.name).current(model.as_ref() == Some(&m.id)))).collect();
-                    out.push(Action::new("model.next", "Model for the next session", "Which model the next session in this slot starts with", C::NextModel).param(Param::Choice(choices)).setting("Model", None));
+                    out.push(Action::new("model.next", "Model for the next session", "Which model the next session in this slot starts with", C::NextModel).param(Param::Choice(choices)).with(agents_row("Model")));
                 }
                 if let Some(s) = snapshot.filter(|s| !s.runtime_modes.is_empty()) {
                     let current = self.policy().runtime_mode;
                     let choices = s.runtime_modes.iter().map(|m| Choice::new(wire_name(m), mode_label(*m)).current(*m == current)).collect();
-                    out.push(Action::new("mode.runtime", "Runtime mode", "What the agent may do without asking you (files, commands)", C::RuntimeMode).param(Param::Choice(choices)).setting("Mode", None));
+                    out.push(Action::new("mode.runtime", "Runtime mode", "What the agent may do without asking you (files, commands)", C::RuntimeMode).param(Param::Choice(choices)).with(agents_row("Mode")));
                 }
             }
         }
@@ -343,17 +358,6 @@ impl ActionProvider for ChatStreamState {
             }
             out.push(banner(Action::new("chat.dismiss_error", "Put the error away", "Off the chat", C::DismissError).focused().importance(MINOR), "Put away", None));
         }
-        // Shown alone, a sub-agent's: the agent's own settings (its harness,
-        // mode, model) aren't on its row (they'd read as the sub-agent's);
-        // still offered, by their keys and the action list.
-        if self.ui.alone.is_some() {
-            const ITS: [&str; 3] = ["chat.stop_subagent", "chat.subagent_start", "chat.verbosity"];
-            for action in &mut out {
-                if action.at() == Some(crate::actions::At::Settings) && !ITS.contains(&action.id.as_str()) {
-                    action.control = None;
-                }
-            }
-        }
         out
     }
 
@@ -405,6 +409,7 @@ impl ActionProvider for ChatStreamState {
                     self.act(Act::StopSubagent { thread, id });
                 }
             }
+            ChatCommand::MessageSubagent => *cx.note = Some("Its harness doesn't let one sub-agent be messaged alone: tell the agent.".into()),
             ChatCommand::SubagentStart => {
                 if let Some(id) = self.ui.alone.clone() {
                     self.asks.push(Ask::Show { target: Target::SubagentStart { slot: self.ui.slot.clone(), id }, in_: Some(crate::kind::BufferKind::Chat) });

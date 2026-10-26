@@ -137,7 +137,8 @@ pub struct ChatView {
     /// How tall what's under the stream was last frame (the requests kept
     /// in sight, the typing box): the stream leaves room for it.
     pub(crate) below: f32,
-    /// Where its typing box is, while it's typed in.
+    /// Where its typing box is, while it's typed in, with the strip over
+    /// it (what's put over the box clears both).
     pub(crate) typing: Option<Rect>,
     /// A sign-in has the typing box (see `tend_sign_in_box`).
     pub(crate) sign_in_has_box: bool,

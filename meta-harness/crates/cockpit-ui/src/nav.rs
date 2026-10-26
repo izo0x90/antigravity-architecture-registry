@@ -206,6 +206,12 @@ impl Target {
         }
     }
 
+    /// It's looked at over what you're on (the quick look), not moved to:
+    /// a discussion, a sub-agent's work.
+    pub fn looked_at_over(&self) -> bool {
+        matches!(self, Self::Discussion(_) | Self::Subagent { .. })
+    }
+
     /// The component the target is about.
     pub fn component(&self) -> Option<&ComponentId> {
         match self {
@@ -490,6 +496,15 @@ impl Move {
         let offer = self.offer(label);
         if applies { offer } else { offer.when(crate::actions::When::Unavailable) }
     }
+}
+
+/// Which change of what a view lists this is, from what it's of (each
+/// part's own change: a version, a view's epoch and activity).
+pub fn changes_of(parts: impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::hash::DefaultHasher::new();
+    parts.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Which change of what a view lists this is: counted where what it

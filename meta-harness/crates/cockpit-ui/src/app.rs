@@ -292,7 +292,6 @@ pub struct CockpitApp {
     /// The mode the menus were opened from: closed without running
     /// anything, it's given back (typing, when they were opened from it).
     menu_from: InputMode,
-    /// A sub-agent over the panels (its slot's).
     /// The browser's notifications.
     pub alerts: crate::alerts::Alerts,
     /// What a call that finished later has to say (shown as the note).

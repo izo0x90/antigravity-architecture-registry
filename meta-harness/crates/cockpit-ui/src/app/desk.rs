@@ -19,8 +19,8 @@ pub struct Discussing {
 }
 
 /// What a search found (its items' keys, best first), as of which change
-/// of its view's items.
-pub type Found = (Option<u64>, Vec<String>);
+/// of its view's items, and when (ms).
+pub type Found = (Option<u64>, u64, Vec<String>);
 
 pub struct Desk {
     /// Its server's name (`here`: home's own).
@@ -62,7 +62,7 @@ pub struct Desk {
     /// best first), and as of which change of its items (`Navigable::
     /// items_changed`): the key bar says where the cursor is among them,
     /// found again once they change.
-    pub found: std::cell::RefCell<BTreeMap<BufferKind, Found>>,
+    pub found: std::cell::RefCell<BTreeMap<crate::panels::BufferId, Found>>,
     /// Go-tos: component details, and one under way or being picked.
     pub details: Details,
     pub pending_goto: Option<Pending>,

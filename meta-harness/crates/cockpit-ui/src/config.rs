@@ -123,10 +123,10 @@ impl Default for ChangesUi {
     }
 }
 
-/// The chat: how much a chat shows and what shows the agent at work, till
-/// it's picked there; how long after its last update it's said to be
-/// receiving still, and quiet too long; how long a sub-agent seen to end
-/// stays in sight.
+/// The chat: how much a chat shows, till it's picked there; what shows an
+/// agent at work, till it's picked in the cockpit; how long after its last
+/// update it's said to be receiving still, and quiet too long; how long a
+/// sub-agent seen to end stays in sight.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct ChatUi {
     pub shows: Verbosity,

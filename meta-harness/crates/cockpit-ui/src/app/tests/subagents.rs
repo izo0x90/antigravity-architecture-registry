@@ -113,11 +113,15 @@ fn a_chip_opens_its_work_in_the_quick_look_and_it_stops_alone_where_it_can() {
     click(&ctx, &mut app, chip);
     // A tap: the cursor where it started; its Open under it.
     at(&frame(&ctx, &mut app, vec![]), "Open");
-    // Typing to the agent meanwhile: opened, the quick look takes the keys.
-    app.input_mode = InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) };
-    app.asked = Some(("chat.open_subagent".to_owned(), None));
-    frame(&ctx, &mut app, vec![]);
-    frame(&ctx, &mut app, vec![]);
+    // Typing to the agent meanwhile (`i`), a double tap on its chip opens
+    // it: the quick look takes the keys.
+    frame(&ctx, &mut app, key("i"));
+    assert!(matches!(app.input_mode, InputMode::Insert { .. }));
+    let chip = at(&frame(&ctx, &mut app, vec![]), "Helper 1 · Read file1.rs");
+    let button = |pressed| egui::Event::PointerButton { pos: chip, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    for (n, events) in [vec![egui::Event::PointerMoved(chip)], vec![button(true)], vec![button(false)], vec![button(true)], vec![button(false)], vec![], vec![], vec![]].into_iter().enumerate() {
+        frame_at(&ctx, &mut app, events, 50.0 + n as f64 * 0.05);
+    }
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(app.quick_look.is_some() && text.contains("Sub-agent of") && text.contains("Task 1") && text.contains("Read file1.rs") && text.contains("Stop it"), "in the quick look: {text}");
     assert!(!text.contains("Looking at it."), "its work alone: {text}");

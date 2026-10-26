@@ -63,9 +63,6 @@ impl Harness {
     }
 }
 
-/// A sub-agent's update's `_meta` as each agent writes it (Claude Code:
-/// claude-agent-acp 0.89 to 0.95, `stampParentToolUseId`), its Task call's id
-/// `toolu_task`.
 fn say(text: &str) -> TurnInput {
     TurnInput::of(text)
 }

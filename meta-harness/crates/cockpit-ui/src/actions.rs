@@ -454,6 +454,11 @@ impl Action {
         self
     }
 
+    /// `self`, as `how` makes it (a placement decided elsewhere).
+    pub fn with(self, how: impl FnOnce(Self) -> Self) -> Self {
+        how(self)
+    }
+
     pub fn alias(mut self, name: impl Into<String>) -> Self {
         self.aliases.push(name.into());
         self

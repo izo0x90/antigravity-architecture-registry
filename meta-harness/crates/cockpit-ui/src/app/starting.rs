@@ -46,7 +46,7 @@ impl CockpitApp {
         out.push(Action::new("discuss.open", "Open a discussion here", "One of those on what you're on, waiting on you first", S::DiscussOpen).param(Param::Choice(choices)).group(Group::GoTo).importance(MINOR).when(when(available)));
         if let Some(d) = &self.desk.discussing {
             let lead = harness_contracts::LEAD;
-            let choices = self.slots_to_ask().into_iter().map(|(name, role)| Choice::new(name.clone(), name.clone()).detail(Some(if name == lead { "the lead (asked unless another is picked)".to_owned() } else { role }))).collect();
+            let choices = self.slots_to_ask().into_iter().map(|(name, role)| Choice::new(name.clone(), name.clone()).detail(Some(if name == lead { format!("the lead, asked unless another is picked ({role})") } else { role }))).collect();
             out.push(Action::new("discuss.ask", format!("Who answers {} on {}?", d.kind.words(), d.words), "An agent slot: the lead, unless another is picked", S::DiscussAsk).param(Param::Choice(choices)).group(Group::Act).importance(MINOR));
             let asked = d.asked.as_ref().map(|a| format!(", asking {a}")).unwrap_or_default();
             out.push(Action::new("discuss.write", format!("{} on {}{asked}", crate::nav::capitalized(d.kind.words()), d.words), "What it asks (# links a tag, @ a file or a symbol)", S::DiscussWrite).param(Param::Writing { hint: "what you ask".into(), start: d.text.clone(), links: true }).group(Group::Act).importance(MINOR));
@@ -57,7 +57,8 @@ impl CockpitApp {
     /// The agent slots a discussion can ask, by name: the lead first.
     fn slots_to_ask(&self) -> Vec<(String, String)> {
         let agents = self.desk.shared.agents.get();
-        let mut slots: Vec<(String, String)> = agents.store().slots.values().map(|s| (s.name.clone(), s.role.clone())).collect();
+        // (Each with how it is, as everywhere it's named.)
+        let mut slots: Vec<(String, String)> = agents.store().slots.values().map(|s| (s.name.clone(), format!("{}: {}", s.role, agents.state(&s.id).words()))).collect();
         slots.sort_by_key(|(name, _)| (name != harness_contracts::LEAD, name.clone()));
         slots
     }

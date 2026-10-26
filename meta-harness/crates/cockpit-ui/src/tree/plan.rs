@@ -27,8 +27,10 @@ pub struct PlanTree {
     seen: u64,
     /// Rows asked for, answered once the plan's read.
     asked: VecDeque<u64>,
-    /// Whose move it is in each of its discussions, as last said.
+    /// Whose move it is in each of its discussions, as last said, and as
+    /// of which change of the agents.
     whose: Whose,
+    agents_seen: u64,
 }
 
 /// A card's section's title, as the card says it (`logic`: Logic steps).
@@ -159,7 +161,12 @@ impl TreeSource for PlanTree {
             }
             None => false,
         };
+        // (Said again only when the agents or the discussions changed.)
         let agents = shared.agents.get();
+        if !read && agents.changes() == self.agents_seen {
+            return false;
+        }
+        self.agents_seen = agents.changes();
         let whose: Whose = self.discussions.iter().map(|d| (d.id.clone(), agents.whose(d).0)).collect();
         let said = whose != self.whose;
         self.whose = whose;

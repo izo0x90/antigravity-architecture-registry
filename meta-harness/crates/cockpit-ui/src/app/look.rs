@@ -36,9 +36,10 @@ impl CockpitApp {
         let chat = BufferId::new(BufferKind::Chat, PANE);
         if self.quick_look.as_ref().map(|q| q.buffer) != Some(chat) {
             self.look_at(chat, None, ctx);
-            let lead = Target::Agent { slot: Some(harness_contracts::SlotId::new(harness_contracts::LEAD)), thread: None };
-            let _ = self.desk.view_mut(BufferKind::Chat).show_target(&lead);
         }
+        // (The lead's, whatever the look's chat showed: a sub-agent alone.)
+        let lead = Target::Agent { slot: Some(harness_contracts::SlotId::new(harness_contracts::LEAD)), thread: None };
+        let _ = self.desk.view_mut(BufferKind::Chat).show_target(&lead);
         self.input_mode = InputMode::Insert { at: Host::Look };
     }
 
