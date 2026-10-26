@@ -85,6 +85,8 @@ pub(crate) enum Detail {
 }
 
 pub struct GraphState {
+    /// Which change of its cards this is (what search lists).
+    pub(crate) cards_changed: crate::nav::Changes,
     /// The views' settings and layout sizes (from the server).
     pub(crate) config: Option<TreeConfig>,
     config_requested: bool,
@@ -185,6 +187,7 @@ pub struct GraphState {
 impl Default for GraphState {
     fn default() -> Self {
         Self {
+            cards_changed: Default::default(),
             config: None,
             config_requested: false,
             plans: Vec::new(),
@@ -374,6 +377,7 @@ impl GraphState {
         let holder = tree.path.last().map(|c| c.key.clone());
         let leaf = tree.roots.first().cloned();
         self.tree = Some(tree);
+        self.cards_changed.bump();
         self.load = Load::Idle;
         self.land_on_first();
         if std::mem::take(&mut self.refit) {

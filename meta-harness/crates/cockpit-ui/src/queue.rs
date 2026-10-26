@@ -33,6 +33,8 @@ enum Reply {
 
 #[derive(Default)]
 pub struct QueueState {
+    /// Which change of its jobs this is (what search lists).
+    jobs_changed: crate::nav::Changes,
     pub plan: Option<PlanId>,
     pub snapshot: Option<QueueSnapshot>,
     /// Index into the snapshot's jobs.
@@ -90,6 +92,7 @@ impl QueueState {
     fn set(&mut self, snapshot: QueueSnapshot) {
         self.selected = self.selected.min(snapshot.jobs.len().saturating_sub(1));
         self.snapshot = Some(snapshot);
+        self.jobs_changed.bump();
     }
 
     pub fn job(&self) -> Option<&Job> {
@@ -294,6 +297,7 @@ impl crate::buffer::Buffer for QueueState {
         self.loaded = Some(wanted.clone());
         if self.plan != wanted {
             self.snapshot = None;
+            self.jobs_changed.bump();
             self.selected = 0;
         }
         self.plan = wanted.clone();
@@ -421,6 +425,10 @@ impl Navigable for QueueState {
             }
             _ => {}
         }
+    }
+
+    fn items_changed(&self) -> Option<u64> {
+        Some(self.jobs_changed.now())
     }
 
     fn items(&self) -> Vec<Item> {

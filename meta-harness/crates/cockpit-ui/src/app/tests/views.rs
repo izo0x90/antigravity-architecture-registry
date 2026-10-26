@@ -310,3 +310,13 @@ fn a_settings_picker_lists_its_choices_as_the_action_list_does_and_picks_one() {
     frame(&ctx, &mut app, key("j"));
     assert_ne!(app.desk.graph().selection, selected, "and they run");
 }
+
+/// Each view says when what search lists changes (the key bar's place
+/// among a search's matches isn't worked out again each frame); left: the
+/// two that read several sources (the spec card, the changes).
+#[test]
+fn each_view_says_when_what_search_lists_changes() {
+    let (_ctx, app) = full_app();
+    let silent: Vec<BufferKind> = BufferKind::ALL.into_iter().filter(|k| app.desk.view(*k).items_changed().is_none()).collect();
+    assert_eq!(silent, [BufferKind::Spec, BufferKind::Changes]);
+}

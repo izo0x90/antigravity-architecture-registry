@@ -555,6 +555,10 @@ impl Navigable for GraphState {
         }
     }
 
+    fn items_changed(&self) -> Option<u64> {
+        Some(self.cards_changed.now())
+    }
+
     fn items(&self) -> Vec<Item> {
         let Some(tree) = &self.tree else { return Vec::new() };
         tree.cards

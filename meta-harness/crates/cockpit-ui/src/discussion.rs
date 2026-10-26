@@ -340,6 +340,14 @@ impl Navigable for DiscussionView {
     fn fold(&mut self, _fold: Fold) {}
 
     /// What's said, to search.
+    /// (The discussions as of their change, which one's shown.)
+    fn items_changed(&self) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        (self.discussions.get().version(), &self.id).hash(&mut hasher);
+        Some(hasher.finish())
+    }
+
     fn items(&self) -> Vec<Item> {
         let Some(d) = self.shown() else { return Vec::new() };
         std::iter::once(Item::new("0", d.on.what.clone(), String::new())).chain(d.said.iter().enumerate().map(|(i, s)| Item::new((i + 1).to_string(), d.to_user(&s.by).to_owned(), s.text.clone()))).collect()

@@ -436,9 +436,9 @@ impl Navigable for ChatStreamState {
 
     /// As of which event, in which view of its thread (a resync's new
     /// one).
+    /// (Its thread's view, as of its last event; none: none.)
     fn items_changed(&self) -> Option<u64> {
-        let view = self.thread()?;
-        Some(view.epoch().wrapping_mul(1 << 40) ^ view.activity)
+        Some(self.thread().map_or(u64::MAX, |view| view.epoch().wrapping_mul(1 << 40) ^ view.activity))
     }
 
     fn items(&self) -> Vec<Item> {

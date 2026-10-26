@@ -47,6 +47,8 @@ enum Part {
 
 #[derive(Default)]
 pub struct InboxView {
+    /// Which change of what it shows this is (what search lists).
+    shown_changed: crate::nav::Changes,
     /// The item shown; none: the first open one.
     pub item: Option<NotificationId>,
     pub shown: Option<Shown>,
@@ -90,7 +92,7 @@ impl InboxView {
             self.item = crate::attention::list(store, None).first().map(|n| n.id.clone());
             self.cursor = usize::MAX;
         }
-        self.shown = self.item.as_ref().and_then(|id| store.notifications.get(id)).map(|n| {
+        let shown = self.item.as_ref().and_then(|id| store.notifications.get(id)).map(|n| {
             let harness = n.slot.as_ref().and_then(|s| store.slots.get(s)).and_then(|s| s.instance_id.as_ref()).and_then(|i| store.instances.get(i)).map(|i| i.display_name.clone());
             let from = [Some(crate::attention::detail(n, store, now_ms)), harness].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             let request = n.thread.as_ref().zip(n.request.as_ref()).and_then(|(t, r)| store.threads.get(t)?.request(r).cloned());
@@ -98,6 +100,10 @@ impl InboxView {
             let waits = request.as_ref().is_some_and(|r| agents.waits(r));
             Shown { notification: n.clone(), from, request, said, waits }
         });
+        if shown != self.shown {
+            self.shown = shown;
+            self.shown_changed.bump();
+        }
         let open = shared.open.get();
         self.at = self.item.as_ref().and_then(|id| open.iter().position(|(s, n)| *s == shared.server && n == id).map(|i| (i + 1, open.len())));
         let parts = self.parts();
@@ -305,6 +311,10 @@ impl Navigable for InboxView {
     }
 
     fn fold(&mut self, _fold: Fold) {}
+
+    fn items_changed(&self) -> Option<u64> {
+        Some(self.shown_changed.now())
+    }
 
     fn items(&self) -> Vec<Item> {
         let Some(shown) = &self.shown else { return Vec::new() };

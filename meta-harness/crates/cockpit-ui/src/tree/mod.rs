@@ -36,6 +36,8 @@ pub struct Row {
 }
 
 pub struct TreeBuffer {
+    /// Which change of its rows this is (what search lists).
+    rows_changed: crate::nav::Changes,
     /// Where its rows come from.
     source: Box<dyn TreeSource>,
     /// Rows shown: those matching it, and what contains them.
@@ -87,6 +89,7 @@ const ROW_H: f32 = 20.0;
 impl TreeBuffer {
     pub fn new(source: Box<dyn TreeSource>) -> Self {
         Self {
+            rows_changed: Default::default(),
             source,
             search_filter: String::new(),
             filter_before: None,
@@ -167,6 +170,7 @@ impl TreeBuffer {
 
     /// Takes its source's rows: what holds what, in tree order.
     pub fn take(&mut self, rows: Rows) {
+        self.rows_changed.bump();
         self.children.clear();
         self.parent.clear();
         self.opened.retain(|o| !rows.dropped.contains(o));
@@ -720,6 +724,10 @@ impl Navigable for TreeBuffer {
                 }
             }
         }
+    }
+
+    fn items_changed(&self) -> Option<u64> {
+        Some(self.rows_changed.now())
     }
 
     fn items(&self) -> Vec<Item> {

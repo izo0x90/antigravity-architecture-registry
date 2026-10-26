@@ -155,6 +155,8 @@ struct Symbol {
 }
 
 pub struct CodeViewerState {
+    /// Which change of its lines this is (what search lists).
+    lines_changed: crate::nav::Changes,
     pub current_file: String,
     pub content: String,
     pub lines: Vec<String>,
@@ -230,6 +232,7 @@ pub struct CodeViewerState {
 impl Default for CodeViewerState {
     fn default() -> Self {
         Self {
+            lines_changed: Default::default(),
             current_file: "Cargo.toml".to_string(),
             content: String::new(),
             lines: Vec::new(),
@@ -374,6 +377,7 @@ impl CodeViewerState {
     pub fn set_content(&mut self, content: String) {
         self.changes_asked = None;
         self.lines = content.lines().map(|s| s.to_string()).collect();
+        self.lines_changed.bump();
         self.content = content;
         self.is_loading = false;
         self.error_message = None;
@@ -1219,6 +1223,10 @@ impl Navigable for CodeViewerState {
         if let Some(line) = self.target_line {
             self.target_line = Some(self.unfolded_row_line(line));
         }
+    }
+
+    fn items_changed(&self) -> Option<u64> {
+        Some(self.lines_changed.now())
     }
 
     fn items(&self) -> Vec<Item> {

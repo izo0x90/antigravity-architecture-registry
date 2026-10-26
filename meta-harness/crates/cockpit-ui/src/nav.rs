@@ -492,6 +492,21 @@ impl Move {
     }
 }
 
+/// Which change of what a view lists this is: counted where what it
+/// lists is taken in (`Navigable::items_changed`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Changes(u64);
+
+impl Changes {
+    pub fn bump(&mut self) {
+        self.0 += 1;
+    }
+
+    pub fn now(self) -> u64 {
+        self.0
+    }
+}
+
 /// The moves through a list every list view offers: down and up, half a
 /// page, first and last.
 pub fn list_moves() -> Vec<crate::actions::Action> {

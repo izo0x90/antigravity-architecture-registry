@@ -430,6 +430,10 @@ impl Navigable for TagList {
 
     /// Every tag and every thing it's on, folded or not (search finds a
     /// thing under a folded tag; going to it unfolds the tag).
+    fn items_changed(&self) -> Option<u64> {
+        Some(self.tags.get().version())
+    }
+
     fn items(&self) -> Vec<Item> {
         let tags = self.tags.get();
         let mut out = Vec::new();

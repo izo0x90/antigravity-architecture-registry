@@ -48,6 +48,9 @@ type Cell = (u64, u16);
 
 #[derive(Default)]
 pub struct TerminalBuffer {
+    /// Which change of its lines (and of what the server found) this is
+    /// (what search lists).
+    lines_changed: crate::nav::Changes,
     /// The terminal it shows (none yet: it shows the first, or opens one).
     id: Option<TerminalId>,
     terminals: Reader<Terminals>,
@@ -259,6 +262,10 @@ impl TerminalBuffer {
             self.asked_now = None;
             ctx.request_repaint();
             return;
+        }
+        // (What it says may change its lines: listed again.)
+        if !polled.said.is_empty() {
+            self.lines_changed.bump();
         }
         for said in polled.said {
             match said {
@@ -690,6 +697,10 @@ impl Navigable for TerminalBuffer {
 
     /// Its lines: the screen's, and those the server found (through the
     /// whole scrollback) for the search under way.
+    fn items_changed(&self) -> Option<u64> {
+        Some(self.lines_changed.now())
+    }
+
     fn items(&self) -> Vec<Item> {
         let mut lines: BTreeMap<u64, String> = self.lines.screen_texts().collect();
         if let Some((_, found)) = &self.found {
@@ -706,10 +717,14 @@ impl Navigable for TerminalBuffer {
             crate::nav::SearchEvent::Typing(query) if !query.is_empty() => {
                 if self.found.as_ref().is_none_or(|(asked, _)| asked != query) {
                     self.found = Some((query.to_owned(), BTreeMap::new()));
+                    self.lines_changed.bump();
                     self.send(&ToTerminal::Search { query: query.to_owned() });
                 }
             }
-            crate::nav::SearchEvent::Typing(_) | crate::nav::SearchEvent::Cancelled => self.found = None,
+            crate::nav::SearchEvent::Typing(_) | crate::nav::SearchEvent::Cancelled => {
+                self.found = None;
+                self.lines_changed.bump();
+            }
             crate::nav::SearchEvent::Confirmed => {}
         }
     }
