@@ -1,0 +1,125 @@
+{
+ "recorded": "2026-10-25: Antigravity (agy_acp_server 1.4.3) replaying, on session/load in a fresh process, a session where it started one sub-agent: every session/update's params, as sent (the start call's input comes as text).",
+ "replay": [
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "content": {
+     "text": "Look at #probe-note. Start exactly one sub-agent and ask it to count the .py files in the current folder (not recursively) and report the number. Then reply in one line: the secret word from #probe-note, and the sub-agent's number.Embedded resource (nah://tag/probe-note):\n#probe-note (a tag)\nThe secret word is PELICAN-42.",
+     "type": "text"
+    },
+    "sessionUpdate": "user_message_chunk"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "availableCommands": [
+     {
+      "name": "plan",
+      "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+     },
+     {
+      "name": "logout",
+      "description": "Log out and clear stored credentials."
+     },
+     {
+      "name": "usage",
+      "description": "Show model token usage and quota limits."
+     }
+    ],
+    "sessionUpdate": "available_commands_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "call_1530130",
+    "title": "Running invoke_subagent",
+    "kind": "other",
+    "status": "completed",
+    "rawInput": "{\"Subagents\":[{\"Model\":\"inherit\",\"Prompt\":\"Count the .py files in the current folder (/tmp/acp-probe-agy) (not recursively) and report the number back.\",\"Role\":\"File Counter\",\"TypeName\":\"research\",\"Workspace\":\"inherit\"}],\"toolAction\":\"Invoking subagent to count py files\",\"toolSummary\":\"Counting python files\"}",
+    "sessionUpdate": "tool_call"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "call_1530130",
+    "status": "completed",
+    "rawOutput": "",
+    "sessionUpdate": "tool_call_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "content": {
+     "text": "I have launched a subagent to count the `.py` files in the current folder. I will wait for its report.",
+     "type": "text"
+    },
+    "sessionUpdate": "agent_message_chunk"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "call_2482570",
+    "title": "Running manage_subagents",
+    "kind": "other",
+    "status": "completed",
+    "rawInput": "{\"Action\":\"list\",\"toolAction\":\"Checking subagent status\",\"toolSummary\":\"Subagent status check\"}",
+    "sessionUpdate": "tool_call"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "call_2482570",
+    "status": "completed",
+    "rawOutput": "",
+    "sessionUpdate": "tool_call_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "call_1052116",
+    "title": "Running schedule",
+    "kind": "other",
+    "status": "completed",
+    "rawInput": "{\"DurationSeconds\":10,\"Prompt\":\"Check subagent response\",\"TimerCondition\":\"a12e81c7b52b70b4a6060116df086c6f\",\"toolAction\":\"Waiting for subagent\",\"toolSummary\":\"Wait for subagent\"}",
+    "sessionUpdate": "tool_call"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "toolCallId": "call_1052116",
+    "status": "completed",
+    "rawOutput": "",
+    "sessionUpdate": "tool_call_update"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "content": {
+     "text": "Waiting for the subagent to report the count.",
+     "type": "text"
+    },
+    "sessionUpdate": "agent_message_chunk"
+   }
+  },
+  {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "update": {
+    "content": {
+     "text": "PELICAN-42, 3",
+     "type": "text"
+    },
+    "sessionUpdate": "agent_message_chunk"
+   }
+  }
+ ]
+}

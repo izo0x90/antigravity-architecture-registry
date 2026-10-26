@@ -288,6 +288,11 @@ pub fn said<'a>(d: &'a harness_contracts::Discussion, s: &'a harness_contracts::
     Message { by: d.name_of(&s.by), at_ms: Some(s.at_ms), what, text: &s.text, markdown: s.by != harness_contracts::USER, tone, under: s.changed.iter().map(|c| format!("changed {}", c.what)).collect(), links: &[] }
 }
 
+/// A text's first line, cut short (what a list shows of what was said).
+pub fn first_line(text: &str) -> String {
+    text.lines().next().unwrap_or_default().chars().take(120).collect()
+}
+
 /// Whose move it is in a discussion, in a few words ("waiting on you",
 /// "waiting on lead", "settled"), and whether it's yours.
 pub fn whose(d: &harness_contracts::Discussion) -> (String, bool) {

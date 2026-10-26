@@ -62,10 +62,14 @@ impl CockpitApp {
             }
         };
         self.contents.push((here.at, content));
-        // It has the keyboard while typing is in its host (and no
-        // developer window has it).
-        let typing = self.input_mode == (InputMode::Insert { at: here.at }) && !self.feedback.is_modal_open && !self.feedback.is_issues_window_open && !self.feedback.is_inspecting;
-        let mut drawing = crate::buffer::Drawing { feedback: &mut self.feedback, focused: is_focused, leader_held, typing, fingers: self.fingers };
+        // It has the keyboard while typing is in its host and nothing over
+        // it takes the keys.
+        let typing = self.input_mode == (InputMode::Insert { at: here.at }) && self.keys_reach(here.at);
+        let room_under_waiting = match buttons {
+            ItemButtons::Floating => ui.spacing().interact_size.y + crate::theme::look().space_s * 3.0,
+            ItemButtons::Bar => 0.0,
+        };
+        let mut drawing = crate::buffer::Drawing { feedback: &mut self.feedback, focused: is_focused, leader_held, typing, fingers: self.fingers, room_under_waiting };
         let drawn = self.desk.in_use(kind);
         self.desk.on_screen(drawn);
         let (buffer, net) = self.desk.view_with_net(kind);
@@ -135,21 +139,39 @@ impl CockpitApp {
             None => (Host::Panel(self.desk.panels.focused()), self.panel_rects.get(self.desk.panels.focused()).copied()),
         };
         let Some(bounds) = bounds else { return };
-        let item = {
+        let (here_key, item) = {
             let view = self.desk.view(kind);
-            let here = view.here().or_else(|| view.cursor_key());
-            here.as_deref().and_then(|key| view.spots().into_iter().find(|s| s.key == key).map(|s| s.rect).or_else(|| view.drawn_at(key)))
+            let key = view.here().or_else(|| view.cursor_key());
+            let rect = key.as_deref().and_then(|key| view.spot_at(key));
+            (key, rect)
         };
         let typing = matches!(self.input_mode, InputMode::Insert { .. });
         let where_ = self.here();
-        let bound: Vec<Bound> = self.bound_actions().into_iter().filter(|b| b.layer == Layer::On && self.applies(b, where_)).collect();
-        let at = |places: &[At]| -> Vec<Bound> { bound.iter().filter(|b| b.action.at().is_some_and(|a| places.contains(&a))).cloned().collect() };
-        // Typing: the box's own under it, and what waits on you still under
-        // it (its answers). Else what you're on's, what waits with them.
-        let groups: Vec<(&str, Option<egui::Rect>, Vec<Bound>)> = match typing {
-            true => vec![("item_controls", self.desk.view(kind).typing_rect(), at(&[At::Typing])), ("waiting_controls", item, at(&[At::Waiting]))],
-            false => vec![("item_controls", item, at(&[At::Item, At::Waiting]))],
+        let bound: Vec<Bound> = self.bound_actions().into_iter().filter(|b| b.layer == Layer::On && b.action.at().is_some_and(At::under_something) && self.applies(b, where_)).collect();
+        // What waits, each under its own place (none said: what you're on).
+        let mine = |b: &Bound| b.action.control.as_ref().is_none_or(|c| c.under.is_none() || c.under == here_key);
+        let (yours, waiting): (Vec<Bound>, Vec<Bound>) = bound.into_iter().partition(|b| b.action.at() != Some(At::Waiting) || mine(b));
+        let mut groups: Vec<(egui::Id, Option<egui::Rect>, Vec<Bound>)> = match typing {
+            // Typing: the box's own under it, what waits on you where you
+            // are still under that.
+            true => {
+                let (box_, here): (Vec<Bound>, Vec<Bound>) = yours.into_iter().filter(|b| b.action.at() != Some(At::Item)).partition(|b| b.action.at() == Some(At::Typing));
+                vec![(egui::Id::new("item_controls"), self.desk.view(kind).typing_rect(), box_), (egui::Id::new("waiting_controls"), item, here)]
+            }
+            false => vec![(egui::Id::new("item_controls"), item, yours.into_iter().filter(|b| b.action.at() != Some(At::Typing)).collect())],
         };
+        // The rest of what waits: each under its own (in a bar, only what
+        // you're on's: one row says what it's for).
+        if self.item_bars.iter().all(|(h, _)| *h != host) {
+            let view = self.desk.view(kind);
+            for b in waiting {
+                let Some(key) = b.action.control.as_ref().and_then(|c| c.under.clone()) else { continue };
+                match groups.iter_mut().find(|(id, ..)| *id == egui::Id::new(("waiting_controls", &key))) {
+                    Some((.., group)) => group.push(b),
+                    None => groups.push((egui::Id::new(("waiting_controls", &key)), view.spot_at(&key), vec![b])),
+                }
+            }
+        }
         let look = crate::theme::look();
         let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, at: host, note: &mut self.note, asked: &mut self.asked };
         // In a bar: its host's row, the buttons then what they act on
@@ -181,7 +203,6 @@ impl CockpitApp {
         // room); it needs to be on screen.
         let mut drawn = Vec::new();
         for (id, anchor, here) in groups {
-            let id = egui::Id::new(id);
             let Some(anchor) = anchor.map(|r| r.intersect(bounds)).filter(|r| r.is_positive() && !here.is_empty()) else { continue };
             let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(anchor.width(), look.text_title * 2.0), |r| r.size());
             let below = anchor.bottom() + look.space_s;

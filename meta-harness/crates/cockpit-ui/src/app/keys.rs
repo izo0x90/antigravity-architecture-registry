@@ -50,9 +50,9 @@ impl CockpitApp {
             return;
         }
         let keymap = &self.config.keymap;
-        let (leader_pressed, leader_released, dragged, back) = ctx.input(|i| {
+        let (leader_pressed, leader_released, dragged) = ctx.input(|i| {
             let dragged = i.pointer.primary_down() && (i.pointer.delta().length_sq() > 2.0 || i.pointer.is_decidedly_dragging());
-            (keymap.leader.pressed(i), keymap.leader.released(i), dragged, keymap.back.pressed(i))
+            (keymap.leader.pressed(i), keymap.leader.released(i), dragged)
         });
         if leader_pressed {
             self.leader_tap.press();

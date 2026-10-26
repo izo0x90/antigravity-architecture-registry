@@ -1,108 +1,148 @@
 //! A chat's sub-agents: a strip above the typing box while any is at work
-//! (or has just ended), a chip each that opens it over the panels; how
-//! many are at work, for the live line and the panel's top line; moving
-//! from one to the next. What each is comes from the agents (`Seen`).
+//! (or was just seen to end), a chip each that opens it in the quick look;
+//! how many are at work, for the live line and the panel's top line;
+//! moving from one to the next. Shown alone (`ChatView::alone`), the chat
+//! is one sub-agent's: who it is and how it's doing above its own work.
+//! What each is comes from the agents (`Seen`); its states are the status
+//! vocabulary's.
 
-use egui::Color32;
-use harness_contracts::{ItemBody, SubagentStatus};
+use harness_contracts::ItemBody;
 
 use super::*;
+use super::live::{span_changes, span_words};
 use crate::store::Seen;
 
-/// How long one that ended stays in the strip, in seconds.
-const ENDED_STAYS: f64 = 6.0;
 /// Chips shown before they fold into one ("4 sub-agents working").
 const CHIPS_MOST: usize = 3;
 /// The folded strip's place (moved to, it shows each).
 const EACH: &str = "subagents";
 
-/// Its state in a word, and its colour.
-pub(crate) fn state_words(status: SubagentStatus) -> (&'static str, Color32) {
-    match status {
-        SubagentStatus::Running => ("working", colors().info),
-        SubagentStatus::Waiting => ("waiting on you", colors().warn),
-        SubagentStatus::Completed => ("done", colors().ok),
-        SubagentStatus::Idle => ("ended", colors().muted),
-        SubagentStatus::Failed => ("failed", colors().error),
-        SubagentStatus::Cancelled => ("stopped", colors().muted),
-    }
+/// How many are at work, in words.
+pub(super) fn working_words(n: usize) -> String {
+    if n == 1 { "1 sub-agent working".to_owned() } else { format!("{n} sub-agents working") }
 }
 
-/// How long it ran (or has, at `now`).
-pub(crate) fn elapsed(seen: &Seen, now: f64) -> String {
-    let s = (seen.ended.unwrap_or(now) - seen.since).max(0.0) as u64;
-    if s < 60 { format!("{s} s") } else { format!("{} min", s / 60) }
+/// How long it ran, or has (seconds), as the server stamped it.
+fn ran_s(seen: &Seen) -> f64 {
+    let s = &seen.subagent;
+    let end = s.ended_ms.unwrap_or_else(crate::attention::now_ms);
+    end.saturating_sub(s.started_ms) as f64 / 1000.0
 }
 
 impl ChatStreamState {
     /// How many sub-agents of the thread it shows are at work.
     pub(crate) fn subagents_working(&self) -> usize {
-        self.thread().map_or(0, |v| v.subagents().iter().filter(|s| s.subagent.status.working()).count())
+        self.thread().map_or(0, |v| v.subagents_working())
     }
 
-    /// The strip: each at work (or just ended) a chip, its name, its state,
-    /// what it's doing, how long; past a few, one chip with how many. Each
-    /// chip is a place: a tap puts the cursor on where it started (its
-    /// controls under it), a double tap (or Enter) opens it; the count's
-    /// shows each.
+    /// The strip: each at work (or seen to end a moment ago) a chip, its
+    /// state, name, what it's doing, how long; past a few, one chip with
+    /// how many. Each chip is a place: a tap puts the cursor on where it
+    /// started (its controls under it), a double tap (or Enter) opens it;
+    /// the count's shows each.
     pub(super) fn render_subagents(&mut self, ui: &mut egui::Ui) {
         let now = ui.input(|i| i.time);
-        let Some(view) = self.thread() else { return };
-        let shown: Vec<(Seen, Option<usize>)> = view.subagents().iter().filter(|s| s.subagent.status.working() || s.ended.is_some_and(|e| now - e < ENDED_STAYS)).map(|s| (s.clone(), view.shown_at(&s.subagent.item_id))).collect();
-        drop(view);
-        if shown.is_empty() {
+        let stays = self.settings.subagent_ended_s;
+        let shown = |s: &&Seen| s.subagent.status.working() || s.ended_seen.is_some_and(|e| now - e < stays);
+        let Some(count) = self.thread().map(|v| v.subagents().iter().filter(shown).count()) else { return };
+        // (Few enough again: folded again once there are more.)
+        if count <= CHIPS_MOST {
+            self.ui.subagents_unfolded = false;
+        }
+        if count == 0 {
             return;
         }
-        // (Its times change each second; one that ended goes after a while.)
-        ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
-        let look = crate::theme::look();
-        let tall = ui.spacing().interact_size.y.max(look.text_title * 1.8);
-        let font = egui::FontId::proportional(look.text_body);
-        let mut chips: Vec<(String, egui::Rect)> = Vec::new();
+        let (unfolded, cursor) = (self.ui.subagents_unfolded, self.ui.cursor);
+        let Some(view) = self.thread() else { return };
+        // (When its words next change: a time's second, one seen to end
+        // going.)
+        let mut next = f64::INFINITY;
+        let width = (ui.available_width() / 2.0).max(crate::theme::look().space_huge);
+        let mut chips: Vec<(String, Rect)> = Vec::new();
         ui.horizontal_wrapped(|ui| {
-            // Each as wide as its words, at most half the strip; one that
-            // doesn't fit the row goes to the next.
-            let chip = |ui: &mut egui::Ui, job: egui::text::LayoutJob, on: bool| {
-                let pad = 2.0 * (look.space_m + look.line_thin);
-                let wide = ui.fonts_mut(|f| f.layout_job(job.clone())).size().x + pad;
-                let width = wide.min((ui.max_rect().width() / 2.0).max(pad * 4.0));
-                if ui.available_width() < width {
-                    ui.end_row();
-                }
-                let stroke = egui::Stroke::new(look.line_thin, if on { colors().focus } else { colors().border });
-                ui.allocate_ui(egui::vec2(width, tall), |ui| {
-                    egui::Frame::NONE.fill(colors().overlay_raised).stroke(stroke).corner_radius(look.radius_m).inner_margin(crate::theme::margin2(look.space_m, look.space_s)).show(ui, |ui| {
-                        ui.set_min_height(tall - 2.0 * look.space_s);
-                        ui.set_max_width(width - pad);
-                        ui.add(egui::Label::new(job).truncate());
-                    })
-                    .response
-                    .rect
-                })
-                .inner
-            };
-            if shown.len() > CHIPS_MOST && !self.ui.subagents_unfolded {
-                let working = shown.iter().filter(|(s, _)| s.subagent.status.working()).count();
-                let job = egui::text::LayoutJob::simple_singleline(format!("{} {working} sub-agents working", icon::ROBOT), font.clone(), colors().text_strong);
-                chips.push((EACH.to_owned(), chip(ui, job, false)));
+            if count > CHIPS_MOST && !unfolded {
+                let working = view.subagents_working();
+                let words = if working > 0 { working_words(working) } else { format!("{count} sub-agents ended") };
+                let rect = crate::status::pill(ui, &format!("{} {words}", icon::ROBOT), colors().text_strong, None, width).rect;
+                chips.push((EACH.to_owned(), rect));
                 return;
             }
-            for (seen, at) in &shown {
+            for seen in view.subagents().iter().filter(shown) {
                 let s = &seen.subagent;
-                let (state, colour) = state_words(s.status);
-                let mut words = vec![s.title.clone()];
-                words.push(s.doing.clone().filter(|_| s.status.working()).unwrap_or_else(|| state.to_owned()));
-                words.push(elapsed(seen, now));
-                let mut job = egui::text::LayoutJob::default();
-                job.append(&format!("{} ", icon::CIRCLE), 0.0, egui::TextFormat::simple(font.clone(), colour));
-                job.append(&words.join(" · "), 0.0, egui::TextFormat::simple(font.clone(), colors().text_strong));
-                let rect = chip(ui, job, at.is_some() && self.ui.cursor == *at);
+                let ran = ran_s(seen);
+                next = next.min(match seen.ended_seen {
+                    Some(e) => stays - (now - e),
+                    None => span_changes(ran),
+                });
+                let (glyph, word, colour) = crate::status::look(crate::status::subagent(s.status));
+                let doing = seen.doing.as_deref().filter(|_| s.status == harness_contracts::SubagentStatus::Running).unwrap_or(&word);
+                let at = view.shown_at(&s.item_id);
+                let on = (at.is_some() && cursor == at).then(|| colors().selection);
+                let rect = crate::status::pill(ui, &format!("{glyph} {} · {doing} · {}", s.title, span_words(ran)), colour, on, width).rect;
                 if let Some(at) = at {
                     chips.push((at.to_string(), rect));
                 }
             }
         });
+        drop(view);
+        if next.is_finite() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(next.max(0.05)));
+        }
         self.ui.spots.extend(chips.into_iter().map(|(key, rect)| Spot { key, rect }));
+    }
+
+    /// Shown alone: who the sub-agent is (its name, kind, how it's doing,
+    /// how long), its task, what it's doing; what it was told and what it
+    /// answered, folded; and, when its harness doesn't say which steps are
+    /// its, that they're in the agent's chat.
+    pub(super) fn render_subagent_head(&mut self, ui: &mut egui::Ui) {
+        let Some(id) = self.ui.alone.clone() else { return };
+        let look = crate::theme::look();
+        let told_steps = self.instance().is_some_and(|i| i.capabilities.subagents.lifecycle_events);
+        let Some(view) = self.thread() else { return };
+        let Some(seen) = view.subagent(&id) else {
+            ui.label(RichText::new("That sub-agent isn't in its chat now.").size(look.text_body).color(colors().muted));
+            return;
+        };
+        let s = &seen.subagent;
+        let ran = ran_s(seen);
+        if s.status.working() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(span_changes(ran)));
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(format!("{} {}", icon::ROBOT, s.title)).strong().size(look.text_title).color(colors().text_strong));
+            if let Some(kind) = &s.kind {
+                ui.label(RichText::new(kind).size(look.text_small).color(colors().muted));
+            }
+            crate::status::chip(ui, crate::status::subagent(s.status), None);
+            // (Not under a second, ended: its times are a replay's, not
+            // how long it ran.)
+            if s.status.working() || ran >= 1.0 {
+                ui.label(RichText::new(span_words(ran)).size(look.text_small).color(colors().muted));
+            }
+        });
+        // Its task: as its harness says it, else its prompt's first line.
+        if let Some(task) = s.description.clone().or_else(|| s.prompt.as_deref().map(crate::conversation::first_line)) {
+            ui.label(RichText::new(task).size(look.text_body));
+        }
+        if let Some(doing) = seen.doing.as_ref().filter(|_| s.status == harness_contracts::SubagentStatus::Running) {
+            ui.label(RichText::new(format!("Doing: {doing}")).size(look.text_small).color(colors().info));
+        }
+        let most = ui.available_height() / 3.0;
+        for (said, text) in [("What it was told", &s.prompt), ("What it answered", &s.answer)] {
+            if let Some(text) = text {
+                egui::CollapsingHeader::new(RichText::new(said).size(look.text_small)).id_salt((said, &s.id)).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt((said, &s.id, "text")).max_height(most).show(ui, |ui| {
+                        ui.label(RichText::new(text).size(look.text_small));
+                    });
+                });
+            }
+        }
+        drop(view);
+        if self.shape().rows.is_empty() {
+            let words = if told_steps { "Its steps show here as they come." } else { "Its harness doesn't say which steps are its: they're in the agent's chat." };
+            ui.label(RichText::new(words).size(look.text_small).color(colors().muted));
+        }
     }
 
     /// The strip's count, as a place: moved to, it shows each.
@@ -136,17 +176,20 @@ impl ChatStreamState {
         }
     }
 
-    /// The cursor is on where a sub-agent started.
-    pub(super) fn subagent_here(&self) -> bool {
-        self.thread().is_some_and(|v| matches!(self.ui.cursor.and_then(|at| v.in_stream(at)).map(|i| &i.body), Some(ItemBody::Subagent { .. })))
+    /// The sub-agent whose item the cursor is on.
+    pub(super) fn subagent_here(&self) -> Option<harness_contracts::SubagentId> {
+        let view = self.thread()?;
+        match &view.in_stream(self.ui.cursor?)?.body {
+            ItemBody::Subagent { subagent_id } => Some(subagent_id.clone()),
+            _ => None,
+        }
     }
 
-    /// The sub-agent whose item the cursor is on, opened over the panels.
+    /// The sub-agent whose item the cursor is on, opened (in the quick
+    /// look, over what you're on).
     pub(super) fn open_subagent_here(&mut self) -> bool {
-        let Some(view) = self.thread() else { return false };
-        let Some(ItemBody::Subagent { subagent_id }) = self.ui.cursor.and_then(|at| view.in_stream(at)).map(|i| i.body.clone()) else { return false };
-        drop(view);
-        self.asks.push(Ask::Subagent { slot: self.ui.slot.clone(), id: subagent_id });
+        let Some(id) = self.subagent_here() else { return false };
+        self.asks.push(Ask::Show { target: Target::Subagent { slot: self.ui.slot.clone(), id }, in_: None });
         true
     }
 }

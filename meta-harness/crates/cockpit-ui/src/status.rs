@@ -104,18 +104,36 @@ pub fn chip(ui: &mut egui::Ui, name: &str, detail: Option<&str>) -> egui::Respon
         Some(d) => format!("{glyph} {d} {word}"),
         None => format!("{glyph} {word}"),
     };
+    pill(ui, &text, color, None, f32::INFINITY)
+}
+
+/// `text` as a chip, in `color` (a state's), at most `widest` wide (cut to
+/// fit, all of it on hover), filled with `fill` (where the cursor is: as
+/// every place it's on), else a tint of its colour. Sized before it's
+/// placed, so a wrapping row moves it whole to the next line.
+pub fn pill(ui: &mut egui::Ui, text: &str, color: Color32, fill: Option<Color32>, widest: f32) -> egui::Response {
     let look = crate::theme::look();
     let margin = crate::theme::margin2(look.space_sm, look.space_hair);
-    // Sized before it's placed, so a wrapping row moves it whole to the next line.
-    let galley = ui.painter().layout_no_wrap(text.clone(), egui::FontId::proportional(look.text_body), color);
-    let size = galley.size() + egui::vec2(margin.sum().x, margin.sum().y) + egui::Vec2::splat(look.line_thin * 2.0);
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), egui::FontId::proportional(look.text_body), color);
+    let pad = egui::vec2(margin.sum().x, margin.sum().y) + egui::Vec2::splat(look.line_thin * 2.0);
+    let size = egui::vec2((galley.size().x + pad.x).min(widest), galley.size().y + pad.y);
+    if ui.layout().main_wrap && ui.available_width() < size.x {
+        ui.end_row();
+    }
+    let fill = fill.unwrap_or_else(|| color.gamma_multiply(0.15));
     ui.allocate_ui(size, |ui| {
         egui::Frame::NONE
-            .fill(color.gamma_multiply(0.15))
+            .fill(fill)
             .stroke(egui::Stroke::new(look.line_thin, color.gamma_multiply(0.6)))
             .corner_radius(look.radius_xl)
             .inner_margin(margin)
-            .show(ui, |ui| ui.add(egui::Label::new(RichText::new(text).size(look.text_body).color(color)).extend()))
+            .show(ui, |ui| {
+                ui.set_max_width(size.x - pad.x);
+                let label = ui.add(egui::Label::new(RichText::new(text).size(look.text_body).color(color)).truncate());
+                if galley.size().x + pad.x > widest {
+                    label.on_hover_text(text);
+                }
+            })
             .response
     })
     .inner
@@ -167,6 +185,19 @@ pub fn job(state: &arch_graph::JobState) -> &'static str {
         arch_graph::JobState::Retrying => "job_retrying",
         arch_graph::JobState::Failed => "job_failed",
         arch_graph::JobState::Done => "job_done",
+    }
+}
+
+/// The vocabulary's name for how a sub-agent's doing.
+pub fn subagent(status: harness_contracts::SubagentStatus) -> &'static str {
+    use harness_contracts::SubagentStatus as S;
+    match status {
+        S::Running => "subagent_running",
+        S::Waiting => "subagent_waiting",
+        S::Idle => "subagent_idle",
+        S::Completed => "subagent_completed",
+        S::Failed => "subagent_failed",
+        S::Cancelled => "subagent_cancelled",
     }
 }
 

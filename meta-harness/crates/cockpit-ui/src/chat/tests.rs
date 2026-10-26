@@ -521,7 +521,7 @@ fn an_agent_silent_since_it_became_known_reads_quiet() {
     assert_eq!(activity.liveness, crate::indicator::Liveness::Quiet);
     assert!(chat.live_words(&activity).0.starts_with("No word for 2 min"), "{:?}", chat.live_words(&activity).0);
     // A sub-agent of its at work: it waits on it, not gone quiet.
-    let sub = harness_contracts::Subagent { id: harness_contracts::SubagentId::new("a1"), thread_id: ThreadId::new("t"), item_id: ItemId::new("i9"), title: "Helper".into(), kind: None, description: None, prompt: None, doing: None, status: harness_contracts::SubagentStatus::Running, can_cancel: false };
+    let sub = harness_contracts::Subagent { id: harness_contracts::SubagentId::new("a1"), thread_id: ThreadId::new("t"), item_id: ItemId::new("i9"), title: "Helper".into(), kind: None, description: None, prompt: None, answer: None, status: harness_contracts::SubagentStatus::Running, started_ms: 0, ended_ms: None, can_cancel: false };
     chat.apply(session(AdapterEvent::SubagentUpdated { subagent: sub }));
     let view = chat.thread().unwrap().clone();
     let activity = chat.activity(&view, 130.0);

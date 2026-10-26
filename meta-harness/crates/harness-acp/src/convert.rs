@@ -3,7 +3,7 @@
 use agent_client_protocol::schema::v1 as acp;
 use harness_contracts::{
     ConfigCategory, ConfigChoice, ConfigControl, ConfigKind, ContentBlock, Diff,
-    FileLocation, ItemStatus, ModeOption, ModelOption, PlanStep, SlashCommand, StepStatus, ToolKind, TurnStatus, Usage,
+    FileLocation, ItemStatus, ModeOption, ModelOption, PlanStep, SlashCommand, StepStatus, SubagentStatus, ToolKind, TurnStatus, Usage,
 };
 
 pub fn content_block(block: &acp::ContentBlock) -> ContentBlock {
@@ -185,14 +185,91 @@ pub fn models_from_controls(controls: &[ConfigControl]) -> Option<Vec<ModelOptio
     })
 }
 
-/// What `pointer` (a JSON pointer) names in `meta` (none: nothing there).
-pub fn pointer_in<'a>(meta: &'a acp::Meta, pointer: &str) -> Option<&'a serde_json::Value> {
-    let path = pointer.strip_prefix('/')?;
-    let (key, rest) = path.split_once('/').map_or((path, None), |(key, rest)| (key, Some(rest)));
-    let value = meta.get(&key.replace("~1", "/").replace("~0", "~"))?;
-    match rest {
-        Some(rest) => value.pointer(&format!("/{rest}")),
-        None => Some(value),
+/// A `session/update` as it's read: the session it's under, and what it
+/// says. Read from the message as it came (not copied first); kinds the
+/// ACP schema we build on doesn't have yet (the sub-agents draft) are read
+/// here too, so its format has one owner.
+pub fn session_update(params: serde_json::Value) -> Option<(String, Update)> {
+    let serde_json::Value::Object(mut params) = params else { return None };
+    let session = params.get("sessionId").and_then(serde_json::Value::as_str)?.to_owned();
+    let update = params.remove("update")?;
+    let text = |key: &str| update.get(key).and_then(serde_json::Value::as_str).map(str::to_owned);
+    let read = match update.get("sessionUpdate").and_then(serde_json::Value::as_str).unwrap_or_default() {
+        "subagent_update" => Update::Subagent(SubagentUpdate {
+            session: text("sessionId")?,
+            title: text("title"),
+            description: text("description"),
+            status: update.get("state").map(subagent_status),
+            stop: update.get("capabilities").map(|c| if c.get("cancel").is_some() { Stop::Alone } else { Stop::WithTheTurn }),
+        }),
+        "session_message" => Update::Message(SessionMessage {
+            from: text("senderSessionId"),
+            to: text("recipientSessionId"),
+            text: update.get("content").and_then(serde_json::Value::as_array).into_iter().flatten().filter_map(|b| b.get("text").and_then(serde_json::Value::as_str)).collect(),
+        }),
+        // Its parts as they stream: the whole one comes as `session_message`.
+        "session_message_chunk" => return None,
+        kind => {
+            let kind = kind.to_owned();
+            match serde_json::from_value::<acp::SessionUpdate>(update) {
+                Ok(update) => Update::Typed(update),
+                Err(e) => Update::Unread { kind, why: e.to_string() },
+            }
+        }
+    };
+    Some((session, read))
+}
+
+/// What a `session/update` says.
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant, reason = "made and taken at once, per update: a box would cost an allocation each")]
+pub enum Update {
+    Typed(acp::SessionUpdate),
+    /// A sub-agent announced, or its state changed.
+    Subagent(SubagentUpdate),
+    /// A message between the agent and a sub-agent (its task, its answer).
+    Message(SessionMessage),
+    /// Of a kind it can't read (`why`).
+    Unread { kind: String, why: String },
+}
+
+#[derive(Debug, Default)]
+pub struct SubagentUpdate {
+    /// Its own session.
+    pub session: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub status: Option<SubagentStatus>,
+    /// How it can be stopped (none: not said).
+    pub stop: Option<Stop>,
+}
+
+/// How a sub-agent can be stopped, as its harness says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stop {
+    /// On its own, the turn going on.
+    Alone,
+    /// Only with the turn.
+    WithTheTurn,
+}
+
+#[derive(Debug, Default)]
+pub struct SessionMessage {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub text: String,
+}
+
+/// A sub-agent's state as the draft says it (`running`, `requires_action`,
+/// `idle` with how it stopped, `unknown`).
+fn subagent_status(state: &serde_json::Value) -> SubagentStatus {
+    match (state.get("state").and_then(serde_json::Value::as_str), state.get("stopReason").and_then(serde_json::Value::as_str)) {
+        (Some("running"), _) => SubagentStatus::Running,
+        (Some("requires_action"), _) => SubagentStatus::Waiting,
+        (Some("idle"), Some("end_turn")) => SubagentStatus::Completed,
+        (Some("idle"), Some("cancelled")) => SubagentStatus::Cancelled,
+        (Some("idle"), Some("error" | "refusal")) => SubagentStatus::Failed,
+        _ => SubagentStatus::Idle,
     }
 }
 

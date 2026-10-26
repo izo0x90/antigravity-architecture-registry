@@ -16,7 +16,8 @@ use crate::app::TagEditing;
 use crate::app::notes::{NotesHere, TagHere};
 use crate::actions::{Choice, Group, When};
 use crate::nav::{Item, Target, Things};
-use crate::tags::{TagAct, first_line, thing_name};
+use crate::conversation::first_line;
+use crate::tags::{TagAct, thing_name};
 
 impl CockpitApp {
     /// The things at the cursor where you are that a tag can be on.

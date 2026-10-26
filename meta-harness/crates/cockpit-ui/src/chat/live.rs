@@ -15,12 +15,12 @@ pub(super) fn spot() -> Vec2 {
 }
 
 /// A while, in words: "12 s", "3 min".
-fn span_words(seconds: f64) -> String {
+pub(super) fn span_words(seconds: f64) -> String {
     if seconds < 60.0 { format!("{} s", seconds as u64) } else { format!("{} min", (seconds / 60.0) as u64) }
 }
 
 /// When a while's words next change (a second's, or a minute's, turn).
-fn span_changes(seconds: f64) -> f64 {
+pub(super) fn span_changes(seconds: f64) -> f64 {
     if seconds < 60.0 { 1.0 - seconds.fract() } else { 60.0 - seconds % 60.0 }
 }
 
@@ -35,7 +35,7 @@ impl ChatStreamState {
         // (Asking till your answer's taken: answered here, it's on its way.)
         let asking = view.requests().iter().any(|r| r.status == harness_contracts::RequestStatus::Pending);
         // (A sub-agent of its at work: it waits on it, not gone quiet.)
-        let delegating = view.subagents().iter().any(|s| s.subagent.status.working());
+        let delegating = view.subagents_working() > 0;
         let liveness = match since_last {
             _ if !self.connected => Liveness::Disconnected,
             _ if asking => Liveness::Asking,
@@ -80,8 +80,7 @@ impl ChatStreamState {
         // Its sub-agents at work, said with it.
         match self.subagents_working() {
             0 => (words, colour, next),
-            1 => (format!("{words} · 1 sub-agent working"), colour, next),
-            n => (format!("{words} · {n} sub-agents working"), colour, next),
+            n => (format!("{words} · {}", super::subagents::working_words(n)), colour, next),
         }
     }
 

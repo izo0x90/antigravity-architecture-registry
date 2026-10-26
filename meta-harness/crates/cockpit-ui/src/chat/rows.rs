@@ -46,6 +46,21 @@ pub(crate) struct Shape {
 }
 
 impl Shape {
+    /// The rows of items taken from `start` on, at their places in the
+    /// whole.
+    pub(crate) fn from(mut self, start: usize) -> Self {
+        for row in &mut self.rows {
+            (row.first, row.last) = (row.first + start, row.last + start);
+            row.run = row.run.map(|(a, b)| (a + start, b + start));
+        }
+        self
+    }
+
+    /// The items its rows hold, first to last (none: no rows).
+    pub(crate) fn span(&self) -> Option<std::ops::RangeInclusive<usize>> {
+        Some(self.rows.first()?.first..=self.rows.last()?.last)
+    }
+
     /// The row holding item `index`, by its place among the rows.
     pub(crate) fn row_of(&self, index: usize) -> Option<usize> {
         let at = self.rows.partition_point(|r| r.last < index);

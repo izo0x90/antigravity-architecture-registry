@@ -292,7 +292,6 @@ pub struct CockpitApp {
     /// anything, it's given back (typing, when they were opened from it).
     menu_from: InputMode,
     /// A sub-agent over the panels (its slot's).
-    subagent_look: Option<(harness_contracts::SlotId, harness_contracts::SubagentId)>,
     /// The browser's notifications.
     pub alerts: crate::alerts::Alerts,
     /// What a call that finished later has to say (shown as the note).
@@ -394,7 +393,6 @@ impl CockpitApp {
             quick_look: None,
             overlays: Default::default(),
             menu_from: InputMode::Normal,
-            subagent_look: None,
             alerts,
             notes_later: Arc::default(),
             initialized: false,
@@ -620,20 +618,21 @@ impl CockpitApp {
 
         // Developer Feedback modal (automatically pops up when an element is targeted)
         let active_slots: Vec<String> = self.desk.panels.buffers().iter().map(|p| p.kind.title().to_lowercase()).collect();
+        // (Each with its edges, where it's grabbed to resize it.)
+        let grab = ctx.style().interaction.resize_grab_radius_side;
         if let Some(rect) = self.feedback.render_modal(ctx, &self.desk.net, self.desk.panels.len(), &active_slots) {
-            self.overlays.drawn_at(crate::overlay::Overlay::Feedback, rect);
+            self.overlays.drawn_at(crate::overlay::Overlay::Feedback, rect.expand(grab));
         }
 
         // Issues & Feedback Explorer window
         if let Some(rect) = self.feedback.render_issues_window(ctx, &self.desk.net) {
-            self.overlays.drawn_at(crate::overlay::Overlay::Issues, rect);
+            self.overlays.drawn_at(crate::overlay::Overlay::Issues, rect.expand(grab));
         }
 
         // Feedback confirmation toast
         self.feedback.render_toast(ctx);
 
         self.render_quick_look(ctx);
-        self.render_subagent(ctx);
         self.render_item_controls(ctx);
         self.touch_tick(ctx);
         self.run_asked(ctx);

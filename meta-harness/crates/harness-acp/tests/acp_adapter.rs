@@ -185,6 +185,19 @@ async fn two_permissions_asked_at_once_are_each_answered() {
     assert_eq!(agent.seen().permission.as_deref(), Some("a: allow-once, b: reject"));
 }
 
+/// A request the agent withdraws (a sub-agent stopped while it asks) is
+/// no longer asked.
+#[tokio::test]
+async fn a_request_the_agent_withdraws_is_no_longer_asked() {
+    let (session, _agent) = open(RuntimeMode::ApprovalRequired).await;
+    let mut events = session.events();
+    let mut seen = Vec::new();
+    session.start_turn(say("[withdrawn]")).await.unwrap();
+    collect_until(&mut events, &mut seen, turn_ended(1)).await;
+    let last = seen.iter().rev().find_map(|e| if let AdapterEvent::RequestUpdated { request } = e { Some(request.status) } else { None });
+    assert_eq!(last, Some(RequestStatus::Cancelled), "{seen:?}");
+}
+
 #[tokio::test]
 async fn full_access_auto_approves_without_asking() {
     let (session, agent) = open(RuntimeMode::FullAccess).await;

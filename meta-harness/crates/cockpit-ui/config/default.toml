@@ -253,12 +253,14 @@ t = "Tags"
 "chat.prev_slot" = { keys = ["K"], gestures = ["swipe_right"] }
 "chat.next_subagent" = { keys = ["] a"] }
 "chat.prev_subagent" = { keys = ["[ a"] }
+"chat.subagent_start" = { keys = ["g w"] }
 
 "session.new" = { leader = "s n" }
 "session.resume" = { leader = "s r" }
 "session.delete" = { leader = "s d" }
 "session.switch" = { leader = "s t" }
 "session.stop" = { leader = "s s" }
+"chat.stop_subagent" = { leader = "s x" }
 "chat.inject" = { leader = "s a" }
 "session.close" = { leader = "s c" }
 "instance.select" = { leader = "s i" }
@@ -634,6 +636,38 @@ word = "done"
 icon = "check-circle"
 color = "ok"
 
+# A sub-agent: at work, waiting on you, ended (its harness not saying how),
+# done, failed, stopped.
+[status.subagent_running]
+word = "working"
+icon = "play"
+color = "info"
+
+[status.subagent_waiting]
+word = "waiting on you"
+icon = "hand"
+color = "warn"
+
+[status.subagent_idle]
+word = "ended"
+icon = "circle"
+color = "muted"
+
+[status.subagent_completed]
+word = "done"
+icon = "check-circle"
+color = "ok"
+
+[status.subagent_failed]
+word = "failed"
+icon = "x-circle"
+color = "error"
+
+[status.subagent_cancelled]
+word = "stopped"
+icon = "x-circle"
+color = "muted"
+
 # Finding severities.
 [status.severity_error]
 word = "error"
@@ -782,6 +816,8 @@ shows = "normal"
 indicator = "heartbeat"
 receiving_s = 1.5
 quiet_after_s = 60.0
+# How long a sub-agent seen to end stays in the strip above the box.
+subagent_ended_s = 6.0
 
 [net]
 reconnect_min_ms = 500

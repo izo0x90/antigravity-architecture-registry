@@ -29,6 +29,9 @@ pub struct Drawing<'a> {
     pub leader_held: bool,
     /// The pointer is a finger (the host says, from what touched last).
     pub fingers: bool,
+    /// Room to leave under what waits on you, for the answers its host
+    /// draws there (floating; none in a bar).
+    pub room_under_waiting: f32,
 }
 
 /// What a buffer knows about a component.
@@ -95,6 +98,12 @@ pub trait Buffer: Navigable + ActionProvider + Hosted + Any {
 
     /// What it shows, in words (the buffer list's lines).
     fn describe(&self) -> String;
+
+    /// Where its place `key` was drawn: an item, among the spots, or a
+    /// place that's no item (`Hosted::drawn_at`).
+    fn spot_at(&self, key: &str) -> Option<egui::Rect> {
+        self.spot(key).or_else(|| self.drawn_at(key))
+    }
 }
 
 /// Where a component's code is: its anchor's lines (a folder has none),

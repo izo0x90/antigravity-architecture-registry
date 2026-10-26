@@ -58,25 +58,28 @@ pub struct ThreadView {
     /// news from it: a turn, an item, its plan or usage changed, a
     /// question asked.
     arrivals: VecDeque<(f64, u32)>,
-    /// Its sub-agents, in the order they started.
+    /// Its sub-agents, in the order they started; where each is, by its
+    /// id and by its item; how many are at work.
     subagents: Vec<Seen>,
-    /// Each item's own items (a sub-agent's steps), as they came.
-    under: HashMap<ItemId, Vec<usize>>,
+    subagent_at: HashMap<harness_contracts::SubagentId, usize>,
+    subagent_items: HashMap<ItemId, usize>,
+    working: usize,
 }
 
-/// A sub-agent, and when it was first known and when it ended (the
-/// clock's seconds).
+/// A sub-agent as it's seen here: what it's doing (its latest call's
+/// words, as its steps come), and when it was seen to end (the clock's
+/// seconds; none: at work, or it ended before this was seen live).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Seen {
     pub subagent: harness_contracts::Subagent,
-    pub since: f64,
-    pub ended: Option<f64>,
+    pub doing: Option<String>,
+    pub ended_seen: Option<f64>,
 }
 
 impl ThreadView {
     fn new(thread: Thread) -> Self {
         let epoch = EPOCHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Self { thread, turns: Vec::new(), rank: Vec::new(), items: Vec::new(), requests: Vec::new(), request_at: HashMap::new(), plan: None, usage: None, activity: 0, epoch, known_at: None, settled_at: None, news: 0, changed: Vec::new(), stream: Vec::new(), item_at: HashMap::new(), turn_at: HashMap::new(), shown_at: Vec::new(), request_items: HashMap::new(), arrivals: VecDeque::new(), subagents: Vec::new(), under: HashMap::new() }
+        Self { thread, turns: Vec::new(), rank: Vec::new(), items: Vec::new(), requests: Vec::new(), request_at: HashMap::new(), plan: None, usage: None, activity: 0, epoch, known_at: None, settled_at: None, news: 0, changed: Vec::new(), stream: Vec::new(), item_at: HashMap::new(), turn_at: HashMap::new(), shown_at: Vec::new(), request_items: HashMap::new(), arrivals: VecDeque::new(), subagents: Vec::new(), subagent_at: HashMap::new(), subagent_items: HashMap::new(), working: 0 }
     }
 
     /// Its sub-agents, in the order they started.
@@ -84,26 +87,73 @@ impl ThreadView {
         &self.subagents
     }
 
-    /// The items under `parent` (a sub-agent's steps and messages), as
-    /// they came.
-    pub fn under(&self, parent: &ItemId) -> impl Iterator<Item = &TurnItem> {
-        self.under.get(parent).into_iter().flatten().map(|at| &self.items[*at])
-    }
-
     /// Sub-agent `id`.
     pub fn subagent(&self, id: &harness_contracts::SubagentId) -> Option<&Seen> {
-        self.subagents.iter().find(|s| s.subagent.id == *id)
+        self.subagent_at.get(id).map(|at| &self.subagents[*at])
     }
 
-    /// Sub-agent `subagent` as it is now (at `now`): its end, when it ends.
-    fn subagent_now(&mut self, subagent: harness_contracts::Subagent, now: f64) {
-        let ended = (!subagent.status.working()).then_some(now);
-        match self.subagents.iter_mut().find(|s| s.subagent.id == subagent.id) {
-            Some(seen) => {
-                seen.ended = if subagent.status.working() { None } else { seen.ended.or(ended) };
-                seen.subagent = subagent;
+    /// How many of its sub-agents are at work.
+    pub fn subagents_working(&self) -> usize {
+        self.working
+    }
+
+    /// Where sub-agent `id`'s work is in the order shown: its steps (at
+    /// any depth), after its own item.
+    pub fn subagent_steps(&self, id: &harness_contracts::SubagentId) -> Option<std::ops::Range<usize>> {
+        let item = &self.subagent(id)?.subagent.item_id;
+        let start = self.shown_at(item)? + 1;
+        let len = self.stream[start..].iter().take_while(|(_, i)| self.descends(*i, item)).count();
+        Some(start..start + len)
+    }
+
+    /// Sub-agent `subagent` as it is now (`live`: as it happens, at
+    /// `now`, its end seen then): whether it changed.
+    fn subagent_now(&mut self, subagent: harness_contracts::Subagent, live: bool, now: f64) -> bool {
+        let working = subagent.status.working();
+        let at = match self.subagent_at.get(&subagent.id) {
+            Some(&at) => at,
+            None => {
+                let at = self.subagents.len();
+                self.subagent_at.insert(subagent.id.clone(), at);
+                self.subagent_items.insert(subagent.item_id.clone(), at);
+                self.working += usize::from(working);
+                self.subagents.push(Seen { subagent, doing: None, ended_seen: None });
+                return true;
             }
-            None => self.subagents.push(Seen { subagent, since: now, ended }),
+        };
+        let seen = &mut self.subagents[at];
+        if seen.subagent == subagent {
+            return false;
+        }
+        let was = seen.subagent.status.working();
+        seen.ended_seen = match (was, working) {
+            (true, false) if live => Some(now),
+            (_, true) => None,
+            _ => seen.ended_seen,
+        };
+        seen.subagent = subagent;
+        self.working = self.working + usize::from(working) - usize::from(was);
+        true
+    }
+
+    /// Item `at` came or changed: a call of a sub-agent's (the nearest it's
+    /// within) is what it's doing now.
+    fn step_of_subagent(&mut self, at: usize) {
+        let item = &self.items[at];
+        if !matches!(item.body, harness_contracts::ItemBody::ToolCall { .. }) {
+            return;
+        }
+        let mut parent = item.parent_id.as_ref();
+        while let Some(id) = parent {
+            if let Some(&s) = self.subagent_items.get(id) {
+                let doing = self.items[at].title.clone().or_else(|| match &self.items[at].body {
+                    harness_contracts::ItemBody::ToolCall { name, .. } => Some(name.clone()),
+                    _ => None,
+                });
+                self.subagents[s].doing = doing;
+                return;
+            }
+            parent = self.item_at.get(id).and_then(|i| self.items[*i].parent_id.as_ref());
         }
     }
 
@@ -212,6 +262,9 @@ impl ThreadView {
             }
             let moved = self.items[at].turn_id != item.turn_id;
             self.items[at] = item;
+            if changed {
+                self.step_of_subagent(at);
+            }
             if moved {
                 self.stream.retain(|(_, i)| *i != at);
                 self.shown_at[at] = None;
@@ -230,11 +283,9 @@ impl ThreadView {
         }
         self.changed.push(self.activity);
         self.shown_at.push(None);
-        if let Some(parent) = &item.parent_id {
-            self.under.entry(parent.clone()).or_default().push(at);
-        }
         let turn = self.turn_at.get(&item.turn_id).copied();
         self.items.push(item);
+        self.step_of_subagent(at);
         if let Some(turn) = turn {
             self.place(turn, at);
         }
@@ -482,12 +533,14 @@ impl Store {
                     }
                 }
             }
+            // (How a sub-agent's doing isn't the stream's: what's worked
+            // out from the stream stays.)
             AdapterEvent::SubagentUpdated { subagent } => {
-                if let Some(view) = self.view(&subagent.thread_id.clone()) {
-                    view.subagent_now(subagent, now);
-                    if live {
-                        view.arrived(now);
-                    }
+                if let Some(view) = self.threads.get_mut(&subagent.thread_id)
+                    && view.subagent_now(subagent, live, now)
+                    && live
+                {
+                    view.arrived(now);
                 }
             }
             // Catalogs arrive via instance snapshots.

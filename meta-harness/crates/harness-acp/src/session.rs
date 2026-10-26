@@ -258,7 +258,7 @@ impl SessionRuntime for AcpSession {
     async fn cancel_subagent(&self, id: &harness_contracts::SubagentId) -> Result<()> {
         // Its own session, when its harness lets it be stopped alone.
         let Some(session) = lock(&self.shared().state).cancellable(id) else {
-            return Err(HarnessError::Unsupported { operation: "stopping this sub-agent alone" });
+            return Err(HarnessError::Unsupported { operation: "stopping one sub-agent alone" });
         };
         self.link.cx.send_notification(acp::CancelNotification::new(acp::SessionId::new(session))).map_err(acp_error)
     }

@@ -560,8 +560,8 @@ impl NetClient {
         self.call::<()>("POST", &format!("/api/threads/{thread}/steer"), Some(json), ctx, on_done);
     }
 
-    pub fn cancel_subagent(&self, thread: &ThreadId, id: &harness_contracts::SubagentId, ctx: egui::Context) {
-        self.call::<()>("POST", &format!("/api/threads/{thread}/subagents/{}/cancel", urlencoding::encode(id.as_str())), Some(serde_json::json!({})), ctx, |_| {});
+    pub fn cancel_subagent(&self, thread: &ThreadId, id: &harness_contracts::SubagentId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call::<()>("POST", &format!("/api/threads/{thread}/subagents/{}/cancel", urlencoding::encode(id.as_str())), Some(serde_json::json!({})), ctx, on_done);
     }
 
     pub fn interrupt(&self, thread: &ThreadId, ctx: egui::Context) {

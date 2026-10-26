@@ -41,11 +41,6 @@ pub fn tagged_by(tagged: &harness_contracts::Tagged) -> String {
     if tagged.by.is_empty() { "tagged".into() } else { format!("tagged by {}", crate::conversation::who(&tagged.by)) }
 }
 
-/// A text's first line, cut short (what a list shows of what a thing said).
-pub fn first_line(text: &str) -> String {
-    text.lines().next().unwrap_or_default().chars().take(120).collect()
-}
-
 /// What each of a tag's things says (some of it) and where that came
 /// from, as last read.
 pub type Now = HashMap<Subject, (Held, Option<String>)>;

@@ -41,8 +41,10 @@ pub enum Target {
     Span { file: String, start: usize, end: usize },
     /// An agent's chat: its slot, or the slot running a session.
     Agent { slot: Option<SlotId>, thread: Option<ThreadId> },
-    /// Where a sub-agent started, in its slot's chat.
+    /// A sub-agent of a slot's agent: its own work, alone.
     Subagent { slot: SlotId, id: harness_contracts::SubagentId },
+    /// Where a sub-agent started, in its slot's chat.
+    SubagentStart { slot: SlotId, id: harness_contracts::SubagentId },
     /// Something that needs the user, or that happened (the inbox's).
     Notification(NotificationId),
     /// A terminal (a shell the server runs).
@@ -117,8 +119,6 @@ pub enum Ask {
     Colour(Vec<(String, String)>),
     /// Calls' changes wanted, compared (each its two texts).
     Changes(Vec<crate::comparer::Pair>),
-    /// Sub-agent `id` of slot `slot`'s thread, over the panels.
-    Subagent { slot: SlotId, id: harness_contracts::SubagentId },
 }
 
 /// What's read again on a buffer's word.
@@ -151,7 +151,7 @@ impl Target {
             Self::Line { file: path, line, .. } | Self::Change { file: path, line } | Self::Span { file: path, start: line, .. } => format!("{}:{line}", file(path)),
             Self::Message { index, .. } => format!("message {}", index + 1),
             Self::Agent { slot: Some(slot), .. } => format!("agent slot {slot}"),
-            Self::Subagent { id, .. } => format!("sub-agent {id}"),
+            Self::Subagent { slot, .. } | Self::SubagentStart { slot, .. } => format!("a sub-agent of agent slot {slot}"),
             Self::Agent { thread, .. } => format!("session {}", thread.as_ref().map_or("?", |t| t.as_str())),
             Self::TerminalLines { terminal, first, last, .. } if first == last => format!("terminal {terminal} line {first}"),
             Self::TerminalLines { terminal, first, last, .. } => format!("terminal {terminal} lines {first}-{last}"),
@@ -211,7 +211,7 @@ impl Target {
         match self {
             Self::Component(id) | Self::Job { component: id } => Some(id),
             Self::Line { within, .. } => within.as_ref(),
-            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Subagent { .. } | Self::Notification(_) | Self::Terminal(_) | Self::TerminalLines { .. } | Self::TerminalCommand { .. } | Self::Chat { .. } | Self::Plan { .. } | Self::Discussion(_) | Self::Tag(_) => None,
+            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Subagent { .. } | Self::SubagentStart { .. } | Self::Notification(_) | Self::Terminal(_) | Self::TerminalLines { .. } | Self::TerminalCommand { .. } | Self::Chat { .. } | Self::Plan { .. } | Self::Discussion(_) | Self::Tag(_) => None,
         }
     }
 
@@ -908,6 +908,11 @@ pub trait Navigable {
 
     /// What is drawn now that hints can label (from the last frame).
     fn spots(&self) -> Vec<Spot>;
+
+    /// Where the spot `key` is drawn, if it is.
+    fn spot(&self, key: &str) -> Option<egui::Rect> {
+        self.spots().into_iter().find(|s| s.key == key).map(|s| s.rect)
+    }
 
     /// The item the cursor is on (an `Item::key`).
     fn cursor_key(&self) -> Option<String>;

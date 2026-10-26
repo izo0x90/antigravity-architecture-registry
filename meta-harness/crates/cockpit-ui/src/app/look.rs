@@ -10,6 +10,10 @@ impl CockpitApp {
     /// held is put back first); `key` opened it, if it's down.
     pub(super) fn look_at(&mut self, buffer: BufferId, key: Option<Chord>, ctx: &egui::Context) {
         self.close_quick_look();
+        // It holds the keys: typing in a panel under it stops.
+        if matches!(self.input_mode, InputMode::Insert { at: Host::Panel(_) }) {
+            self.input_mode = InputMode::Normal;
+        }
         let now = ctx.input(|i| i.time);
         let before = self.desk.used_buffer(buffer.kind);
         self.quick_look = Some(QuickLook::open(buffer, before, self.desk.panels.focused(), self.desk.panels.focused_kind(), key, now));
@@ -19,6 +23,9 @@ impl CockpitApp {
             if let Some(own) = self.desk.buffer_mut(buffer) {
                 own.as_card(true);
             }
+            // (Then it reads what's shared: it may be asked to show
+            // something before it's drawn.)
+            self.desk.share_with(buffer);
         }
         self.use_buffer(buffer);
     }

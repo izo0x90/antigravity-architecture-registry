@@ -73,6 +73,8 @@ enum Reply {
     Sent(SlotId, NetResult<()>),
     /// An answer to `request` was taken, or why not.
     Answered { slot: SlotId, request: harness_contracts::RequestId, result: NetResult<()> },
+    /// Stopping sub-agent `id` was taken, or why not.
+    Stopping { slot: SlotId, id: harness_contracts::SubagentId, result: NetResult<()> },
     SlotMade(SlotId, NetResult<SlotId>),
     /// A session was ended to start again with new tool servers.
     Restart { slot: SlotId, resume: Option<NativeId>, result: NetResult<()> },
@@ -133,6 +135,8 @@ pub struct Agents {
     /// Requests answered here whose answer is on its way (no longer
     /// waiting on you: another can't go to them meanwhile).
     answering: BTreeSet<harness_contracts::RequestId>,
+    /// Sub-agents asked to stop, till they say they have (or it's refused).
+    stopping: BTreeSet<harness_contracts::SubagentId>,
     /// The clock (seconds) as of this frame, events applied at it.
     now: f64,
     mailbox: Mailbox,
@@ -163,7 +167,18 @@ impl Agents {
         {
             self.answering.remove(&request.id);
         }
+        // Stopped (or ended): no longer being stopped.
+        if let ClientEvent::Session { event: harness_contracts::AdapterEvent::SubagentUpdated { subagent } } = &event
+            && !subagent.status.working()
+        {
+            self.stopping.remove(&subagent.id);
+        }
         self.store.apply(event, self.now);
+    }
+
+    /// Whether sub-agent `id` was asked to stop, and hasn't yet.
+    pub fn stopping(&self, id: &harness_contracts::SubagentId) -> bool {
+        self.stopping.contains(id)
     }
 
     /// Whether `request` waits on you: pending, and no answer to it on its
@@ -309,7 +324,11 @@ impl Agents {
             Act::CloseSlot => net.close_slot(&slot, ctx.clone(), done),
             Act::CloseSession { key } => net.close_slot_session(&slot, &key, ctx.clone(), done),
             Act::Stop { thread } => net.interrupt(&thread, ctx.clone()),
-            Act::StopSubagent { thread, id } => net.cancel_subagent(&thread, &id, ctx.clone()),
+            Act::StopSubagent { thread, id } => {
+                self.stopping.insert(id.clone());
+                let mailbox = self.mailbox.clone();
+                net.cancel_subagent(&thread, &id.clone(), ctx.clone(), move |result| post(&mailbox, Reply::Stopping { slot, id, result }));
+            }
             Act::Reprobe { instance } => net.refresh_instance(&instance, ctx.clone(), done),
             Act::Steer { thread, input } => net.steer(&thread, &input, ctx.clone(), done),
             Act::Settings { policy, model } => net.set_slot_settings(&slot, &policy, model.as_ref(), ctx.clone(), done),
@@ -438,6 +457,12 @@ impl Agents {
                     self.errors.insert(slot, e.into());
                 }
                 Reply::Answered { result: Ok(()), .. } => {}
+                // Refused: it's said why, and can be asked again.
+                Reply::Stopping { slot, id, result: Err(e) } => {
+                    self.stopping.remove(&id);
+                    self.errors.insert(slot, e.into());
+                }
+                Reply::Stopping { result: Ok(()), .. } => {}
                 Reply::Sent(slot, Err(e)) => {
                     self.errors.insert(slot, e.into());
                 }

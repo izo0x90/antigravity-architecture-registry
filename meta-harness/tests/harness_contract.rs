@@ -66,8 +66,6 @@ impl Harness {
 /// A sub-agent's update's `_meta` as each agent writes it (Claude Code:
 /// claude-agent-acp 0.89 to 0.95, `stampParentToolUseId`), its Task call's id
 /// `toolu_task`.
-const SUB_AGENT_META: &[(&str, &str)] = &[("claude-code", r#"{"claudeCode":{"parentToolUseId":"toolu_task"}}"#)];
-
 fn say(text: &str) -> TurnInput {
     TurnInput::of(text)
 }
@@ -183,21 +181,23 @@ async fn what_it_declares_works() {
             let answer = serde_json::to_value(h.agent.seen().answers.unwrap()).unwrap();
             assert_eq!(answer, serde_json::json!({ "action": "accept", "content": { "question_0": "Redis" } }), "{}", h.name);
         }
-        // Whose a sub-agent's work is, if it says: under the call that
-        // started it. Where the pack looks is where its agent writes it.
-        if let Some(pointer) = &settings.parent_call {
-            let recorded = SUB_AGENT_META.iter().find(|(pack, _)| *pack == h.name).map(|(_, meta)| serde_json::from_str::<serde_json::Value>(meta).unwrap()).unwrap_or_else(|| panic!("{}: what its agent sends with a sub-agent's update, recorded here", h.name));
-            assert_eq!(recorded.pointer(pointer).and_then(|v| v.as_str()), Some("toolu_task"), "{}: its pointer finds the call in what its agent sends", h.name);
+        // Its sub-agents, told of its way: who each is, what it was told;
+        // announced, its steps under it and its session's settings its
+        // own; else from the call that starts it, ended with the turn.
+        let how = &settings.subagents;
+        if how.declare || how.started_by.is_some() {
             let session = h.open(RuntimeMode::ApprovalRequired).await;
             let mut events = session.events();
             session.start_turn(say("[sub-agent]")).await.unwrap();
-            let mut items = std::collections::BTreeMap::new();
+            let (mut items, mut subagent, mut modes) = (std::collections::BTreeMap::new(), None, Vec::new());
             tokio::time::timeout(Duration::from_secs(5), async {
                 while let Some(event) = events.next().await {
                     match event {
                         AdapterEvent::ItemUpdated { item } => {
                             items.insert(item.id.clone(), item);
                         }
+                        AdapterEvent::SubagentUpdated { subagent: s } => subagent = Some(s),
+                        AdapterEvent::ThreadUpdated { thread } => modes.push(thread.controls.current_mode),
                         event if ended(1)(&event) => break,
                         _ => {}
                     }
@@ -205,11 +205,17 @@ async fn what_it_declares_works() {
             })
             .await
             .unwrap_or_else(|_| panic!("{}: the turn's end", h.name));
-            let titled = |title: &str| items.values().find(|i| i.title.as_deref() == Some(title)).unwrap_or_else(|| panic!("{}: {title}", h.name));
-            let task = titled("Explore the parser").id.clone();
-            assert_eq!(titled("Read parse.rs").parent_id.as_ref(), Some(&task), "{}: the sub-agent's call", h.name);
-            let said = items.values().find(|i| i.body.said().as_deref() == Some("Reading the parser.")).unwrap_or_else(|| panic!("{}: the sub-agent's words", h.name));
-            assert_eq!(said.parent_id.as_ref(), Some(&task), "{}: the sub-agent's words", h.name);
+            let one = subagent.unwrap_or_else(|| panic!("{}: its sub-agent", h.name));
+            assert_eq!((one.title.as_str(), one.prompt.as_deref(), one.status.working()), ("Explorer", Some("Explore the parser"), false), "{}", h.name);
+            let mut under: Vec<&harness_contracts::TurnItem> = items.values().filter(|i| i.parent_id.as_ref() == Some(&one.item_id)).collect();
+            under.sort_by_key(|i| i.ordinal);
+            let under: Vec<String> = under.iter().map(|i| i.title.clone().or_else(|| i.body.said()).unwrap_or_default()).collect();
+            if how.declare {
+                assert_eq!(under, ["Reading the parser.", "Read parse.rs"], "{}: its steps, under it", h.name);
+                assert!(modes.iter().all(|m| m.as_deref() != Some("its-own")), "{}: its session's mode isn't the agent's", h.name);
+            } else {
+                assert!(under.is_empty(), "{}: nothing said to be its", h.name);
+            }
         }
         // Who it's signed in as, and its logins.
         let launcher: Arc<dyn AcpLauncher> = Arc::new(h.agent.clone());

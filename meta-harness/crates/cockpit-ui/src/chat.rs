@@ -139,6 +139,12 @@ pub struct ChatView {
     pub(crate) sign_in_has_box: bool,
     /// Its sub-agents' strip shows each (not folded into a count).
     pub(crate) subagents_unfolded: bool,
+    /// The sub-agent it shows alone (its work, what it was told, how it's
+    /// doing); none: the slot's chat.
+    pub(crate) alone: Option<harness_contracts::SubagentId>,
+    /// Room it leaves under what waits on you, for its answers (its
+    /// host's word).
+    pub(crate) room_under_waiting: f32,
 }
 
 /// A chat's settings as picked for it (none: the config's).
@@ -176,6 +182,8 @@ impl Default for ChatView {
             typing: None,
             sign_in_has_box: false,
             subagents_unfolded: false,
+            alone: None,
+            room_under_waiting: 0.0,
         }
     }
 }
@@ -198,7 +206,7 @@ struct SignInNow {
     pasted: Option<crate::agents::Pasted>,
 }
 
-pub(crate) fn status_tag(status: ItemStatus) -> (&'static str, Color32) {
+fn status_tag(status: ItemStatus) -> (&'static str, Color32) {
     match status {
         ItemStatus::Pending => ("[..]", colors().muted),
         ItemStatus::InProgress => ("[RUN]", colors().warn),
@@ -269,7 +277,7 @@ impl ChatView {
 /// view of it and as of which event, which change of the folds; what of
 /// the stream it reads (`rows::shape_facts`).
 pub(crate) struct ShapeOf {
-    of: (ThreadId, u64, u64, u64),
+    of: (ThreadId, u64, u64, u64, Option<harness_contracts::SubagentId>),
     facts: u64,
     shape: std::rc::Rc<rows::Shape>,
 }
@@ -306,16 +314,32 @@ impl ChatStreamState {
     pub(crate) fn pending_item(&self) -> Option<usize> {
         let view = self.thread()?;
         let agents = self.agents();
-        view.requests().iter().filter(|r| agents.waits(r)).find_map(|r| view.request_shown_at(&r.id))
+        let here = self.shown();
+        view.requests().iter().filter(|r| agents.waits(r)).filter_map(|r| view.request_shown_at(&r.id)).find(|at| here.as_ref().is_none_or(|h| h.contains(at)))
     }
 
     /// What waits on you: each request pending with no answer on its way,
     /// as it was asked (the first asked first), with its item's place in
-    /// the stream (none: its item isn't there yet).
+    /// the stream (none: its item isn't there yet). Alone, a sub-agent's:
+    /// what waits in its work.
     pub(crate) fn pending(&self) -> Vec<(Option<usize>, harness_contracts::RuntimeRequest)> {
         let Some(view) = self.thread() else { return Vec::new() };
         let agents = self.agents();
-        view.requests().iter().filter(|r| agents.waits(r)).map(|r| (view.request_shown_at(&r.id), r.clone())).collect()
+        let here = self.shown();
+        view.requests()
+            .iter()
+            .filter(|r| agents.waits(r))
+            .map(|r| (view.request_shown_at(&r.id), r))
+            .filter(|(at, _)| here.as_ref().is_none_or(|h| at.is_some_and(|at| h.contains(&at))))
+            .map(|(at, r)| (at, r.clone()))
+            .collect()
+    }
+
+    /// Where what it shows is in the stream, when it's not all of it (a
+    /// sub-agent's work, shown alone).
+    fn shown(&self) -> Option<std::ops::Range<usize>> {
+        self.ui.alone.as_ref()?;
+        Some(self.shape().span().map_or(0..0, |s| *s.start()..*s.end() + 1))
     }
 
     /// The stream's shape (its rows, a folded run one of them; whether
@@ -323,12 +347,12 @@ impl ChatStreamState {
     /// change of the thread or the folds.
     pub(crate) fn shape(&self) -> std::rc::Rc<rows::Shape> {
         let Some(view) = self.thread() else { return Default::default() };
-        let of = (view.thread.id.clone(), view.epoch(), view.activity, self.ui.folds.changes());
+        let of = (view.thread.id.clone(), view.epoch(), view.activity, self.ui.folds.changes(), self.ui.alone.clone());
         let mut kept = self.ui.shape.borrow_mut();
         // (The same thread as of the same event, else as of the same facts.)
         let facts = match &*kept {
             Some(was) if was.of == of => return was.shape.clone(),
-            Some(was) if (&was.of.0, was.of.1, was.of.3) == (&of.0, of.1, of.3) => {
+            Some(was) if (&was.of.0, was.of.1, was.of.3, &was.of.4) == (&of.0, of.1, of.3, &of.4) => {
                 let facts = rows::shape_facts(view.stream());
                 if facts == was.facts {
                     let shape = was.shape.clone();
@@ -339,8 +363,15 @@ impl ChatStreamState {
             }
             _ => rows::shape_facts(view.stream()),
         };
-        let items: Vec<&TurnItem> = view.stream().collect();
-        let shape = std::rc::Rc::new(rows::shape(&items, &self.ui.folds));
+        // Shown alone, a sub-agent's work (none yet: nothing).
+        let shape = match &self.ui.alone {
+            Some(id) => view.subagent_steps(id).map_or_else(rows::Shape::default, |steps| {
+                let items: Vec<&TurnItem> = view.stream().skip(steps.start).take(steps.len()).collect();
+                rows::shape(&items, &self.ui.folds).from(steps.start)
+            }),
+            None => rows::shape(&view.stream().collect::<Vec<_>>(), &self.ui.folds),
+        };
+        let shape = std::rc::Rc::new(shape);
         *kept = Some(ShapeOf { of, facts, shape: shape.clone() });
         shape
     }

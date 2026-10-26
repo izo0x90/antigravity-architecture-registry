@@ -46,7 +46,7 @@ impl ChatStreamState {
         // else the file it points to does.
         let here = self.here().unwrap_or_default();
         out.push(match (here.unfolds(), self.chip_here(), self.target()) {
-            _ if self.subagent_here() => Move::Enter.offer("Open the sub-agent"),
+            _ if self.subagent_here().is_some() => Move::Enter.offer("Open the sub-agent"),
             (Some(folded), ..) => Move::Enter.offer(format!("Unfold {}", folded.words())),
             (None, Some((words, _)), _) => Move::Enter.offer(format!("Go to {words}")),
             (None, None, Some(Target::Message { link: Some((path, _)), .. })) => Move::Enter.offer(format!("Open {path}")),
@@ -137,6 +137,7 @@ impl crate::buffer::Buffer for ChatStreamState {
     fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
         self.tend_sign_in_box(cx.note);
         self.take_unsent();
+        self.ui.room_under_waiting = drawing.room_under_waiting;
         self.draw(ui, drawing.feedback, drawing.typing, cx);
         self.report_unsent();
     }
@@ -255,7 +256,7 @@ impl Navigable for ChatStreamState {
     /// or message of a session an agent slot has open.
     fn can_show(&self, target: &Target) -> bool {
         match target {
-            Target::Agent { .. } | Target::Subagent { .. } => true,
+            Target::Agent { .. } | Target::Subagent { .. } | Target::SubagentStart { .. } => true,
             Target::Chat { session, .. } => self.slot_with(session).is_some(),
             _ => false,
         }
@@ -271,6 +272,7 @@ impl Navigable for ChatStreamState {
 
     fn show_target(&mut self, target: &Target) -> Result<(), String> {
         if let Target::Chat { session, turn, message } = target {
+            self.ui.alone = None;
             let slot = self.slot_with(session).ok_or("No agent slot has that session open now (resume it to see it).")?;
             self.ui.slot = slot;
             let subject = match message {
@@ -281,7 +283,8 @@ impl Navigable for ChatStreamState {
             self.put_cursor(at, crate::viewport::Show::Middle, render::Reveal::Item);
             return Ok(());
         }
-        if let Target::Subagent { slot, id } = target {
+        // A sub-agent: alone (its work); where it started: its line.
+        if let Target::Subagent { slot, id } | Target::SubagentStart { slot, id } = target {
             let at = {
                 let agents = self.agents();
                 let view = agents.thread_in(slot).ok_or("That agent slot runs no session now.")?;
@@ -289,9 +292,16 @@ impl Navigable for ChatStreamState {
                 view.shown_at(&seen.subagent.item_id).ok_or("That sub-agent isn't in its chat now.")?
             };
             self.ui.slot = slot.clone();
-            self.put_cursor(at, crate::viewport::Show::Middle, render::Reveal::Item);
+            if matches!(target, Target::Subagent { .. }) {
+                self.ui.alone = Some(id.clone());
+                self.cursor_to(None);
+            } else {
+                self.ui.alone = None;
+                self.put_cursor(at, crate::viewport::Show::Middle, render::Reveal::Item);
+            }
             return Ok(());
         }
+        self.ui.alone = None;
         let Target::Agent { slot, thread } = target else { return Err("Not an agent's chat.".into()) };
         let found = {
             let agents = self.agents();
@@ -431,6 +441,10 @@ impl Navigable for ChatStreamState {
 
     fn spots(&self) -> Vec<Spot> {
         self.ui.spots.clone()
+    }
+
+    fn spot(&self, key: &str) -> Option<Rect> {
+        self.ui.spots.iter().find(|s| s.key == key).map(|s| s.rect)
     }
 
     /// The row the cursor's on (a folded run's by its first item).

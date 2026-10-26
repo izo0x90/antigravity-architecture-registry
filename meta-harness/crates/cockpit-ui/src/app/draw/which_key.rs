@@ -73,10 +73,7 @@ impl CockpitApp {
             self.palette.close();
             self.palette_closed(ctx);
         }
-        if self.capture.is_some() {
-            self.on_capture(&[], true, ctx);
-            self.capture = None;
-        }
+        self.end_capture(ctx);
         self.menus_from(self.input_mode);
         (self.leader_path, self.input_mode) = (Vec::new(), InputMode::Leader);
         for key in path {

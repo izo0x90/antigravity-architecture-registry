@@ -266,6 +266,15 @@ impl Desk {
         self.buffers.iter().map(|(id, b)| (*id, b.as_ref()))
     }
 
+    /// Buffer `id` reads what's shared now (it's asked things before it's
+    /// next drawn).
+    pub fn share_with(&mut self, id: BufferId) {
+        let Self { shared, buffers, .. } = self;
+        if let Some(buffer) = buffers.get_mut(&id) {
+            buffer.share(shared);
+        }
+    }
+
     /// Every buffer reads what they share.
     pub fn share(&mut self) {
         let Self { shared, buffers, .. } = self;

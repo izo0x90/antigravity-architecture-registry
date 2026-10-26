@@ -5,5 +5,4 @@ pub(super) mod bars;
 pub(super) mod host;
 pub(super) mod panels;
 pub(super) mod top_bar;
-pub(super) mod subagent;
 pub(super) mod which_key;

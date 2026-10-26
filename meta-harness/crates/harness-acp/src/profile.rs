@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use agent_client_protocol::schema::v1 as acp;
 use harness_contracts::{
     Account, ApprovalCapabilities, ApprovalOption, AuthStatus, RequestKind, Capabilities, InteractionMode, Launch,
-    PlanningCapabilities, RuntimeMode, RuntimePolicy, SessionCapabilities, SignIn, StreamingCapabilities,
+    PlanningCapabilities, RuntimeMode, RuntimePolicy, SessionCapabilities, SignIn, StreamingCapabilities, SubagentCapabilities,
     ToolCapabilities, ToolKind, TurnCapabilities,
 };
 
@@ -77,6 +77,9 @@ impl Profile {
             tools: ToolCapabilities { mcp_http: true, client_file_system: self.settings.client_fs, ..Default::default() },
             approvals: ApprovalCapabilities { command_approval: true, file_change_approval: true, live_only: true },
             planning: PlanningCapabilities { todo_list: true, structured_questions: self.settings.advertise.elicitation_form, ..Default::default() },
+            // Told of by the call that starts them, or announced with their
+            // own steps and state.
+            subagents: SubagentCapabilities { supported: self.settings.subagents.declare || self.settings.subagents.started_by.is_some(), lifecycle_events: self.settings.subagents.declare },
             ..Default::default()
         }
     }
@@ -171,11 +174,6 @@ impl Profile {
             caps.insert("subagents".into(), serde_json::json!({}));
         }
         agent_client_protocol::UntypedMessage::new("initialize", params)
-    }
-
-    /// Where an update's `_meta` names the call whose sub-agent sent it.
-    pub fn parent_call(&self) -> Option<String> {
-        self.settings.parent_call.clone()
     }
 
     /// How a replayed message's pieces are read back: as its agent writes

@@ -141,9 +141,17 @@ pub enum At {
     Item,
     /// Under the box being typed in, while it's typed in (Send…).
     Typing,
-    /// Under what waits on you where you are (a request's answers), typing
-    /// or not: what waits always shows its answers.
+    /// Under what waits on you (a request's answers), typing or not: what
+    /// waits always shows its answers.
     Waiting,
+}
+
+impl At {
+    /// It's under something in the view (what you're on, the box, what
+    /// waits): the controls of what you're on.
+    pub fn under_something(self) -> bool {
+        matches!(self, Self::Item | Self::Typing | Self::Waiting)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,11 +204,14 @@ pub struct Control {
     pub hover: Option<String>,
     /// At the far end of its row (the top bar's panels and tools).
     pub end: bool,
+    /// Under which of the view's places it shows (what waits: each its
+    /// own); none: what you're on.
+    pub under: Option<String>,
 }
 
 impl Control {
     pub fn new(at: At, style: Style, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
-        Self { at, style, caption: caption.into(), icon, tone: None, hover: None, end: false }
+        Self { at, style, caption: caption.into(), icon, tone: None, hover: None, end: false, under: None }
     }
 
     pub fn tone(mut self, tone: Tone) -> Self {
@@ -433,6 +444,13 @@ impl Action {
 
     pub fn focused(mut self) -> Self {
         self.scope = Scope::Focused;
+        self
+    }
+
+    /// Shown on its view's settings row: done to what the whole view shows
+    /// (a sub-agent shown alone: stopping it).
+    pub fn on_view(mut self, style: Style, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
+        self.control = Some(Control::new(At::Settings, style, caption, icon));
         self
     }
 

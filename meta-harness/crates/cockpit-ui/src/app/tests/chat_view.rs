@@ -746,23 +746,31 @@ fn a_long_chat_draws_only_what_is_near_sight() {
 fn a_request_waiting_on_you_shows_its_answers_while_you_type() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Chat);
-    request("r1", "cargo test", None, Some(100)).into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
+    // Two at once (two sub-agents ask), the cursor on neither.
+    request("r1", "cargo test", None, Some(100)).into_iter().chain(request("r2", "cargo fmt", None, Some(101))).for_each(|e| app.desk.shared.agents.get_mut().apply(e));
     for _ in 0..4 {
         frame(&ctx, &mut app, vec![]);
     }
     // A button: its caption, then its key.
-    let button = |output: &egui::FullOutput, caption: &str| drawn_texts(output).into_iter().find(|(t, _, _)| t.split_whitespace().next() == Some(caption)).map(|(_, r, _)| r.center());
-    let shows = |output: &egui::FullOutput, caption: &str| button(output, caption).is_some();
+    let buttons = |output: &egui::FullOutput, caption: &str| -> Vec<egui::Pos2> { drawn_texts(output).into_iter().filter(|(t, _, _)| t.split_whitespace().next() == Some(caption)).map(|(_, r, _)| r.center()).collect() };
+    let under_each = |output: &egui::FullOutput| {
+        let (allow, deny) = (buttons(output, "Allow"), buttons(output, "Deny"));
+        let cards = [drawn_containing(output, "cargo test"), drawn_containing(output, "cargo fmt")].map(|c| c.last().copied());
+        allow.len() == 2 && deny.len() == 2 && cards.iter().all(Option::is_some) && {
+            // Each card's answers under it, before the next card.
+            let (first, second) = (cards[0].unwrap(), cards[1].unwrap());
+            allow.iter().any(|a| a.y > first.bottom() && a.y < second.top()) && allow.iter().any(|a| a.y > second.bottom())
+        }
+    };
     let output = frame(&ctx, &mut app, vec![]);
-    assert!(shows(&output, "Allow") && shows(&output, "Deny"), "not typing: under it");
+    assert!(under_each(&output), "not typing: under each: {}", texts(&output));
     frame(&ctx, &mut app, key("i"));
     frame(&ctx, &mut app, vec![]);
     let output = frame(&ctx, &mut app, vec![]);
     assert!(matches!(app.input_mode, InputMode::Insert { .. }));
-    assert!(shows(&output, "Allow") && shows(&output, "Deny"), "typing: its answers still");
-    let allow = button(&output, "Allow").unwrap();
+    assert!(under_each(&output), "typing: each its answers still: {}", texts(&output));
+    let second = *buttons(&output, "Allow").iter().max_by(|a, b| a.y.total_cmp(&b.y)).unwrap();
     sent(&app);
-    frame(&ctx, &mut app, vec![egui::Event::PointerMoved(allow), egui::Event::PointerButton { pos: allow, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
-    frame(&ctx, &mut app, vec![egui::Event::PointerButton { pos: allow, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
-    assert!(sent(&app).iter().any(|c| c.starts_with("POST /api/threads/t/requests/r1")), "tapped while typing: answered");
+    click(&ctx, &mut app, second);
+    assert!(sent(&app).iter().any(|c| c.starts_with("POST /api/threads/t/requests/r2")), "tapped while typing: the second answered");
 }

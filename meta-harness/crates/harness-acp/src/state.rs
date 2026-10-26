@@ -65,28 +65,25 @@ pub struct SessionState {
     /// The sub-agents started, in order.
     subagents: Vec<harness_contracts::Subagent>,
     /// Each told-of sub-agent's own session: which it is (`subagents`).
-    children: HashMap<String, usize>,
+    children: HashMap<String, subagents::Told>,
     /// How the agent tells of its sub-agents by the calls that start them.
     started_by: Option<crate::settings::StartedBy>,
-    /// What a call asked for starts (its list), until it goes ahead.
-    starting: HashMap<String, Vec<serde_json::Value>>,
+    /// The calls that start sub-agents, this turn, as each goes.
+    starting: HashMap<String, subagents::Starting>,
     /// A prompt's turn split by a message added to it: the turn it goes on
     /// in (its end ends that one).
     continues: HashMap<TurnId, TurnId>,
-    /// Where an update's `_meta` names the tool call whose sub-agent sent
-    /// it (a JSON pointer, its pack's); whose the item being made is: the
-    /// call whose sub-agent sent the update being applied, or a request's
-    /// call's (none: the agent's own, and what isn't an update: your
-    /// messages).
-    parent_call: Option<String>,
+    /// Whose the item being made is: the sub-agent that sent the update
+    /// being applied, or a request's call's (none: the agent's own, and
+    /// what isn't an update: your messages); and the turn it's in, when
+    /// it's not the one now (a sub-agent's: its own item's).
     parent: Option<ItemId>,
+    turn: Option<TurnId>,
     events: broadcast::Sender<AdapterEvent>,
 }
 
 impl SessionState {
-    /// `parent_call`: where an update's `_meta` names the call whose
-    /// sub-agent sent it.
-    pub fn new(thread: Thread, parent_call: Option<String>) -> Self {
+    pub fn new(thread: Thread) -> Self {
         let (events, _) = broadcast::channel(1024);
         Self {
             thread,
@@ -111,8 +108,8 @@ impl SessionState {
             started_by: None,
             starting: HashMap::new(),
             continues: HashMap::new(),
-            parent_call,
             parent: None,
+            turn: None,
             events,
         }
     }
@@ -197,6 +194,7 @@ impl SessionState {
     /// The history's replay is over: its last message of yours is read back.
     pub fn replayed(&mut self) {
         self.close_user();
+        self.subagents_replayed();
     }
 
     /// The message of yours being replayed, all come: its item, read back
@@ -298,6 +296,11 @@ impl SessionState {
         let turn_id = &turn_id;
         let Some(at) = self.running.iter().position(|t| t == turn_id) else { return Vec::new() };
         self.running.remove(at);
+        // (Its sub-agents end first: once it's said to have ended, none
+        // of its is still at work.)
+        if self.running.is_empty() {
+            self.subagents_end_with_the_turn(status);
+        }
         let mut cancelled = Vec::new();
         if at == 0 {
             self.close_all_streams();
@@ -317,9 +320,6 @@ impl SessionState {
         {
             self.set_turn(&next, |turn| turn.status = TurnStatus::Running);
         }
-        if self.running.is_empty() {
-            self.subagents_end_with_the_turn();
-        }
         let next = match (self.running.is_empty(), status) {
             (false, _) => ThreadStatus::Running,
             (true, TurnStatus::Failed) => ThreadStatus::Error,
@@ -335,6 +335,7 @@ impl SessionState {
         for id in waiting {
             self.end_turn(&id, TurnStatus::Failed, Some(failure.clone()));
         }
+        self.subagents_end_with_the_agent();
     }
 
     fn set_turn(&mut self, id: &TurnId, update: impl FnOnce(&mut Turn)) {
@@ -366,10 +367,11 @@ impl SessionState {
         id
     }
 
-    /// Turn for an incoming item: the running prompt, else the current replay turn
-    /// (history arriving on load), else a new completed replay turn.
+    /// Turn for an incoming item: its sender's (a sub-agent's), else the
+    /// running prompt, else the current replay turn (history arriving on
+    /// load), else a new completed replay turn.
     fn item_turn(&mut self) -> TurnId {
-        if let Some(id) = self.running.front().cloned().or_else(|| self.replay_turn.clone()) {
+        if let Some(id) = self.turn.clone().or_else(|| self.running.front().cloned()).or_else(|| self.replay_turn.clone()) {
             return id;
         }
         let id = self.start_turn_record(TurnStatus::Completed);
@@ -452,15 +454,35 @@ impl SessionState {
 
     // ---- ACP updates ----
 
-    pub fn apply(&mut self, update: &acp::SessionUpdate) {
-        // Whose it is: a sub-agent's (under the call that started it) or
-        // the agent's own; only while it's applied.
-        self.parent = self.parent_of(update);
-        self.apply_as_sent(update);
-        self.parent = None;
+    /// A `session/update`, under `session`: the agent's own, or one of its
+    /// sub-agents' (only its steps shown, under it), or about them. The
+    /// agent's own mode, when it's changed to it (its policy follows).
+    pub fn session_update(&mut self, session: &str, update: convert::Update) -> Option<String> {
+        let child = self.child(session);
+        match update {
+            convert::Update::Subagent(update) => self.subagent_update(session, update),
+            convert::Update::Message(message) => self.session_message(message),
+            convert::Update::Typed(update) => match child {
+                Some(at) => self.apply_child(at, &update),
+                None => {
+                    self.apply(&update);
+                    if let acp::SessionUpdate::CurrentModeUpdate(mode) = update {
+                        return Some(mode.current_mode_id.to_string());
+                    }
+                }
+            },
+            convert::Update::Unread { kind, why } if child.is_none() => {
+                self.close_streams();
+                self.push_item(ItemBody::Unknown { native_kind: kind, display: why }, ItemStatus::Completed, None, None);
+            }
+            convert::Update::Unread { .. } => {}
+        }
+        None
     }
 
-    fn apply_as_sent(&mut self, update: &acp::SessionUpdate) {
+    /// An update the agent sent (whose: `parent`, while a sub-agent's is
+    /// applied).
+    pub fn apply(&mut self, update: &acp::SessionUpdate) {
         match update {
             acp::SessionUpdate::UserMessageChunk(chunk) => self.user_chunk(chunk),
             acp::SessionUpdate::AgentMessageChunk(chunk) => self.message_chunk(&chunk.content),
@@ -497,20 +519,6 @@ impl SessionState {
                 self.push_item(ItemBody::Unknown { native_kind, display: format!("{other:?}") }, ItemStatus::Completed, None, None);
             }
         }
-    }
-
-    /// The item of the call whose sub-agent sent `update`, as its `_meta`
-    /// says (where its pack says to look), when that call is known.
-    fn parent_of(&self, update: &acp::SessionUpdate) -> Option<ItemId> {
-        let pointer = self.parent_call.as_deref()?;
-        let meta = match update {
-            acp::SessionUpdate::UserMessageChunk(chunk) | acp::SessionUpdate::AgentMessageChunk(chunk) | acp::SessionUpdate::AgentThoughtChunk(chunk) => chunk.meta.as_ref(),
-            acp::SessionUpdate::ToolCall(call) => call.meta.as_ref(),
-            acp::SessionUpdate::ToolCallUpdate(update) => update.meta.as_ref(),
-            _ => None,
-        }?;
-        let call = convert::pointer_in(meta, pointer)?.as_str()?;
-        self.tool_items.get(call).cloned()
     }
 
     /// Only seen during history replay: a new user message starts a new replayed turn;
@@ -724,6 +732,16 @@ impl SessionState {
         }
     }
 
+    /// The agent no longer asks `id` (it withdrew it).
+    pub fn withdraw_request(&mut self, id: &RequestId) {
+        if self.request(id).is_some_and(|r| r.status == RequestStatus::Pending) {
+            self.set_request_status(id, RequestStatus::Cancelled);
+            if self.turn_running() && !self.requests.iter().any(|r| r.status == RequestStatus::Pending) {
+                self.set_thread(|t| t.status = ThreadStatus::Running);
+            }
+        }
+    }
+
     fn set_request_status(&mut self, id: &RequestId, status: RequestStatus) {
         if let Some(request) = self.requests.iter_mut().find(|r| &r.id == id) {
             request.status = status;
@@ -751,11 +769,6 @@ mod tests {
     use harness_contracts::{InstanceId, Piece, RuntimePolicy, ThreadId};
 
     fn state() -> SessionState {
-        nesting(None)
-    }
-
-    /// A state reading a sub-agent's parent call where `parent_call` says.
-    fn nesting(parent_call: Option<&str>) -> SessionState {
         SessionState::new(Thread {
             id: ThreadId::new("t"),
             instance_id: InstanceId::new("i"),
@@ -766,7 +779,7 @@ mod tests {
             model: None,
             controls: Default::default(),
             mcp_servers: Vec::new(),
-        }, parent_call.map(str::to_owned))
+        })
     }
 
     fn chunk(text: &str) -> acp::ContentChunk {
@@ -788,73 +801,6 @@ mod tests {
         assert!(matches!(by_turn(0).as_slice(), [ItemBody::UserMessage { text, .. }, ItemBody::AssistantMessage { .. }] if text == "q1"));
         assert!(matches!(by_turn(1).as_slice(), [ItemBody::UserMessage { text, .. }, ItemBody::AssistantMessage { .. }] if text == "q2 cont"));
         assert!(!s.turn_running());
-    }
-
-    /// `_meta` naming the call whose sub-agent sent an update, as the
-    /// Claude Code adapter stamps it.
-    fn by(call: &str) -> acp::Meta {
-        serde_json::from_value(serde_json::json!({ "claudeCode": { "parentToolUseId": call } })).unwrap()
-    }
-
-    /// A sub-agent's updates are items under the call that started it (its
-    /// pack says where their `_meta` names it); its streamed text doesn't
-    /// run into the agent's own; its prompt isn't a turn of yours. With no
-    /// pointer, or a call not known, nothing nests.
-    #[test]
-    fn a_sub_agents_work_nests_under_the_call_that_started_it() {
-        let mut s = nesting(Some("/claudeCode/parentToolUseId"));
-        let turn = s.begin_turn(&TurnInput::of("look around"));
-        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("Asking a helper. ")));
-        s.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("task-1", "Explore the parser")));
-        let task = s.tool_items["task-1"].clone();
-        s.apply(&acp::SessionUpdate::UserMessageChunk(chunk("its prompt").meta(by("task-1"))));
-        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("Reading it.").meta(by("task-1"))));
-        s.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("read-1", "Read parse.rs").meta(by("task-1"))));
-        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("Meanwhile, me.")));
-        s.apply(&acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new("read-1", acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed)).meta(by("task-1"))));
-        s.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("x", "Unknown parent").meta(by("nobody"))));
-        s.end_turn(&turn, TurnStatus::Completed, None);
-        let shown: Vec<(String, Option<&ItemId>)> = s.items.iter().skip(1).map(|i| (i.title.clone().or_else(|| i.body.said()).unwrap_or_default(), i.parent_id.as_ref())).collect();
-        assert_eq!(shown, [
-            ("Asking a helper. ".to_owned(), None),
-            ("Explore the parser".to_owned(), None),
-            ("Reading it.".to_owned(), Some(&task)),
-            ("Read parse.rs".to_owned(), Some(&task)),
-            ("Meanwhile, me.".to_owned(), None),
-            ("Unknown parent".to_owned(), None),
-        ]);
-        assert_eq!(s.turns.len(), 1, "its prompt isn't a turn");
-
-        let mut plain = state();
-        let turn = plain.begin_turn(&TurnInput::of("look around"));
-        plain.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("task-1", "Explore")));
-        plain.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("read-1", "Read").meta(by("task-1"))));
-        plain.end_turn(&turn, TurnStatus::Completed, None);
-        assert!(plain.items.iter().all(|i| i.parent_id.is_none()), "no pointer: nothing nests");
-    }
-
-    /// Two senders streaming at once each keep their own message; your
-    /// message added meanwhile is yours (not under a sub-agent's call); a
-    /// request for a sub-agent's call nests where the call is.
-    #[test]
-    fn senders_stream_apart_and_only_their_own_nest() {
-        let mut s = nesting(Some("/claudeCode/parentToolUseId"));
-        let turn = s.begin_turn(&TurnInput::of("look around"));
-        s.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("task-1", "Explore")));
-        let task = s.tool_items["task-1"].clone();
-        for (words, by_it) in [("mine ", false), ("its ", true), ("too", false), ("own", true)] {
-            let chunk = chunk(words);
-            s.apply(&acp::SessionUpdate::AgentMessageChunk(if by_it { chunk.meta(by("task-1")) } else { chunk }));
-        }
-        let said: Vec<(String, Option<&ItemId>)> = s.items.iter().filter(|i| matches!(i.body, ItemBody::AssistantMessage { .. })).map(|i| (i.body.said().unwrap_or_default(), i.parent_id.as_ref())).collect();
-        assert_eq!(said, [("mine too".to_owned(), None), ("its own".to_owned(), Some(&task))], "each sender's text in one message of its own");
-        let (_, added) = s.inject(&TurnInput::of("also this")).unwrap();
-        assert_eq!(s.items[s.item_index[&added]].parent_id, None, "your message is yours");
-        s.apply(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("run-1", "Run tests").meta(by("task-1"))));
-        let request = s.open_request(Some("run-1"), RequestKind::Question, "Run them?".into(), None, Vec::new(), Vec::new());
-        let item = s.items.iter().find(|i| matches!(&i.body, ItemBody::Request { request_id } if *request_id == request)).unwrap();
-        assert_eq!(item.parent_id.as_ref(), Some(&task), "the request where its call is");
-        s.end_turn(&turn, TurnStatus::Completed, None);
     }
 
     #[test]

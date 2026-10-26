@@ -18,7 +18,8 @@ use crate::actions::{Action, ActionProvider, At, Control, RunCx, Style};
 use crate::hosted::{Hosted, Status, Tone};
 use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target, Things};
 use crate::shared::{Reader, Shared};
-use crate::tags::{TagAct, Tags, first_line, thing_name};
+use crate::conversation::first_line;
+use crate::tags::{TagAct, Tags, thing_name};
 use crate::theme::colors;
 use crate::viewport::{Go, Measured, Show};
 

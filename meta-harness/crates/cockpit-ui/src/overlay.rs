@@ -3,15 +3,16 @@
 //! outside the top one closes it (and goes no further, unless it lets taps
 //! through); the way back out (Escape) closes the top one, unless it steps
 //! back through its own first; what's under a modal one takes no keys.
-//! Which are open is each one's own state; the stack is in the order they
-//! were drawn (the last on top). Nothing here is allocated per frame past
-//! the few places drawn.
+//! Which are open is each one's own state; the top is the one opened last
+//! (still drawn). Nothing is allocated per frame past the places drawn (a
+//! few; the hints, one per label).
 
 use egui::{Pos2, RawInput, Rect};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Overlay {
-    /// A card (or the pop-up terminal) over the panel it's about.
+    /// A buffer (a card, the inbox, a chat, a sub-agent's work, the pop-up
+    /// terminal) over the panel it's about.
     QuickLook,
     /// The developer inspector's pick (over everything).
     Inspector,
@@ -27,8 +28,6 @@ pub enum Overlay {
     Menu,
     /// The action list, or a value's choices.
     Palette,
-    /// A sub-agent, at work or done: its steps as they come.
-    Subagent,
 }
 
 /// What a tap outside it does.
@@ -52,15 +51,12 @@ pub struct Rules {
     pub own_back: bool,
 }
 
-/// Every kind.
-pub const ALL: [Overlay; 9] = [Overlay::QuickLook, Overlay::Inspector, Overlay::Feedback, Overlay::Issues, Overlay::Hints, Overlay::Keys, Overlay::Subagent, Overlay::Menu, Overlay::Palette];
-
 impl Overlay {
     pub fn rules(self) -> Rules {
         let (outside, modal, own_back) = match self {
             Self::QuickLook => (Outside::Closes, false, true),
-            Self::Inspector => (Outside::Stays, false, false),
-            Self::Feedback | Self::Issues | Self::Subagent => (Outside::Closes, true, false),
+            Self::Inspector => (Outside::Stays, true, false),
+            Self::Feedback | Self::Issues => (Outside::Closes, true, false),
             Self::Hints | Self::Keys => (Outside::ClosesAndPasses, false, true),
             Self::Menu | Self::Palette => (Outside::Closes, true, true),
         };
@@ -69,11 +65,11 @@ impl Overlay {
 }
 
 /// A tap taken by closing what it was outside of: the rest of it is taken
-/// too (its release; a finger's moves and lift).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// too (its release; its fingers' moves and lifts).
+#[derive(Clone, Debug, Default, PartialEq)]
 struct Taking {
     button: bool,
-    touch: Option<egui::TouchId>,
+    touches: Vec<egui::TouchId>,
 }
 
 #[derive(Debug, Default)]
@@ -82,6 +78,8 @@ pub struct Overlays {
     drawing: Vec<(Overlay, Rect)>,
     /// Last frame's: what a tap is outside of.
     drawn: Vec<(Overlay, Rect)>,
+    /// Those drawn, in the order they opened (the last on top).
+    order: Vec<Overlay>,
     taking: Taking,
 }
 
@@ -91,71 +89,96 @@ impl Overlays {
         self.drawing.push((overlay, rect));
     }
 
-    /// The frame's drawn: what the next frame's taps are measured by.
+    /// The frame's drawn: what the next frame's taps are measured by; one
+    /// drawn first now opened last.
     pub fn frame_done(&mut self) {
         std::mem::swap(&mut self.drawn, &mut self.drawing);
         self.drawing.clear();
+        let drawn = &self.drawn;
+        self.order.retain(|o| drawn.iter().any(|(d, _)| d == o));
+        for (o, _) in drawn {
+            if !self.order.contains(o) {
+                self.order.push(*o);
+            }
+        }
     }
 
-    /// The one on top of those `open`, as last drawn.
+    /// The one on top of those `open`.
     pub fn top(&self, open: impl Fn(Overlay) -> bool) -> Option<Overlay> {
-        self.drawn.iter().rev().map(|(o, _)| *o).find(|o| open(*o))
+        self.order.iter().rev().copied().find(|o| open(*o))
     }
 
     fn inside(&self, overlay: Overlay, at: Pos2) -> bool {
         self.drawn.iter().any(|(o, r)| *o == overlay && r.contains(at))
     }
 
-    /// A tap in `raw` outside the top of those `open`: that one, to close.
+    /// A tap in `raw` outside `top` (the top one open): it, to close.
     /// Unless it lets taps through, the tap is taken out of `raw` (and the
     /// rest of it, as it comes).
-    pub fn outside_tap(&mut self, raw: &mut RawInput, open: impl Fn(Overlay) -> bool) -> Option<Overlay> {
-        self.take_the_rest(raw);
-        let top = self.top(&open)?;
+    pub fn outside_tap(&mut self, raw: &mut RawInput, top: Option<Overlay>) -> Option<Overlay> {
+        self.take_the_rest(raw, 0);
+        let top = top?;
         let rules = top.rules();
         if rules.outside == Outside::Stays {
             return None;
         }
-        let pressed = raw.events.iter().find_map(|e| match e {
-            egui::Event::PointerButton { pos, pressed: true, .. } => Some(*pos),
-            egui::Event::Touch { phase: egui::TouchPhase::Start, pos, .. } => Some(*pos),
+        let (at, pressed) = raw.events.iter().enumerate().find_map(|(n, e)| match e {
+            egui::Event::PointerButton { pos, pressed: true, .. } => Some((n, *pos)),
+            egui::Event::Touch { phase: egui::TouchPhase::Start, pos, .. } => Some((n, *pos)),
             _ => None,
         })?;
         if self.inside(top, pressed) {
             return None;
         }
         if rules.outside == Outside::Closes {
-            let touch = raw.events.iter().find_map(|e| match e {
+            // Every finger put down with it, and its press.
+            let touches = raw.events.iter().filter_map(|e| match e {
                 egui::Event::Touch { id, phase: egui::TouchPhase::Start, .. } => Some(*id),
                 _ => None,
             });
-            self.taking = Taking { button: true, touch };
-            self.take_the_rest(raw);
+            self.taking = Taking { button: true, touches: touches.collect() };
+            let press = raw.events.iter().skip(at).position(|e| matches!(e, egui::Event::PointerButton { pressed: true, .. })).map(|n| n + at);
+            self.take_the_rest(raw, press.map_or(at, |p| p + 1));
+            if let Some(p) = press {
+                raw.events.remove(p);
+            }
+            raw.events.retain(|e| !matches!(e, egui::Event::Touch { phase: egui::TouchPhase::Start, .. }));
         }
         Some(top)
     }
 
-    /// The tap being taken, out of `raw`: its press and release, its
-    /// finger's start, moves and lift.
-    fn take_the_rest(&mut self, raw: &mut RawInput) {
+    /// The tap being taken, out of `raw`'s events from `from` on: its
+    /// release, its fingers' moves and lifts. A press before its release
+    /// means the release was lost (let go off the page): the tap is over,
+    /// and the press is a tap of its own.
+    fn take_the_rest(&mut self, raw: &mut RawInput, from: usize) {
         if self.taking == Taking::default() {
             return;
         }
-        let mut taking = self.taking;
-        raw.events.retain(|e| match e {
-            egui::Event::PointerButton { pressed, .. } if taking.button => {
-                if !pressed {
+        let mut taking = std::mem::take(&mut self.taking);
+        let mut n = 0;
+        raw.events.retain(|e| {
+            n += 1;
+            if n <= from {
+                return true;
+            }
+            match e {
+                egui::Event::PointerButton { pressed: true, .. } | egui::Event::PointerGone if taking.button => {
                     taking.button = false;
+                    true
                 }
-                false
-            }
-            egui::Event::Touch { id, phase, .. } if taking.touch == Some(*id) => {
-                if matches!(phase, egui::TouchPhase::End | egui::TouchPhase::Cancel) {
-                    taking.touch = None;
+                egui::Event::PointerButton { pressed: false, .. } if taking.button => {
+                    taking.button = false;
+                    false
                 }
-                false
+                egui::Event::Touch { id, phase, .. } if taking.touches.contains(id) => {
+                    if matches!(phase, egui::TouchPhase::End | egui::TouchPhase::Cancel) {
+                        taking.touches.retain(|t| t != id);
+                    }
+                    false
+                }
+                _ => true,
             }
-            _ => true,
         });
         self.taking = taking;
     }
@@ -186,20 +209,22 @@ mod tests {
     #[test]
     fn a_tap_outside_the_top_one_closes_it_and_goes_no_further() {
         let mut o = drawn(&[(Overlay::QuickLook, CARD), (Overlay::Palette, LIST)]);
-        let open = |_| true;
+        let top = o.top(|_| true);
+        assert_eq!(top, Some(Overlay::Palette));
         // Inside the top one: its own.
-        assert_eq!(o.outside_tap(&mut raw(vec![press(Pos2::new(200.0, 170.0), true)]), open), None);
+        assert_eq!(o.outside_tap(&mut raw(vec![press(Pos2::new(200.0, 170.0), true)]), top), None);
         // Inside the card but outside the list on it: the list closes; the
         // tap, press and release, is taken.
         let mut input = raw(vec![press(Pos2::new(120.0, 280.0), true)]);
-        assert_eq!(o.outside_tap(&mut input, open), Some(Overlay::Palette));
+        assert_eq!(o.outside_tap(&mut input, top), Some(Overlay::Palette));
         assert!(input.events.is_empty());
+        let card = o.top(|k| k != Overlay::Palette);
         let mut release = raw(vec![press(Pos2::new(120.0, 280.0), false), egui::Event::Text("x".into())]);
-        assert_eq!(o.outside_tap(&mut release, |k| k != Overlay::Palette), None, "inside the card: it stays");
+        assert_eq!(o.outside_tap(&mut release, card), None, "inside the card: it stays");
         assert_eq!(release.events, vec![egui::Event::Text("x".into())], "the release taken, the rest kept");
         // The next tap is a tap.
         let mut next = raw(vec![press(Pos2::new(120.0, 280.0), true)]);
-        o.outside_tap(&mut next, |k| k != Overlay::Palette);
+        o.outside_tap(&mut next, card);
         assert_eq!(next.events.len(), 1);
     }
 
@@ -207,21 +232,22 @@ mod tests {
     fn a_hint_closes_on_a_tap_outside_and_lets_it_through_and_one_over_everything_stays() {
         let mut o = drawn(&[(Overlay::Keys, LIST)]);
         let mut input = raw(vec![press(Pos2::new(10.0, 10.0), true)]);
-        assert_eq!(o.outside_tap(&mut input, |_| true), Some(Overlay::Keys));
+        assert_eq!(o.outside_tap(&mut input, Some(Overlay::Keys)), Some(Overlay::Keys));
         assert_eq!(input.events.len(), 1, "it goes on to what's under it");
         let mut o = drawn(&[(Overlay::Inspector, CARD)]);
-        assert_eq!(o.outside_tap(&mut raw(vec![press(Pos2::new(10.0, 10.0), true)]), |_| true), None);
+        assert_eq!(o.outside_tap(&mut raw(vec![press(Pos2::new(10.0, 10.0), true)]), Some(Overlay::Inspector)), None);
     }
 
     #[test]
     fn a_fingers_tap_outside_is_taken_to_its_lift() {
         let mut o = drawn(&[(Overlay::Menu, LIST)]);
-        let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(7), phase, pos: Pos2::new(10.0, 10.0), force: None };
-        let mut input = raw(vec![touch(egui::TouchPhase::Start), press(Pos2::new(10.0, 10.0), true)]);
-        assert_eq!(o.outside_tap(&mut input, |_| true), Some(Overlay::Menu));
-        assert!(input.events.is_empty());
-        let mut lift = raw(vec![touch(egui::TouchPhase::Move), touch(egui::TouchPhase::End), press(Pos2::new(10.0, 10.0), false)]);
-        o.outside_tap(&mut lift, |_| false);
+        let touch = |id, phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos: Pos2::new(10.0, 10.0), force: None };
+        // Two fingers down at once: both taken.
+        let mut input = raw(vec![touch(7, egui::TouchPhase::Start), touch(8, egui::TouchPhase::Start), press(Pos2::new(10.0, 10.0), true)]);
+        assert_eq!(o.outside_tap(&mut input, Some(Overlay::Menu)), Some(Overlay::Menu));
+        assert!(input.events.is_empty(), "{:?}", input.events);
+        let mut lift = raw(vec![touch(7, egui::TouchPhase::Move), touch(8, egui::TouchPhase::End), touch(7, egui::TouchPhase::End), press(Pos2::new(10.0, 10.0), false)]);
+        o.outside_tap(&mut lift, None);
         assert!(lift.events.is_empty());
     }
 
@@ -229,7 +255,33 @@ mod tests {
     fn nothing_open_takes_nothing() {
         let mut o = drawn(&[(Overlay::Menu, LIST)]);
         let mut input = raw(vec![press(Pos2::new(10.0, 10.0), true)]);
-        assert_eq!(o.outside_tap(&mut input, |_| false), None);
+        assert_eq!(o.outside_tap(&mut input, None), None);
         assert_eq!(input.events.len(), 1);
+    }
+
+    /// A tap outside whose release never comes (let go off the page): the
+    /// next press is a tap of its own, not eaten.
+    #[test]
+    fn a_lost_release_doesnt_eat_the_next_tap() {
+        let mut o = drawn(&[(Overlay::Palette, LIST)]);
+        let mut input = raw(vec![press(Pos2::new(10.0, 10.0), true)]);
+        assert_eq!(o.outside_tap(&mut input, Some(Overlay::Palette)), Some(Overlay::Palette));
+        let mut next = raw(vec![press(Pos2::new(20.0, 20.0), true), press(Pos2::new(20.0, 20.0), false)]);
+        o.outside_tap(&mut next, None);
+        assert_eq!(next.events.len(), 2, "{:?}", next.events);
+    }
+
+    /// The top is the one opened last, whatever the order they're drawn
+    /// in.
+    #[test]
+    fn the_top_is_the_one_opened_last() {
+        let mut o = drawn(&[(Overlay::Menu, LIST)]);
+        o.drawn_at(Overlay::QuickLook, CARD);
+        o.drawn_at(Overlay::Menu, LIST);
+        o.frame_done();
+        assert_eq!(o.top(|_| true), Some(Overlay::QuickLook), "drawn before it, opened after");
+        o.drawn_at(Overlay::QuickLook, CARD);
+        o.frame_done();
+        assert_eq!(o.top(|_| true), Some(Overlay::QuickLook));
     }
 }

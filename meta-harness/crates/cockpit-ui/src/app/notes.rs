@@ -14,7 +14,7 @@ use harness_contracts::{Discussion, DiscussionStatus, Move, Subject, TagId};
 use super::*;
 use crate::kind::BufferKind;
 use crate::nav::Things;
-use crate::tags::first_line;
+use crate::conversation::first_line;
 
 /// The gutter's columns of tag bars (as many tags as fit; the panel's top
 /// line names every tag on the cursor's thing); the rest share the last.

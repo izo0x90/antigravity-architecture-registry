@@ -160,13 +160,19 @@ pub struct Subagent {
     /// Its task, in short.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// What it was told to do, whole.
+    /// What it was last told to do, whole.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
-    /// What it's doing now (its latest step).
+    /// What it handed back, when its harness sends that apart from its
+    /// own messages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub doing: Option<String>,
+    pub answer: Option<String>,
     pub status: SubagentStatus,
+    /// When it started, and ended (as the server saw each: a replayed one,
+    /// when it was replayed).
+    pub started_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_ms: Option<u64>,
     /// It can be stopped on its own (its harness says so), the turn going on.
     #[serde(default)]
     pub can_cancel: bool,

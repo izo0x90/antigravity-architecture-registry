@@ -8,7 +8,7 @@ mod answers;
 mod drafts;
 mod draw;
 
-pub use answers::{Answer, Offer, answers, keyed, offer, page, place_page};
+pub use answers::{Answer, Offer, Under, answers, keyed, offer, page, place_page};
 pub use drafts::Drafts;
 pub use draw::render_request;
 

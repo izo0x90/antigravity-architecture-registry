@@ -364,7 +364,7 @@ impl ActionProvider for InboxView {
         // Under its request while you're on it (the one shown: its keys).
         let here = self.parts().get(self.cursor) == Some(&Part::Request);
         if let Some(request) = shown.request.as_ref().filter(|_| shown.waits) {
-            out.extend(crate::request_card::offer(request, crate::request_card::Offer { here, keyed: true }, Command::OpenPage, Command::Answer));
+            out.extend(crate::request_card::offer(request, crate::request_card::Offer { under: if here { crate::request_card::Under::Here } else { crate::request_card::Under::Nowhere }, keyed: true }, Command::OpenPage, Command::Answer));
         }
         // Opening it and putting it away: under what it says while you're on it.
         let on_says = self.parts().get(self.cursor) == Some(&Part::Says);

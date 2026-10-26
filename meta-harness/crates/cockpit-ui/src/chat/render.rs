@@ -86,6 +86,13 @@ pub(super) enum Change {
 /// changes add and remove, as the Changes view says it ("+12 −3
 /// src/a.rs", "+20 −5 in 3 files"), each file written whole or not
 /// compared yet said so; and the rest ("output").
+/// What a sub-agent did, under where it started (its call, or its own
+/// line): `n` steps, folded unless `open`.
+fn nested_line(ui: &mut egui::Ui, open: bool, n: usize) {
+    let said = if n == 1 { "1 step by its sub-agent".to_owned() } else { format!("{n} steps by its sub-agent") };
+    ui.label(RichText::new(format!("{} {said}", crate::nav::fold_mark(open))).size(crate::theme::look().text_small).color(colors().muted));
+}
+
 fn draw_folded_output(ui: &mut egui::Ui, open: bool, changes: &[(usize, &harness_contracts::Diff, Change)], blocks: usize) {
     let look = crate::theme::look();
     let words = |ui: &mut egui::Ui, text: String| ui.label(RichText::new(text).size(look.text_small).color(colors().muted));
@@ -157,9 +164,16 @@ impl ChatStreamState {
         let ctx = ui.ctx().clone();
         let panel = ui.clip_rect();
 
+        // Alone, a sub-agent's: who it is over its work; nothing typed to it.
+        let alone = self.ui.alone.is_some();
         ui.vertical(|ui| {
+            if alone {
+                self.render_subagent_head(ui);
+            }
             let banners = self.render_banners(ui);
-            self.render_plan(ui);
+            if !alone {
+                self.render_plan(ui);
+            }
             // The stream in what's left above what's under it (what waits
             // on you, the typing box), as tall as that was last frame.
             let whole = ui.available_height();
@@ -181,7 +195,9 @@ impl ChatStreamState {
             // The agent at work, where it shows; each item's stop, in the
             // stream's order.
             let rects = std::mem::take(&mut self.ui.item_rects);
-            self.show_live(ui, stream.inner_rect, panel, &rects);
+            if !alone {
+                self.show_live(ui, stream.inner_rect, panel, &rects);
+            }
             for rect in rects {
                 self.ui.scrolling.item(rect);
             }
@@ -213,16 +229,23 @@ impl ChatStreamState {
                         if let Some(index) = index {
                             self.ui.spots.push(Spot { key: index.to_string(), rect });
                         }
+                        // (Room for its answers, its host's to draw.)
+                        ui.add_space(self.ui.room_under_waiting);
                     }
                 });
             }
-            // Its sub-agents at work, in sight (each opens over the panels).
-            self.render_subagents(ui);
-            let start = ui.cursor().min;
-            let w = ui.available_width();
-            self.render_input(ui, typing, cx);
-            let input = Rect::from_min_size(Pos2::new(start.x, start.y), Vec2::new(w, (ui.cursor().min.y - start.y).max(40.0)));
-            feedback.register_inspectable(ui, &format!("{host}:chat:input_bar"), input);
+            if alone {
+                self.ui.typing = None;
+            } else {
+                // Its sub-agents at work, in sight (each opens over what
+                // you're on).
+                self.render_subagents(ui);
+                let start = ui.cursor().min;
+                let w = ui.available_width();
+                self.render_input(ui, typing, cx);
+                let input = Rect::from_min_size(Pos2::new(start.x, start.y), Vec2::new(w, (ui.cursor().min.y - start.y).max(40.0)));
+                feedback.register_inspectable(ui, &format!("{host}:chat:input_bar"), input);
+            }
             // What's under the stream changed height: the stream makes room
             // for it in the next frame, at once.
             let below = ui.cursor().top() - top + ui.spacing().item_spacing.y;
@@ -706,10 +729,7 @@ impl ChatStreamState {
                 match (row.nested, output.is_empty()) {
                     (0, true) => {}
                     (0, false) => draw_folded_output(ui, open, &changes, output.len()),
-                    (n, _) => {
-                        let said = if n == 1 { "1 step by its sub-agent".to_owned() } else { format!("{n} steps by its sub-agent") };
-                        ui.label(RichText::new(format!("{} {said}", crate::nav::fold_mark(open))).size(crate::theme::look().text_small).color(colors().muted));
-                    }
+                    (n, _) => nested_line(ui, open, n),
                 }
                 if open {
                     for (n, block) in output.iter().enumerate() {
@@ -771,27 +791,22 @@ impl ChatStreamState {
                     }
                 }
             }
-            // Where a sub-agent started: its name, how it's doing, how many
-            // steps of its own (folded under it); Enter opens it.
+            // Where a sub-agent started: its name, how it's doing; its
+            // steps folded under it (as a call's sub-agent's are); Enter
+            // opens it.
             ItemBody::Subagent { subagent_id } => {
                 let look = crate::theme::look();
-                let (title, state, colour) = match view.subagent(subagent_id) {
-                    Some(seen) => {
-                        let (state, colour) = subagents::state_words(seen.subagent.status);
-                        (seen.subagent.title.clone(), state, colour)
-                    }
-                    None => (item.title.clone().unwrap_or_else(|| "sub-agent".into()), "", colors().muted),
-                };
-                let steps = view.under(&item.id).count();
-                let steps = match steps {
-                    0 => String::new(),
-                    1 => " · 1 step".to_owned(),
-                    n => format!(" · {n} steps"),
-                };
-                ui.horizontal(|ui| {
+                let seen = view.subagent(subagent_id);
+                let title = seen.map_or_else(|| item.title.as_deref().unwrap_or("sub-agent"), |s| s.subagent.title.as_str());
+                ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(format!("{} {title}", icon::ROBOT)).size(look.text_body).color(colors().text_strong));
-                    ui.label(RichText::new(format!("{} {state}{steps}", icon::CIRCLE)).size(look.text_small).color(colour));
+                    if let Some(seen) = seen {
+                        ui.label(crate::status::text(crate::status::subagent(seen.subagent.status)).size(look.text_small));
+                    }
                 });
+                if row.nested > 0 {
+                    nested_line(ui, self.ui.folds.item_open(item), row.nested);
+                }
             }
             ItemBody::Notice { level, text } => {
                 let color = match level { NoticeLevel::Info => colors().muted, NoticeLevel::Warning => colors().warn };
@@ -849,6 +864,7 @@ impl crate::hosted::Hosted for ChatStreamState {
     /// The agent slot it shows (its role on hover).
     fn title(&self) -> Status {
         match self.slot() {
+            Some(slot) if self.ui.alone.is_some() => Status::new(format!("{} Sub-agent of {}", icon::ROBOT, slot.name), Tone::Info).detail(format!("agent slot ({})", slot.role)),
             Some(slot) => Status::new(format!("{} {}", icon::USER_FOCUS, slot.name), if slot.is_lead() { Tone::Accent } else { Tone::Info }).detail(format!("agent slot ({})", slot.role)),
             None => Status::new("No agent slot", Tone::Muted),
         }
@@ -881,7 +897,7 @@ impl crate::hosted::Hosted for ChatStreamState {
         // Its sub-agents at work: seen here while it isn't focused.
         let working = match self.subagents_working() {
             0 => None,
-            n => Some(Status::new(format!("{} {n}", icon::ROBOT), Tone::Info).detail(format!("Sub-agents working: {n}"))),
+            n => Some(Status::new(format!("{} {n}", icon::ROBOT), Tone::Info).detail(subagents::working_words(n))),
         };
         let Some(s) = self.instance() else { return [Status::new("No harness", Tone::Plain)].into_iter().chain(working).collect() };
         let mut out = vec![Status::new(s.display_name.clone(), Tone::Plain)];

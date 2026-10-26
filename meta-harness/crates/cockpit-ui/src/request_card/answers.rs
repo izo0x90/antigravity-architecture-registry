@@ -28,9 +28,9 @@ pub struct Answer {
 }
 
 impl Answer {
-    /// `action` (this answer's) as it shows: under the request, while the
-    /// cursor is on it (`here`).
-    pub fn place(&self, action: Action, here: bool) -> Action {
+    /// `action` (this answer's) as it shows: under the request, as `under`
+    /// says.
+    pub fn place(&self, action: Action, under: Under<'_>) -> Action {
         let mut action = action;
         if let Some(alias) = &self.alias {
             action = action.alias(alias.clone());
@@ -38,12 +38,11 @@ impl Answer {
         if let Some(w) = &self.warning {
             action = action.detail(w.clone());
         }
-        if !here {
-            return action;
-        }
+        let Some(at) = under.shown() else { return action };
         let mut action = action.on_waiting(self.style, self.caption.clone(), None);
         if let Some(control) = action.control.as_mut() {
             control.tone = Some(self.tone);
+            control.under = at;
         }
         action
     }
@@ -55,10 +54,37 @@ pub fn page(request: &RuntimeRequest) -> Option<String> {
     (request.status == RequestStatus::Pending).then(|| url.clone())
 }
 
-/// `action` (opening `request`'s page) as it shows: under the request
-/// while the cursor is on it (`here`).
-pub fn place_page(action: Action, here: bool) -> Action {
-    if here { action.on_waiting(Style::Button, "Open the page", Some(egui_phosphor::regular::ARROW_SQUARE_OUT)) } else { action }
+/// `action` (opening `request`'s page) as it shows: under the request,
+/// as `under` says.
+pub fn place_page(action: Action, under: Under<'_>) -> Action {
+    let Some(at) = under.shown() else { return action };
+    let mut action = action.on_waiting(Style::Button, "Open the page", Some(egui_phosphor::regular::ARROW_SQUARE_OUT));
+    if let Some(control) = action.control.as_mut() {
+        control.under = at;
+    }
+    action
+}
+
+/// Where a request's answers show as controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Under<'a> {
+    /// Not shown: its keys and the action list only.
+    Nowhere,
+    /// Under what you're on.
+    Here,
+    /// Under the view's place `key` (its card).
+    Place(&'a str),
+}
+
+impl Under<'_> {
+    /// Shown: under which place (none: what you're on).
+    fn shown(self) -> Option<Option<String>> {
+        match self {
+            Self::Nowhere => None,
+            Self::Here => Some(None),
+            Self::Place(key) => Some(Some(key.to_owned())),
+        }
+    }
 }
 
 /// The ways to answer `request` (pending), in its order. The chat and the
@@ -94,8 +120,8 @@ pub fn answers(request: &RuntimeRequest) -> Vec<Answer> {
 /// Where a request's answers are offered: under it (you're on it), and
 /// whether they hold the keys (`y`, `d`…: one request's at a time).
 #[derive(Clone, Copy, Debug)]
-pub struct Offer {
-    pub here: bool,
+pub struct Offer<'a> {
+    pub under: Under<'a>,
     pub keyed: bool,
 }
 
@@ -110,15 +136,15 @@ pub fn keyed<'a>(waiting: impl IntoIterator<Item = &'a RuntimeRequest>, on: Opti
 /// the inbox): opening its page, when it has one, and each answer, placed
 /// as `at` says. `page` and `answer` are the caller's commands for them (an
 /// answer by its option's id).
-pub fn offer<C: 'static>(request: &RuntimeRequest, at: Offer, page: impl FnOnce(String) -> C, answer: impl Fn(String) -> C) -> Vec<Action> {
+pub fn offer<C: 'static>(request: &RuntimeRequest, at: Offer<'_>, page: impl FnOnce(String) -> C, answer: impl Fn(String) -> C) -> Vec<Action> {
     let act = |id: &str, label: &str, detail: &str, command: C| Action::new(id, label, detail, command).focused().group(Group::Act);
     let mut out = Vec::new();
     if let Some(url) = self::page(request) {
-        out.push(place_page(act(&format!("request.{}.page", request.id), &format!("Open the page: {}", request.title), "The page the agent asks you to open, in a new tab", page(url)), at.here));
+        out.push(place_page(act(&format!("request.{}.page", request.id), &format!("Open the page: {}", request.title), "The page the agent asks you to open, in a new tab", page(url)), at.under));
     }
     for one in answers(request) {
         let one = if at.keyed { one } else { Answer { alias: None, ..one } };
-        out.push(one.place(act(&one.id, &one.label, "Answers the agent's request this way", answer(one.option.clone())).importance(PRIMARY), at.here));
+        out.push(one.place(act(&one.id, &one.label, "Answers the agent's request this way", answer(one.option.clone())).importance(PRIMARY), at.under));
     }
     out
 }

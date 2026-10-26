@@ -10,9 +10,12 @@
 //! - `[hold]`: waits until [`MockAgent::release`];
 //! - `[two-asks]`: asks two permissions at once (two sub-agents' edits),
 //!   then says each answer it got;
-//! - `[sub-agent]`: starts a sub-agent with a tool call; the sub-agent's
-//!   message and call say whose they are in their `_meta`, where its
-//!   settings look (`parent_call`);
+//! - `[withdrawn]`: asks a permission, then withdraws it (as an agent does
+//!   for a sub-agent stopped while it asks);
+//! - `[sub-agent]`: starts a sub-agent the way its settings say its agent
+//!   tells of them (`subagents`): announced, with its own session (its
+//!   task, its settings, a message and a call under it, its end); or by
+//!   the call that starts it;
 //! - anything else: answers `echo: <prompt>`.
 //!
 //! A message steered in while a prompt runs is taken at once (as a real
@@ -58,9 +61,8 @@ pub struct MockSetup {
     /// error output, waits for the browser's callback on a local port, and,
     /// signed out, starts it when a session opens (and doesn't answer).
     pub loopback_login: bool,
-    /// Where its sub-agents' updates name the call that started them, in
-    /// their `_meta` (none: they don't say).
-    pub parent_call: Option<String>,
+    /// How it tells of its sub-agents.
+    pub subagents: crate::settings::SubagentSettings,
 }
 
 impl Default for MockSetup {
@@ -74,7 +76,7 @@ impl Default for MockSetup {
             load_session: false,
             sse: false,
             loopback_login: false,
-            parent_call: None,
+            subagents: Default::default(),
         }
     }
 }
@@ -115,7 +117,7 @@ impl MockSetup {
         } else {
             acp::AuthMethod::Agent(acp::AuthMethodAgent::new("login", "Log in"))
         }];
-        Self { modes, declares, queues: settings.queueing.is_some(), auth_methods, signed_in, load_session: false, sse: true, loopback_login: false, parent_call: settings.parent_call.clone() }
+        Self { modes, declares, queues: settings.queueing.is_some(), auth_methods, signed_in, load_session: false, sse: true, loopback_login: false, subagents: settings.subagents.clone() }
     }
 }
 
@@ -244,7 +246,16 @@ impl MockAgent {
             return tour(cx, &self.seen).await;
         }
         if text.contains("[sub-agent]") {
-            return sub_agent(cx, self.setup.parent_call.as_deref());
+            return sub_agent(cx, &self.setup.subagents);
+        }
+        if text.contains("[withdrawn]") {
+            notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new("edit-w", "Edit w.rs").kind(acp::ToolKind::Edit).status(acp::ToolCallStatus::Pending)))?;
+            let options = vec![acp::PermissionOption::new("allow-once", "Allow", acp::PermissionOptionKind::AllowOnce)];
+            let asked = cx.send_request(acp::RequestPermissionRequest::new(SESSION, acp::ToolCallUpdate::new("edit-w", acp::ToolCallUpdateFields::new().title("Edit w.rs")), options));
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            // (Dropped unanswered: withdrawn.)
+            drop(asked);
+            return say(cx, "withdrawn");
         }
         // Two asked at once, as two sub-agents ask in parallel: each its
         // own answer.
@@ -382,18 +393,33 @@ fn say(cx: &ConnectionTo<Client>, words: &str) -> agent_client_protocol::Result<
     notify(cx, acp::SessionUpdate::AgentMessageChunk(text(words)))
 }
 
-/// A sub-agent started by a tool call: its message and its call say whose
-/// they are where `parent_call` points in their `_meta`.
-fn sub_agent(cx: &ConnectionTo<Client>, parent_call: Option<&str>) -> agent_client_protocol::Result<()> {
-    notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new("task-1", "Explore the parser").status(acp::ToolCallStatus::InProgress)))?;
-    let meta = parent_call.map(|pointer| {
-        let mut meta = serde_json::json!({});
-        set(&mut meta, pointer, serde_json::json!("task-1"));
-        serde_json::from_value::<acp::Meta>(meta).expect("an object")
-    });
-    notify(cx, acp::SessionUpdate::AgentMessageChunk(text("Reading the parser.").meta(meta.clone())))?;
-    notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new("read-1", "Read parse.rs").kind(acp::ToolKind::Read).status(acp::ToolCallStatus::Completed).meta(meta)))?;
-    notify(cx, acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new("task-1", acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed))))?;
+/// A sub-agent's own session, as the mock names it.
+pub const SUB_SESSION: &str = "s1-helper";
+
+/// A sub-agent started, told of as `how` says: announced, its task sent
+/// it, its own session's settings, a message and a call of its, its end;
+/// or only by the call that starts it. Then the agent's own words.
+fn sub_agent(cx: &ConnectionTo<Client>, how: &crate::settings::SubagentSettings) -> agent_client_protocol::Result<()> {
+    let raw = |session: &str, update: serde_json::Value| cx.send_notification(UntypedMessage::new("session/update", serde_json::json!({ "sessionId": session, "update": update }))?);
+    if how.declare {
+        raw(SESSION, serde_json::json!({ "sessionUpdate": "subagent_update", "sessionId": SUB_SESSION, "title": "Explorer", "description": "Explore the parser", "capabilities": { "cancel": {} }, "state": { "state": "running" } }))?;
+        raw(SESSION, serde_json::json!({ "sessionUpdate": "session_message", "senderSessionId": SESSION, "recipientSessionId": SUB_SESSION, "content": [{ "type": "text", "text": "Explore the parser" }] }))?;
+        raw(SUB_SESSION, serde_json::json!({ "sessionUpdate": "current_mode_update", "currentModeId": "its-own" }))?;
+        raw(SUB_SESSION, serde_json::json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Reading the parser." } }))?;
+        raw(SUB_SESSION, serde_json::json!({ "sessionUpdate": "tool_call", "toolCallId": "read-1", "title": "Read parse.rs", "kind": "read", "status": "completed" }))?;
+        raw(SESSION, serde_json::json!({ "sessionUpdate": "subagent_update", "sessionId": SUB_SESSION, "state": { "state": "idle", "stopReason": "end_turn" } }))?;
+    } else if let Some(by) = &how.started_by {
+        let mut one = serde_json::json!({});
+        for (pointer, value) in [(Some(&by.title), "Explorer"), (by.prompt.as_ref(), "Explore the parser"), (by.kind.as_ref(), "research")] {
+            if let Some(pointer) = pointer {
+                set(&mut one, pointer, serde_json::json!(value));
+            }
+        }
+        let mut input = serde_json::json!({});
+        set(&mut input, &by.list, serde_json::json!([one]));
+        notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new("task-1", "Start a helper").raw_input(input).status(acp::ToolCallStatus::InProgress)))?;
+        notify(cx, acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new("task-1", acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed))))?;
+    }
     say(cx, "The helper read it.")
 }
 

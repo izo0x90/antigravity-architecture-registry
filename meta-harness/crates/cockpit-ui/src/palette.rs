@@ -76,6 +76,8 @@ pub struct Palette {
     /// a pick, what was typed in its field goes back after the trigger.
     gives_back: bool,
     given_back: Option<String>,
+    /// Where it was drawn this frame (none: it wasn't).
+    drawn_at: Option<egui::Rect>,
 }
 
 /// Rows ranked for a text, remembered with what they were ranked from.
@@ -104,8 +106,13 @@ impl Ranked {
 
 impl Palette {
     /// The area it's drawn in.
-    pub(crate) fn area() -> egui::Id {
+    fn area() -> egui::Id {
         egui::Id::new("command_palette")
+    }
+
+    /// Where it was drawn this frame, while it's open.
+    pub fn drawn_at(&self) -> Option<egui::Rect> {
+        self.drawn_at.filter(|_| self.open)
     }
 
     /// Where it was last drawn (none: it hasn't been).
@@ -129,7 +136,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions { reach: Reach::Here }, filter: String::new(), list: Default::default(), ask: None, enter_waiting: false, said: None, rows_of: None, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None }
+        Self { open: false, stage: Stage::Actions { reach: Reach::Here }, filter: String::new(), list: Default::default(), ask: None, enter_waiting: false, said: None, rows_of: None, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None, drawn_at: None }
     }
 }
 
@@ -312,6 +319,7 @@ impl Palette {
 
     /// Renders it; returns an invocation when the user picks something.
     pub fn render(&mut self, ctx: &egui::Context, offered: &[Offered], sheet: &Sheet, keymap: &KeymapConfig) -> Option<Invocation> {
+        self.drawn_at = None;
         if !self.open {
             return None;
         }
@@ -386,7 +394,7 @@ impl Palette {
             picked = Some(invocation(bound, None));
         }
 
-        egui::Area::new(Self::area())
+        let shown = egui::Area::new(Self::area())
             .fixed_pos(pos)
             // Whole from its first frame: no fading in.
             .fade_in(false)
@@ -547,6 +555,7 @@ impl Palette {
                         }
                     });
             });
+        self.drawn_at = Some(shown.response.rect);
 
         if let Some((action, from_list)) = next_stage {
             self.enter(action, from_list);

@@ -157,10 +157,16 @@ impl CockpitApp {
     /// component's code found first).
     pub(super) fn land(&mut self, kind: Option<BufferKind>, target: &Target, from: Jump, ctx: &egui::Context) {
         // A discussion opens over what you're on (the quick look), unless a
-        // panel shows discussions.
-        if kind.is_none() && matches!(target, Target::Discussion(_)) && !self.desk.panels.kinds().contains(&BufferKind::Discussion) {
-            self.look_at(BufferId::new(BufferKind::Discussion, crate::quick_look::PANE), None, ctx);
-            if let Err(why) = self.desk.view_mut(BufferKind::Discussion).show_target(target) {
+        // panel shows discussions; a sub-agent, always (its chat is in a
+        // panel already).
+        let over = match target {
+            Target::Discussion(_) if !self.desk.panels.kinds().contains(&BufferKind::Discussion) => Some(BufferKind::Discussion),
+            Target::Subagent { .. } => Some(BufferKind::Chat),
+            _ => None,
+        };
+        if let (None, Some(over)) = (kind, over) {
+            self.look_at(BufferId::new(over, crate::quick_look::PANE), None, ctx);
+            if let Err(why) = self.desk.view_mut(over).show_target(target) {
                 self.note = Some(why);
             }
             return;

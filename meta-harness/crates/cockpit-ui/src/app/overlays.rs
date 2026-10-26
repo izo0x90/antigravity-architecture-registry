@@ -18,7 +18,6 @@ impl CockpitApp {
             Overlay::Keys => !self.pending_keys.is_empty() || self.pending_count.is_some(),
             Overlay::Menu => self.input_mode == InputMode::Leader,
             Overlay::Palette => self.palette.is_open(),
-            Overlay::Subagent => self.subagent_look.is_some(),
         }
     }
 
@@ -31,8 +30,7 @@ impl CockpitApp {
             Overlay::Feedback => self.feedback.is_modal_open = false,
             Overlay::Issues => self.feedback.is_issues_window_open = false,
             Overlay::Hints => {
-                self.on_capture(&[], true, ctx);
-                self.capture = None;
+                self.end_capture(ctx);
                 self.input_mode = InputMode::Normal;
             }
             Overlay::Keys => (self.pending_keys, self.pending_count) = (Vec::new(), None),
@@ -41,7 +39,6 @@ impl CockpitApp {
                 self.palette.close();
                 self.palette_closed(ctx);
             }
-            Overlay::Subagent => self.subagent_look = None,
         }
         self.forget_frame();
     }
@@ -49,6 +46,16 @@ impl CockpitApp {
     /// The one on top, of those up.
     pub(super) fn top_overlay(&self) -> Option<Overlay> {
         self.overlays.top(|o| self.overlay_open(o))
+    }
+
+    /// Keys reach host `at` (its typing box has the keyboard while typing
+    /// is there): nothing over it takes them. The quick look holds them
+    /// while it's up; a modal one, all of them.
+    pub(super) fn keys_reach(&self, at: crate::keymap::Host) -> bool {
+        match self.top_overlay() {
+            Some(top) if top.rules().modal => false,
+            _ => at == crate::keymap::Host::Look || self.quick_look.is_none(),
+        }
     }
 
     /// Before a frame takes its input: a tap outside what's on top closes
@@ -59,8 +66,8 @@ impl CockpitApp {
         if matches!(self.input_mode, InputMode::Choosing { .. }) {
             return;
         }
-        let open: Vec<Overlay> = crate::overlay::ALL.into_iter().filter(|o| self.overlay_open(*o)).collect();
-        if let Some(overlay) = self.overlays.outside_tap(raw, |o| open.contains(&o)) {
+        let top = self.top_overlay();
+        if let Some(overlay) = self.overlays.outside_tap(raw, top) {
             self.close_overlay(overlay, ctx);
         }
     }
@@ -79,6 +86,14 @@ impl CockpitApp {
             return true;
         }
         rules.modal
+    }
+
+    /// What's being captured (hints' labels) ends, nothing picked.
+    pub(super) fn end_capture(&mut self, ctx: &egui::Context) {
+        if self.capture.is_some() {
+            self.on_capture(&[], true, ctx);
+            self.capture = None;
+        }
     }
 
     /// The menus opened: from where (given back when they're left).

@@ -19,8 +19,12 @@ enum ChatCommand {
     StepSlot(i32),
     /// To the next sub-agent (1), or the one before (-1).
     StepSubagent(i32),
-    /// The sub-agent where the cursor is, opened over the panels.
+    /// The sub-agent where the cursor is, opened (its own work, alone).
     OpenSubagent,
+    /// The sub-agent shown alone: its work stopped, the turn going on;
+    /// where it started.
+    StopSubagent,
+    SubagentStart,
     NewSlot,
     CloseSlot,
     CloseSession,
@@ -133,12 +137,25 @@ impl ActionProvider for ChatStreamState {
             out.push(Action::new("chat.prev_slot", "Show the previous agent slot", "This chat shows the agent before", C::StepSlot(-1)).focused());
         }
         // Its sub-agents: the one you're on opened; from one to the next.
-        if self.subagent_here() {
-            out.push(Action::new("chat.subagent.open", "Open the sub-agent", "Its steps as they come, what it was told, stopping it", C::OpenSubagent).focused().importance(crate::actions::PRIMARY).on_item(crate::actions::Style::Button, "Open", Some(icon::ROBOT)));
+        // Shown alone: stopping it (where its harness can), where it
+        // started.
+        if self.subagent_here().is_some() {
+            out.push(Action::new("chat.open_subagent", "Open the sub-agent", "Its steps as they come, what it was told, stopping it", C::OpenSubagent).focused().importance(crate::actions::PRIMARY).group(crate::actions::Group::GoTo).on_item(crate::actions::Style::Button, "Open", Some(icon::ROBOT)));
+        }
+        if let Some(seen) = self.ui.alone.as_ref().and_then(|id| Some(self.thread()?.subagent(id)?.subagent.clone())) {
+            if seen.status.working() {
+                let stop = Action::new("chat.stop_subagent", "Stop the sub-agent", "Stops its work alone; the agent's turn goes on", C::StopSubagent).focused().importance(crate::actions::PRIMARY).on_view(crate::actions::Style::Button, "Stop it", Some(icon::STOP));
+                out.push(match (seen.can_cancel, agents.stopping(&seen.id)) {
+                    (true, false) => stop,
+                    (true, true) => stop.when(crate::actions::When::Unavailable).detail("Stopping it…"),
+                    (false, _) => stop.when(crate::actions::When::Unavailable).detail("Its harness can't stop one sub-agent alone: stopping the turn stops it"),
+                });
+            }
+            out.push(Action::new("chat.subagent_start", "Where the sub-agent started", "Its line in the agent's chat, in a panel", C::SubagentStart).focused().group(crate::actions::Group::GoTo).on_view(crate::actions::Style::Button, "Where it started", Some(icon::ARROW_BEND_UP_LEFT)));
         }
         let any = self.thread().is_some_and(|v| !v.subagents().is_empty());
         for (id, label, by) in [("chat.next_subagent", "Next sub-agent", 1), ("chat.prev_subagent", "Previous sub-agent", -1)] {
-            let action = Action::new(id, label, "Where the next (or previous) sub-agent the agent started is, in the chat", C::StepSubagent(by)).focused().importance(crate::actions::MINOR);
+            let action = Action::new(id, label, "Where the next (or previous) sub-agent the agent started is, in the chat", C::StepSubagent(by)).focused().importance(crate::actions::MINOR).group(crate::actions::Group::Navigate);
             out.push(if any { action } else { action.when(crate::actions::When::Unavailable) });
         }
         if !store.instances.is_empty() {
@@ -272,16 +289,18 @@ impl ActionProvider for ChatStreamState {
         }
 
         // Each request waiting on you, answered (the inbox offers them too,
-        // with the same keys): under it while you're on it; its keys (`y`,
-        // `d`…) the one's you're on, else the first's, so several at once
-        // are each answered and no key is two's.
+        // with the same keys): under each, always; its keys (`y`, `d`…) the
+        // one's you're on, else the first's, so several at once are each
+        // answered and no key is two's.
         if let Some(view) = view {
             let pending = self.pending();
             let on = self.on_item();
             let on_request = pending.iter().find(|(index, _)| index.is_some() && *index == on).map(|(_, r)| r.id.clone());
             let keyed = crate::request_card::keyed(pending.iter().map(|(_, r)| r), on_request.as_ref());
             for (index, request) in &pending {
-                let at = crate::request_card::Offer { here: index.is_some() && *index == on, keyed: keyed.as_ref() == Some(&request.id) };
+                let under = index.map(|i| i.to_string());
+                let under = under.as_deref().map_or(crate::request_card::Under::Nowhere, crate::request_card::Under::Place);
+                let at = crate::request_card::Offer { under, keyed: keyed.as_ref() == Some(&request.id) };
                 let answer = |option| C::Answer { thread: view.thread.id.clone(), request: request.id.clone(), option };
                 out.extend(crate::request_card::offer(request, at, C::OpenPage, answer));
             }
@@ -318,6 +337,17 @@ impl ActionProvider for ChatStreamState {
                 out.push(banner(Action::new("chat.retry", "Try connecting again", "To the harness, now", C::Retry).focused(), "Retry", Some(icon::ARROW_COUNTER_CLOCKWISE)));
             }
             out.push(banner(Action::new("chat.dismiss_error", "Put the error away", "Off the chat", C::DismissError).focused().importance(MINOR), "Put away", None));
+        }
+        // Shown alone, a sub-agent's: the agent's own settings (its harness,
+        // mode, model) aren't on its row (they'd read as the sub-agent's);
+        // still offered, by their keys and the action list.
+        if self.ui.alone.is_some() {
+            const ITS: [&str; 3] = ["chat.stop_subagent", "chat.subagent_start", "chat.verbosity"];
+            for action in &mut out {
+                if action.at() == Some(crate::actions::At::Settings) && !ITS.contains(&action.id.as_str()) {
+                    action.control = None;
+                }
+            }
         }
         out
     }
@@ -363,6 +393,16 @@ impl ActionProvider for ChatStreamState {
             },
             ChatCommand::OpenSubagent => {
                 self.open_subagent_here();
+            }
+            ChatCommand::StopSubagent => {
+                if let (Some(id), Some(thread)) = (self.ui.alone.clone(), self.active_thread()) {
+                    self.act(Act::StopSubagent { thread, id });
+                }
+            }
+            ChatCommand::SubagentStart => {
+                if let Some(id) = self.ui.alone.clone() {
+                    self.asks.push(Ask::Show { target: Target::SubagentStart { slot: self.ui.slot.clone(), id }, in_: Some(crate::kind::BufferKind::Chat) });
+                }
             }
             ChatCommand::StepSubagent(by) => {
                 if let Step::Nothing(why) = self.step_to_subagent(*by) {

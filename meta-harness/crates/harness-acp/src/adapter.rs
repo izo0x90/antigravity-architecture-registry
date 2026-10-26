@@ -64,7 +64,7 @@ impl AcpAdapter {
             mcp_servers: Vec::new(),
         };
         let shared = Arc::new(Shared {
-            state: Mutex::new(SessionState::new(thread, self.profile.parent_call())),
+            state: Mutex::new(SessionState::new(thread)),
             pending: Mutex::new(HashMap::new()),
             policy: Mutex::new(config.policy.clone()),
             profile: self.profile.clone(),
@@ -194,16 +194,24 @@ fn form_options(submit: &str) -> Vec<ApprovalOption> {
 }
 
 /// Opens a request and waits for the user's response (None: cancelled,
-/// e.g. its turn ended).
-async fn ask(shared: &Shared, open: impl FnOnce(&mut SessionState) -> harness_contracts::RequestId) -> Option<RequestResponse> {
-    let rx = {
+/// e.g. its turn ended, or `withdrawn` by the agent: then it's no longer
+/// asked).
+async fn ask(shared: &Shared, withdrawn: agent_client_protocol::RequestCancellation, open: impl FnOnce(&mut SessionState) -> harness_contracts::RequestId) -> Option<RequestResponse> {
+    let (id, rx) = {
         let mut state = lock(&shared.state);
         let id = open(&mut state);
         let (tx, rx) = tokio::sync::oneshot::channel();
-        lock(&shared.pending).insert(id, tx);
-        rx
+        lock(&shared.pending).insert(id.clone(), tx);
+        (id, rx)
     };
-    rx.await.ok()
+    tokio::select! {
+        answer = rx => answer.ok(),
+        () = withdrawn.cancelled() => {
+            lock(&shared.pending).remove(&id);
+            lock(&shared.state).withdraw_request(&id);
+            None
+        }
+    }
 }
 
 /// The answer to a question form: its content, declined, or cancelled.
@@ -226,38 +234,27 @@ type Streams = ByteStreams<Box<dyn futures::AsyncWrite + Send + Unpin>, Box<dyn 
 async fn run_connection(transport: Streams, shared: Arc<Shared>, files: Option<WorkspaceFs>, handle_tx: tokio::sync::oneshot::Sender<ConnectionTo<Agent>>) {
     let (on_update, on_permission, on_question, on_other) = (shared.clone(), shared.clone(), shared.clone(), shared.clone());
     let (on_read, on_write) = (files.clone(), files);
-    let on_child = shared.clone();
     let result = agent_client_protocol::Client
         .builder()
         .name("meta-harness")
-        // A sub-agent's first: its announcements and the messages between it
-        // and the agent (kinds the ACP schema we build on doesn't have yet),
-        // and what comes under its own session, under it. The rest goes on.
+        // Every update, read as it came (kinds the ACP schema we build on
+        // doesn't have yet too: the sub-agents draft's): the agent's own,
+        // its sub-agents' (only their steps), and about them. A mode the
+        // agent changes to: its policy follows.
         .on_receive_notification(
             async move |n: UntypedMessage, cx: ConnectionTo<Agent>| {
                 if n.method != "session/update" {
                     return Ok(Handled::No { message: (n, cx), retry: false });
                 }
-                let session = n.params.get("sessionId").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
-                let update = n.params.get("update").cloned().unwrap_or_default();
-                if !lock(&on_child.state).take_raw(&session, &update) {
-                    return Ok(Handled::No { message: (n, cx), retry: false });
-                }
-                Ok(Handled::Yes)
-            },
-            agent_client_protocol::on_receive_notification!(),
-        )
-        .on_receive_notification(
-            async move |n: acp::SessionNotification, _cx| {
+                let Some((session, update)) = convert::session_update(n.params) else { return Ok(Handled::Yes) };
                 let mut state = lock(&on_update.state);
-                if let acp::SessionUpdate::CurrentModeUpdate(update) = &n.update {
+                if let Some(mode) = state.session_update(&session, update) {
                     let mut policy = lock(&on_update.policy);
-                    *policy = on_update.profile.policy_for(&update.current_mode_id.to_string(), policy.clone());
+                    *policy = on_update.profile.policy_for(&mode, policy.clone());
                     let policy = policy.clone();
                     state.set_thread(|t| t.policy = policy);
                 }
-                state.apply(&n.update);
-                Ok(())
+                Ok(Handled::Yes)
             },
             agent_client_protocol::on_receive_notification!(),
         )
@@ -278,8 +275,9 @@ async fn run_connection(transport: Streams, shared: Arc<Shared>, files: Option<W
                 if let Some(option) = auto {
                     return responder.respond(selected(option));
                 }
+                let withdrawn = responder.cancellation();
                 cx.spawn(async move {
-                    let response = ask(&shared, |state| {
+                    let response = ask(&shared, withdrawn, |state| {
                         let title = req.tool_call.fields.title.clone().unwrap_or_else(|| "Permission requested".into());
                         state.open_request(Some(&native_tool), asked, title, None, shared.profile.approval_options(asked, &req.options), Vec::new())
                     })
@@ -295,6 +293,7 @@ async fn run_connection(transport: Streams, shared: Arc<Shared>, files: Option<W
         .on_receive_request(
             async move |req: acp::CreateElicitationRequest, responder, cx: ConnectionTo<Agent>| {
                 let shared = on_question.clone();
+                let withdrawn = responder.cancellation();
                 cx.spawn(async move {
                     let tool = |scope: &acp::ElicitationScope| match scope {
                         acp::ElicitationScope::Session(s) => s.tool_call_id.as_ref().map(ToString::to_string),
@@ -305,12 +304,12 @@ async fn run_connection(transport: Streams, shared: Arc<Shared>, files: Option<W
                             let form = Form::new(&form_mode.requested_schema, &req.message, shared.profile.custom_suffix());
                             let tool = tool(&form_mode.scope);
                             let questions = form.questions.clone();
-                            let response = ask(&shared, |state| state.open_request(tool.as_deref(), RequestKind::Question, req.message.clone(), None, form_options("Answer"), questions)).await;
+                            let response = ask(&shared, withdrawn, |state| state.open_request(tool.as_deref(), RequestKind::Question, req.message.clone(), None, form_options("Answer"), questions)).await;
                             responder.respond(elicitation_answer(Some(&form), response))
                         }
                         acp::ElicitationMode::Url(url_mode) => {
                             let tool = tool(&url_mode.scope);
-                            let response = ask(&shared, |state| state.open_request(tool.as_deref(), RequestKind::Link, req.message.clone(), Some(url_mode.url.clone()), form_options("Done"), Vec::new())).await;
+                            let response = ask(&shared, withdrawn, |state| state.open_request(tool.as_deref(), RequestKind::Link, req.message.clone(), Some(url_mode.url.clone()), form_options("Done"), Vec::new())).await;
                             responder.respond(elicitation_answer(None, response))
                         }
                         _ => responder.respond(acp::CreateElicitationResponse::new(acp::ElicitationAction::Decline)),
