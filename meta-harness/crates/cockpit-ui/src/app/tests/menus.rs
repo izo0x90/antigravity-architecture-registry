@@ -243,3 +243,29 @@ fn a_finger_held_on_the_quick_looks_top_line_reaches_nothing_under_it() {
     assert!(!app.palette.is_open() && app.quick_look.is_some(), "no list opened over it");
     assert_eq!((app.desk.spec().cursor, app.desk.graph().selection.clone()), before, "nothing under it moved");
 }
+
+/// A menu entry is one thing to tap: its whole cell (past its words too);
+/// under a finger, a finger's height.
+#[test]
+fn a_menu_entry_is_one_target_a_fingers_height_under_one() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Chat);
+    app.open_menu(&[], &ctx);
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    let session = *drawn_containing(&output, "Session…").first().unwrap_or_else(|| panic!("the Session group's entry: {}", texts(&output)));
+    // Past its words, in its cell.
+    click(&ctx, &mut app, egui::pos2(session.right() + 30.0, session.center().y));
+    assert_eq!((app.input_mode, app.leader_path.clone()), (InputMode::Leader, vec!['s']), "tapped past its words: opened");
+    // An entry's height: a line's for a mouse, a finger's under one.
+    let tall = |fingers| {
+        let mut height = 0.0;
+        let _ = egui::Context::default().run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                height = crate::actions::entry(ui, "n", "New session", crate::actions::Emphasis::Plain, 200.0, fingers, "").rect.height();
+            });
+        });
+        height
+    };
+    assert!(tall(crate::actions::Fingers::No) < 30.0 && tall(crate::actions::Fingers::Yes) >= 40.0);
+}

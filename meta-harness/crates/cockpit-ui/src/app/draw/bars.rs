@@ -141,21 +141,25 @@ impl CockpitApp {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(delay - (now - self.pending_since) + 0.01));
             return;
         }
-        let rows: Vec<(String, String)> = if waiting {
+        // Each what follows: its keys, its words, what a tap does (runs
+        // the action; goes to the mark).
+        let rows: Vec<(String, String, Option<Followed>)> = if waiting {
             let bound = self.bound_actions();
             let here = self.here();
             let mut next = continuations(&bound, &self.pending_keys);
             next.retain(|(b, _)| self.applies(b, here));
             // The closest to where you are first.
             next.sort_by_key(|(b, _)| b.layer);
-            next.into_iter().map(|(b, rest)| (rest.iter().map(Chord::label).collect::<Vec<_>>().join(" "), b.action.label.clone())).collect()
+            next.into_iter().map(|(b, rest)| (rest.iter().map(Chord::label).collect::<Vec<_>>().join(" "), b.action.label.clone(), Some(Followed::Run(b.action.id.clone())))).collect()
         } else {
-            let mut rows: Vec<(String, String)> = self.desk.marks.iter().map(|(letter, jump)| (letter.to_string(), self.describe_jump(jump))).collect();
+            let mut rows: Vec<(String, String, Option<Followed>)> = self.desk.marks.iter().map(|(letter, jump)| (letter.to_string(), self.describe_jump(jump), Some(Followed::Mark(*letter)))).collect();
             if matches!(self.capture, Some(Capture::MarkSet)) {
-                rows.insert(0, ("a–z".into(), "set a mark here (replaces one with that letter)".into()));
+                rows.insert(0, ("a–z".into(), "set a mark here (replaces one with that letter)".into(), None));
             }
             rows
         };
+        let fingers = if self.fingers { crate::actions::Fingers::Yes } else { crate::actions::Fingers::No };
+        let mut tapped = None;
         let title = if waiting { self.pending_keys.iter().map(Chord::label).collect::<Vec<_>>().join(" ") + " …" } else { "marks".into() };
         let popup = egui::Area::new(egui::Id::new("prefix_popup")).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0)).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
             Frame::NONE.fill(colors().overlay).stroke(Stroke::new(crate::theme::look().line_thin, colors().focus)).corner_radius(crate::theme::look().radius_xl).inner_margin(crate::theme::margin2(crate::theme::look().space_l, crate::theme::look().space_m)).show(ui, |ui| {
@@ -163,17 +167,27 @@ impl CockpitApp {
                 if rows.is_empty() {
                     ui.label(RichText::new("nothing applies here").size(crate::theme::look().text_body).color(colors().muted));
                 }
-                for (keys, label) in rows {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(keys).monospace().strong().size(crate::theme::look().text_body).color(colors().key));
-                        ui.label(RichText::new(label).size(crate::theme::look().text_body).color(colors().text));
-                    });
+                let width = (ctx.content_rect().width() - 64.0).min(420.0);
+                for (keys, label, followed) in rows {
+                    if crate::actions::entry(ui, &keys, &label, crate::actions::Emphasis::Plain, width, fingers, &label).clicked() {
+                        tapped = followed;
+                    }
                 }
                 ui.label(RichText::new(format!("{} to cancel", self.config.keymap.back.label())).size(crate::theme::look().text_small).color(colors().muted));
             });
         });
         if waiting {
             self.overlays.drawn_at(crate::overlay::Overlay::Keys, popup.response.rect);
+        }
+        match tapped {
+            Some(Followed::Run(id)) => {
+                (self.pending_keys, self.pending_count) = (Vec::new(), None);
+                self.run_by_id(&id, None, ctx);
+            }
+            Some(Followed::Mark(letter)) => {
+                self.on_capture(&[letter], false, ctx);
+            }
+            None => {}
         }
     }
 
@@ -213,4 +227,12 @@ impl CockpitApp {
         let sheet = Sheet { view: format!("This view ({})", here.kind.words()), host, informs, groups, line };
         (offered, sheet)
     }
+}
+
+/// What a tap on what can follow does.
+enum Followed {
+    /// Runs its action, by its id (the keys typed so far dropped).
+    Run(String),
+    /// Goes to (or sets) the mark of that letter.
+    Mark(char),
 }

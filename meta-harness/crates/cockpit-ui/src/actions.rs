@@ -742,6 +742,64 @@ pub fn choice_text(ui: &egui::Ui, label: &str, colour: Option<(egui::Color32, Ma
     job.into()
 }
 
+/// How an entry of a list of keys stands out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Emphasis {
+    /// The view's own (the menus' first block): its key a bright pill.
+    Own,
+    Plain,
+}
+
+/// An entry of a list of keys (the menus, what can follow a half-typed
+/// key): its key's pill and its words, one thing to tap, `width` wide,
+/// lit under the pointer and while pressed; a finger's height when
+/// `fingers` (else a line's). What it does, on hover.
+pub fn entry(ui: &mut egui::Ui, key: &str, words: &str, emphasis: Emphasis, width: f32, fingers: Fingers, tip: &str) -> egui::Response {
+    let look = crate::theme::look();
+    let c = crate::theme::colors();
+    let height = match fingers {
+        Fingers::Yes => ENTRY_FINGER,
+        Fingers::No => ui.spacing().interact_size.y,
+    };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let lit = if response.is_pointer_button_down_on() { Some(c.selection) } else { response.hovered().then_some(c.overlay_raised) };
+        if let Some(fill) = lit {
+            painter.rect_filled(rect, look.radius_m, fill);
+        }
+        let (fill, ink) = match emphasis {
+            Emphasis::Own => (c.focus, c.on_bright),
+            Emphasis::Plain => (c.overlay_raised, c.key),
+        };
+        let pad = look.space_s;
+        let pill_text = painter.layout_no_wrap(key.to_owned(), egui::FontId::monospace(look.text_body), ink);
+        let pill = egui::Rect::from_center_size(egui::pos2(rect.left() + pad + pill_text.size().x / 2.0 + pad, rect.center().y), pill_text.size() + egui::vec2(2.0 * pad, look.space_xs));
+        painter.rect_filled(pill, look.radius_m, fill);
+        painter.galley(pill.center() - pill_text.size() / 2.0, pill_text, ink);
+        let room = (rect.right() - pill.right() - 2.0 * pad).max(0.0);
+        let colour = match emphasis {
+            Emphasis::Own => c.text_strong,
+            Emphasis::Plain => c.text,
+        };
+        let mut job = egui::text::LayoutJob::simple_singleline(words.to_owned(), egui::FontId::proportional(look.text_body), colour);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+        let said = ui.fonts_mut(|f| f.layout_job(job));
+        painter.galley(egui::pos2(pill.right() + pad, rect.center().y - said.size().y / 2.0), said, colour);
+    }
+    response.on_hover_text(tip)
+}
+
+/// Whether the pointer is a finger (entries are a finger's height then).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fingers {
+    Yes,
+    No,
+}
+
+/// An entry's height under a finger.
+const ENTRY_FINGER: f32 = 40.0;
+
 /// A control's caption and the keys that run it (when there's room; on
 /// hover always), as every control says them.
 pub fn caption_and_key(ui: &egui::Ui, caption: &str, key: &str, tone: Option<Tone>) -> egui::WidgetText {

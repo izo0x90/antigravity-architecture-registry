@@ -85,6 +85,8 @@ impl CockpitApp {
     /// path: the focused view's first (marked), then the rest. Every entry is
     /// also tappable.
     pub fn render_which_key_hud(&mut self, ctx: &egui::Context) {
+        /// Each entry's width.
+        const ENTRY_W: f32 = 200.0;
         if self.input_mode != InputMode::Leader {
             return;
         }
@@ -120,7 +122,8 @@ impl CockpitApp {
                 // The focused view's entries first, under its name; then the rest.
                 let (own, rest): (Vec<&LeaderEntry>, Vec<&LeaderEntry>) = entries.iter().partition(|e| is_primary(e, &bound, &self.leader_path));
                 // Explicit rows sized to the screen (wrapping layouts ignore Area widths).
-                let per_row = ((hud_w - 28.0) / 210.0).floor().max(1.0) as usize;
+                let per_row = ((hud_w - 28.0) / (ENTRY_W + ui.spacing().item_spacing.x)).floor().max(1.0) as usize;
+                let fingers = if self.fingers { crate::actions::Fingers::Yes } else { crate::actions::Fingers::No };
                 let view_name = self.focused_kind().words();
                 let blocks = [(Some(view_name.as_str()), own), (None, rest)];
                 for (heading, block) in blocks.iter().filter(|(_, b)| !b.is_empty()) {
@@ -145,24 +148,12 @@ impl CockpitApp {
                             };
                             // What it does and its keys (hover, or a finger held on it).
                             let tip = format!("{label} ({})\n{detail}", crate::keymap::local().leader_hint(&path));
-                            // Each entry's cell its whole size in every pass (its
-                            // measuring one too: the menu doesn't move once shown).
-                            let cell = egui::vec2(200.0, 22.0);
-                            ui.allocate_ui(cell, |ui| {
-                                ui.set_min_size(cell);
-                                ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing.x = 4.0;
-                                    // A bright pill takes the text meant for bright fills.
-                                    let (fill, ink) = if primary { (colors().focus, colors().on_bright) } else { (colors().overlay_raised, colors().key) };
-                                    let pill = egui::Button::new(RichText::new(key.to_string()).color(ink).monospace().strong().size(crate::theme::look().text_body)).fill(fill).corner_radius(crate::theme::look().radius_m);
-                                    let color = if primary { colors().text_strong } else { colors().text };
-                                    // The pill and its words: one thing to tap.
-                                    let words = egui::Label::new(RichText::new(label).size(crate::theme::look().text_body).color(color)).truncate().sense(egui::Sense::click());
-                                    if ui.add(pill).on_hover_text(&tip).clicked() | ui.add(words).on_hover_text(&tip).clicked() {
-                                        tapped = Some(key);
-                                    }
-                                });
-                            });
+                            // One thing to tap, its whole cell (the same size in
+                            // every pass: the menu doesn't move once shown).
+                            let emphasis = if primary { crate::actions::Emphasis::Own } else { crate::actions::Emphasis::Plain };
+                            if crate::actions::entry(ui, &key.to_string(), &label, emphasis, ENTRY_W, fingers, &tip).clicked() {
+                                tapped = Some(key);
+                            }
                         }
                     });
                 }
