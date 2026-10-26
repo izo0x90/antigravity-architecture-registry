@@ -21,6 +21,7 @@ mod overlays;
 mod plans;
 mod signing_in;
 mod split;
+mod subagents;
 mod tags;
 mod terminal;
 mod views;

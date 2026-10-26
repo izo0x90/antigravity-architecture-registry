@@ -41,6 +41,8 @@ pub enum Target {
     Span { file: String, start: usize, end: usize },
     /// An agent's chat: its slot, or the slot running a session.
     Agent { slot: Option<SlotId>, thread: Option<ThreadId> },
+    /// Where a sub-agent started, in its slot's chat.
+    Subagent { slot: SlotId, id: harness_contracts::SubagentId },
     /// Something that needs the user, or that happened (the inbox's).
     Notification(NotificationId),
     /// A terminal (a shell the server runs).
@@ -115,6 +117,8 @@ pub enum Ask {
     Colour(Vec<(String, String)>),
     /// Calls' changes wanted, compared (each its two texts).
     Changes(Vec<crate::comparer::Pair>),
+    /// Sub-agent `id` of slot `slot`'s thread, over the panels.
+    Subagent { slot: SlotId, id: harness_contracts::SubagentId },
 }
 
 /// What's read again on a buffer's word.
@@ -147,6 +151,7 @@ impl Target {
             Self::Line { file: path, line, .. } | Self::Change { file: path, line } | Self::Span { file: path, start: line, .. } => format!("{}:{line}", file(path)),
             Self::Message { index, .. } => format!("message {}", index + 1),
             Self::Agent { slot: Some(slot), .. } => format!("agent slot {slot}"),
+            Self::Subagent { id, .. } => format!("sub-agent {id}"),
             Self::Agent { thread, .. } => format!("session {}", thread.as_ref().map_or("?", |t| t.as_str())),
             Self::TerminalLines { terminal, first, last, .. } if first == last => format!("terminal {terminal} line {first}"),
             Self::TerminalLines { terminal, first, last, .. } => format!("terminal {terminal} lines {first}-{last}"),
@@ -206,7 +211,7 @@ impl Target {
         match self {
             Self::Component(id) | Self::Job { component: id } => Some(id),
             Self::Line { within, .. } => within.as_ref(),
-            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) | Self::Terminal(_) | Self::TerminalLines { .. } | Self::TerminalCommand { .. } | Self::Chat { .. } | Self::Plan { .. } | Self::Discussion(_) | Self::Tag(_) => None,
+            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Subagent { .. } | Self::Notification(_) | Self::Terminal(_) | Self::TerminalLines { .. } | Self::TerminalCommand { .. } | Self::Chat { .. } | Self::Plan { .. } | Self::Discussion(_) | Self::Tag(_) => None,
         }
     }
 

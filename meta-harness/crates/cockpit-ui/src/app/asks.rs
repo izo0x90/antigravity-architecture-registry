@@ -62,6 +62,7 @@ impl CockpitApp {
             Ask::Located { id, anchor } => self.desk.each_buffer(|b| b.located(&id, anchor.as_ref())),
             Ask::Waiting(waiting) => self.do_waiting(waiting, ctx),
             Ask::Agents { slot, act } => self.desk.shared.agents.get_mut().act(slot, act, &self.desk.net, ctx),
+            Ask::Subagent { slot, id } => self.subagent_look = Some((slot, id)),
             Ask::Terminals { id, act } => self.desk.shared.terminals.get_mut().act(id, act, &self.desk.net, ctx),
             Ask::Tags(act) => self.desk.shared.tags.get_mut().act(act, &self.desk.net, ctx, &self.notes_later),
             Ask::Colour(blocks) => self.desk.shared.highlighter.get_mut().want(blocks),

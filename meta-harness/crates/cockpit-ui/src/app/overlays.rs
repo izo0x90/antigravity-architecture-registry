@@ -18,6 +18,7 @@ impl CockpitApp {
             Overlay::Keys => !self.pending_keys.is_empty() || self.pending_count.is_some(),
             Overlay::Menu => self.input_mode == InputMode::Leader,
             Overlay::Palette => self.palette.is_open(),
+            Overlay::Subagent => self.subagent_look.is_some(),
         }
     }
 
@@ -40,6 +41,7 @@ impl CockpitApp {
                 self.palette.close();
                 self.palette_closed(ctx);
             }
+            Overlay::Subagent => self.subagent_look = None,
         }
         self.forget_frame();
     }

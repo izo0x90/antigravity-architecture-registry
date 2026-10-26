@@ -216,6 +216,8 @@ impl ChatStreamState {
                     }
                 });
             }
+            // Its sub-agents at work, in sight (each opens over the panels).
+            self.render_subagents(ui);
             let start = ui.cursor().min;
             let w = ui.available_width();
             self.render_input(ui, typing, cx);
@@ -769,8 +771,27 @@ impl ChatStreamState {
                     }
                 }
             }
+            // Where a sub-agent started: its name, how it's doing, how many
+            // steps of its own (folded under it); Enter opens it.
             ItemBody::Subagent { subagent_id } => {
-                ui.label(RichText::new(format!("{} subagent {subagent_id}", icon::ROBOT)).size(crate::theme::look().text_body));
+                let look = crate::theme::look();
+                let (title, state, colour) = match view.subagent(subagent_id) {
+                    Some(seen) => {
+                        let (state, colour) = subagents::state_words(seen.subagent.status);
+                        (seen.subagent.title.clone(), state, colour)
+                    }
+                    None => (item.title.clone().unwrap_or_else(|| "sub-agent".into()), "", colors().muted),
+                };
+                let steps = view.under(&item.id).count();
+                let steps = match steps {
+                    0 => String::new(),
+                    1 => " · 1 step".to_owned(),
+                    n => format!(" · {n} steps"),
+                };
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{} {title}", icon::ROBOT)).size(look.text_body).color(colors().text_strong));
+                    ui.label(RichText::new(format!("{} {state}{steps}", icon::CIRCLE)).size(look.text_small).color(colour));
+                });
             }
             ItemBody::Notice { level, text } => {
                 let color = match level { NoticeLevel::Info => colors().muted, NoticeLevel::Warning => colors().warn };
@@ -857,8 +878,14 @@ impl crate::hosted::Hosted for ChatStreamState {
     /// couldn't be read, its session, its tool servers and how much of its
     /// context is used.
     fn status(&self) -> Vec<Status> {
-        let Some(s) = self.instance() else { return vec![Status::new("No harness", Tone::Plain)] };
+        // Its sub-agents at work: seen here while it isn't focused.
+        let working = match self.subagents_working() {
+            0 => None,
+            n => Some(Status::new(format!("{} {n}", icon::ROBOT), Tone::Info).detail(format!("Sub-agents working: {n}"))),
+        };
+        let Some(s) = self.instance() else { return [Status::new("No harness", Tone::Plain)].into_iter().chain(working).collect() };
         let mut out = vec![Status::new(s.display_name.clone(), Tone::Plain)];
+        out.extend(working);
         if let Some(account) = &s.auth.account {
             let detail = [account.email.clone(), account.organization.clone(), account.plan.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             let status = Status::new(format!("{} {}", icon::USER_CIRCLE, account.label), Tone::Muted);

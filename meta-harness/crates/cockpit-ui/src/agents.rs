@@ -48,6 +48,8 @@ pub enum Act {
     CloseSlot,
     CloseSession { key: SessionKey },
     Stop { thread: ThreadId },
+    /// One sub-agent's work stopped, the turn going on.
+    StopSubagent { thread: ThreadId, id: harness_contracts::SubagentId },
     Reprobe { instance: InstanceId },
     Steer { thread: ThreadId, input: SteerInput },
     Settings { policy: RuntimePolicy, model: Option<ModelSelection> },
@@ -307,6 +309,7 @@ impl Agents {
             Act::CloseSlot => net.close_slot(&slot, ctx.clone(), done),
             Act::CloseSession { key } => net.close_slot_session(&slot, &key, ctx.clone(), done),
             Act::Stop { thread } => net.interrupt(&thread, ctx.clone()),
+            Act::StopSubagent { thread, id } => net.cancel_subagent(&thread, &id, ctx.clone()),
             Act::Reprobe { instance } => net.refresh_instance(&instance, ctx.clone(), done),
             Act::Steer { thread, input } => net.steer(&thread, &input, ctx.clone(), done),
             Act::Settings { policy, model } => net.set_slot_settings(&slot, &policy, model.as_ref(), ctx.clone(), done),

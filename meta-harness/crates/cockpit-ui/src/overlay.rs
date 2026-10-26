@@ -27,6 +27,8 @@ pub enum Overlay {
     Menu,
     /// The action list, or a value's choices.
     Palette,
+    /// A sub-agent, at work or done: its steps as they come.
+    Subagent,
 }
 
 /// What a tap outside it does.
@@ -51,14 +53,14 @@ pub struct Rules {
 }
 
 /// Every kind.
-pub const ALL: [Overlay; 8] = [Overlay::QuickLook, Overlay::Inspector, Overlay::Feedback, Overlay::Issues, Overlay::Hints, Overlay::Keys, Overlay::Menu, Overlay::Palette];
+pub const ALL: [Overlay; 9] = [Overlay::QuickLook, Overlay::Inspector, Overlay::Feedback, Overlay::Issues, Overlay::Hints, Overlay::Keys, Overlay::Subagent, Overlay::Menu, Overlay::Palette];
 
 impl Overlay {
     pub fn rules(self) -> Rules {
         let (outside, modal, own_back) = match self {
             Self::QuickLook => (Outside::Closes, false, true),
             Self::Inspector => (Outside::Stays, false, false),
-            Self::Feedback | Self::Issues => (Outside::Closes, true, false),
+            Self::Feedback | Self::Issues | Self::Subagent => (Outside::Closes, true, false),
             Self::Hints | Self::Keys => (Outside::ClosesAndPasses, false, true),
             Self::Menu | Self::Palette => (Outside::Closes, true, true),
         };

@@ -34,13 +34,15 @@ impl ChatStreamState {
         let since_last = view.last_heard().map(|t| (now - t).max(0.0));
         // (Asking till your answer's taken: answered here, it's on its way.)
         let asking = view.requests().iter().any(|r| r.status == harness_contracts::RequestStatus::Pending);
+        // (A sub-agent of its at work: it waits on it, not gone quiet.)
+        let delegating = view.subagents().iter().any(|s| s.subagent.status.working());
         let liveness = match since_last {
             _ if !self.connected => Liveness::Disconnected,
             _ if asking => Liveness::Asking,
             // (Nothing's come since it was known: no time to say.)
             None => Liveness::Waiting,
             Some(s) if s < receiving => Liveness::Receiving,
-            Some(s) if s < quiet => Liveness::Waiting,
+            Some(s) if s < quiet || delegating => Liveness::Waiting,
             Some(_) => Liveness::Quiet,
         };
         let updates = view.arrivals().iter().filter(|(t, _)| now - *t <= crate::indicator::RECENT_S).copied().collect();
@@ -74,6 +76,16 @@ impl ChatStreamState {
     /// The live line's words for `activity`, their colour, and when they
     /// next change.
     pub(super) fn live_words(&self, activity: &Activity) -> (String, Color32, Next) {
+        let (words, colour, next) = self.live_words_alone(activity);
+        // Its sub-agents at work, said with it.
+        match self.subagents_working() {
+            0 => (words, colour, next),
+            1 => (format!("{words} · 1 sub-agent working"), colour, next),
+            n => (format!("{words} · {n} sub-agents working"), colour, next),
+        }
+    }
+
+    fn live_words_alone(&self, activity: &Activity) -> (String, Color32, Next) {
         let since = activity.since_last.unwrap_or_default();
         match activity.liveness {
             Liveness::Receiving => (format!("{}…", activity.doing), colors().info, Next::In(self.settings.receiving_s - since)),

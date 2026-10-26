@@ -291,6 +291,8 @@ pub struct CockpitApp {
     /// The mode the menus were opened from: closed without running
     /// anything, it's given back (typing, when they were opened from it).
     menu_from: InputMode,
+    /// A sub-agent over the panels (its slot's).
+    subagent_look: Option<(harness_contracts::SlotId, harness_contracts::SubagentId)>,
     /// The browser's notifications.
     pub alerts: crate::alerts::Alerts,
     /// What a call that finished later has to say (shown as the note).
@@ -392,6 +394,7 @@ impl CockpitApp {
             quick_look: None,
             overlays: Default::default(),
             menu_from: InputMode::Normal,
+            subagent_look: None,
             alerts,
             notes_later: Arc::default(),
             initialized: false,
@@ -630,6 +633,7 @@ impl CockpitApp {
         self.feedback.render_toast(ctx);
 
         self.render_quick_look(ctx);
+        self.render_subagent(ctx);
         self.render_item_controls(ctx);
         self.touch_tick(ctx);
         self.run_asked(ctx);

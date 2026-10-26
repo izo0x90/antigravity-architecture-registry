@@ -30,6 +30,7 @@ mod nav;
 mod render;
 mod rows;
 mod session;
+pub(crate) mod subagents;
 pub(crate) mod things;
 pub(crate) mod slots;
 mod words;
@@ -136,6 +137,8 @@ pub struct ChatView {
     pub(crate) typing: Option<Rect>,
     /// A sign-in has the typing box (see `tend_sign_in_box`).
     pub(crate) sign_in_has_box: bool,
+    /// Its sub-agents' strip shows each (not folded into a count).
+    pub(crate) subagents_unfolded: bool,
 }
 
 /// A chat's settings as picked for it (none: the config's).
@@ -172,6 +175,7 @@ impl Default for ChatView {
             drawing: Vec::new(),
             typing: None,
             sign_in_has_box: false,
+            subagents_unfolded: false,
         }
     }
 }
@@ -194,7 +198,7 @@ struct SignInNow {
     pasted: Option<crate::agents::Pasted>,
 }
 
-fn status_tag(status: ItemStatus) -> (&'static str, Color32) {
+pub(crate) fn status_tag(status: ItemStatus) -> (&'static str, Color32) {
     match status {
         ItemStatus::Pending => ("[..]", colors().muted),
         ItemStatus::InProgress => ("[RUN]", colors().warn),

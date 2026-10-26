@@ -11,7 +11,7 @@
 //!   is, from the call's input; how it's doing, from the turn.
 
 use agent_client_protocol::schema::v1 as acp;
-use harness_contracts::{AdapterEvent, ContentBlock, ItemBody, ItemId, ItemStatus, Subagent, SubagentId, SubagentStatus};
+use harness_contracts::{AdapterEvent, ItemBody, ItemId, ItemStatus, Subagent, SubagentId, SubagentStatus};
 use serde_json::Value;
 
 use super::SessionState;
@@ -87,20 +87,13 @@ impl SessionState {
     }
 
     /// A message between the agent and one of its sub-agents, seen in the
-    /// agent's own session (`session_message`): the sub-agent's prompt,
-    /// or its answer (under it).
+    /// agent's own session (`session_message`): the sub-agent's prompt.
+    /// (Its answer is its own last message, under it already.)
     pub fn session_message(&mut self, message: &Value) {
-        let id = |key: &str| message.get(key).and_then(Value::as_str);
+        let to = message.get("recipientSessionId").and_then(Value::as_str);
+        let Some(&at) = to.and_then(|s| self.children.get(s)) else { return };
         let text: String = message.get("content").and_then(Value::as_array).into_iter().flatten().filter_map(|b| b.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("");
-        if let Some(&at) = id("recipientSessionId").and_then(|s| self.children.get(s)) {
-            self.change_subagent(at, |s| s.prompt = Some(text));
-        } else if let Some(&at) = id("senderSessionId").and_then(|s| self.children.get(s)) {
-            let item = self.subagents[at].item_id.clone();
-            let previous = self.parent.replace(item);
-            self.close_streams();
-            self.push_item(ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text }], streaming: false }, ItemStatus::Completed, Some("its answer".into()), None);
-            self.parent = previous;
-        }
+        self.change_subagent(at, |s| s.prompt = Some(text));
     }
 
     /// An update from sub-agent `session`'s own session: its step, under

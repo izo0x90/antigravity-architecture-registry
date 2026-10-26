@@ -42,9 +42,11 @@ impl ChatStreamState {
         for (motion, words) in [(Motion::NextSibling, "Next message"), (Motion::PrevSibling, "Previous message")] {
             out.push(Move::Motion(motion).offer_if(!self.messages_beside(motion).is_empty(), words));
         }
-        // Enter: a folded run opens; else the file it points to does.
+        // Enter: a sub-agent opens over the panels; a folded run opens;
+        // else the file it points to does.
         let here = self.here().unwrap_or_default();
         out.push(match (here.unfolds(), self.chip_here(), self.target()) {
+            _ if self.subagent_here() => Move::Enter.offer("Open the sub-agent"),
             (Some(folded), ..) => Move::Enter.offer(format!("Unfold {}", folded.words())),
             (None, Some((words, _)), _) => Move::Enter.offer(format!("Go to {words}")),
             (None, None, Some(Target::Message { link: Some((path, _)), .. })) => Move::Enter.offer(format!("Open {path}")),
@@ -253,7 +255,7 @@ impl Navigable for ChatStreamState {
     /// or message of a session an agent slot has open.
     fn can_show(&self, target: &Target) -> bool {
         match target {
-            Target::Agent { .. } => true,
+            Target::Agent { .. } | Target::Subagent { .. } => true,
             Target::Chat { session, .. } => self.slot_with(session).is_some(),
             _ => false,
         }
@@ -276,6 +278,17 @@ impl Navigable for ChatStreamState {
                 None => harness_contracts::Subject::ChatTurn { session: session.clone(), turn: *turn, turn_id: String::new() },
             };
             let at = self.tagged_indexes(&subject).first().copied().ok_or_else(|| format!("Turn {turn} isn't in the chat (its session holds it no more)."))?;
+            self.put_cursor(at, crate::viewport::Show::Middle, render::Reveal::Item);
+            return Ok(());
+        }
+        if let Target::Subagent { slot, id } = target {
+            let at = {
+                let agents = self.agents();
+                let view = agents.thread_in(slot).ok_or("That agent slot runs no session now.")?;
+                let seen = view.subagent(id).ok_or("That sub-agent isn't in its chat now.")?;
+                view.shown_at(&seen.subagent.item_id).ok_or("That sub-agent isn't in its chat now.")?
+            };
+            self.ui.slot = slot.clone();
             self.put_cursor(at, crate::viewport::Show::Middle, render::Reveal::Item);
             return Ok(());
         }
@@ -356,6 +369,9 @@ impl Navigable for ChatStreamState {
     /// message goes to what it links; a message's file opens in the code
     /// view.
     fn enter(&mut self) -> Step {
+        if self.open_subagent_here() {
+            return Step::Done;
+        }
         if let Some(folded) = self.here().as_ref().and_then(rows::Here::unfolds) {
             self.ui.folds.set(folded, rows::Set::Open);
             return Step::Done;
@@ -427,6 +443,9 @@ impl Navigable for ChatStreamState {
     /// folded run's row ("3:run"), one of an item's links ("3:1"), code
     /// blocks ("3:c0") or chips ("3:l0").
     fn move_to(&mut self, key: &str) {
+        if self.subagents_each(key) {
+            return;
+        }
         let (index, part) = key.split_once(':').map_or((key, None), |(i, p)| (i, Some(p)));
         let Ok(index) = index.parse::<usize>() else { return };
         let reveal = if part.is_none() { render::Reveal::Item } else { render::Reveal::Row };

@@ -17,6 +17,10 @@ enum ChatCommand {
     SelectInstance,
     PickSlot,
     StepSlot(i32),
+    /// To the next sub-agent (1), or the one before (-1).
+    StepSubagent(i32),
+    /// The sub-agent where the cursor is, opened over the panels.
+    OpenSubagent,
     NewSlot,
     CloseSlot,
     CloseSession,
@@ -127,6 +131,15 @@ impl ActionProvider for ChatStreamState {
             out.push(Action::new("agent.pick", "Show an agent slot", "Pick one of the agents the server runs, for this chat", C::PickSlot).param(Param::Choice(choices)));
             out.push(Action::new("chat.next_slot", "Show the next agent slot", "This chat shows the next agent the server runs", C::StepSlot(1)).focused());
             out.push(Action::new("chat.prev_slot", "Show the previous agent slot", "This chat shows the agent before", C::StepSlot(-1)).focused());
+        }
+        // Its sub-agents: the one you're on opened; from one to the next.
+        if self.subagent_here() {
+            out.push(Action::new("chat.subagent.open", "Open the sub-agent", "Its steps as they come, what it was told, stopping it", C::OpenSubagent).focused().importance(crate::actions::PRIMARY).on_item(crate::actions::Style::Button, "Open", Some(icon::ROBOT)));
+        }
+        let any = self.thread().is_some_and(|v| !v.subagents().is_empty());
+        for (id, label, by) in [("chat.next_subagent", "Next sub-agent", 1), ("chat.prev_subagent", "Previous sub-agent", -1)] {
+            let action = Action::new(id, label, "Where the next (or previous) sub-agent the agent started is, in the chat", C::StepSubagent(by)).focused().importance(crate::actions::MINOR);
+            out.push(if any { action } else { action.when(crate::actions::When::Unavailable) });
         }
         if !store.instances.is_empty() {
             let choices = store.instances.values().map(|i| Choice::new(i.instance_id.to_string(), &i.display_name)).collect();
@@ -348,6 +361,14 @@ impl ActionProvider for ChatStreamState {
                 }
                 None => *cx.note = Some(if *by > 0 { "This is the last agent slot." } else { "This is the first agent slot." }.into()),
             },
+            ChatCommand::OpenSubagent => {
+                self.open_subagent_here();
+            }
+            ChatCommand::StepSubagent(by) => {
+                if let Step::Nothing(why) = self.step_to_subagent(*by) {
+                    *cx.note = Some(why);
+                }
+            }
             ChatCommand::NewSlot => {
                 if let Some(i) = value {
                     self.act(Act::NewSlot { instance: InstanceId::new(i) });

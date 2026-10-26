@@ -42,7 +42,8 @@ pub(super) fn of(body: &ItemBody) -> Option<Said> {
         ItemBody::Reasoning { .. } => said(icon::BRAIN, "thought", None, "Thinking", false),
         ItemBody::AssistantMessage { .. } => said(icon::CHAT_TEXT, "wrote", Some("message"), "Writing", false),
         ItemBody::TodoList { .. } => said(icon::LIST_CHECKS, "updated", Some("to-do list"), "Planning", false),
-        ItemBody::Notice { .. } | ItemBody::Subagent { .. } | ItemBody::Unknown { .. } => said(icon::INFO, "noted", None, "Working", false),
+        ItemBody::Subagent { .. } => said(icon::ROBOT, "started", Some("sub-agent"), "Starting a sub-agent", false),
+        ItemBody::Notice { .. } | ItemBody::Unknown { .. } => said(icon::INFO, "noted", None, "Working", false),
         _ => return None,
     })
 }
