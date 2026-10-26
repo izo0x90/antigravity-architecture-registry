@@ -144,8 +144,9 @@ fn long_unbreakable_lines_stay_inside_a_narrow_panel() {
             continue;
         }
         // Its text: the long name, the words, and the one after it (the
-        // stream's own clip is the one after it's).
-        let ours: Vec<_> = drawn_texts(&output).into_iter().filter(|(t, _, clip)| clip.intersects(panel) && (t.contains("a_very_long_folder") || t.contains("words that wrap") || t == "after it")).collect();
+        // stream's own clip is the one after it's); the panel's (not the
+        // key bar's, across the screen).
+        let ours: Vec<_> = drawn_texts(&output).into_iter().filter(|(t, _, clip)| clip.intersects(panel) && clip.left() >= panel.left() - 0.5 && (t.contains("a_very_long_folder") || t.contains("words that wrap") || t == "after it")).collect();
         let Some(stream) = ours.iter().find(|(t, rect, clip)| t == "after it" && rect.intersect(*clip).is_positive()).map(|(_, _, clip)| *clip) else {
             broke.push(format!("{case}: the item after it doesn't show"));
             continue;
@@ -798,4 +799,22 @@ fn a_long_chat_draws_only_the_rows_near_the_screen() {
     let text = texts(&frame_at(&ctx, &mut app, vec![], 11.0));
     assert!(text.contains("fix the parser") && !text.contains("message 2099"), "{text}");
     assert!(app.desk.chat().ui.heights.len() < 500, "{}", app.desk.chat().ui.heights.len());
+}
+
+/// The key bar cuts only a chip too wide for its share of the bar (a
+/// request's title can be a whole command), by width; the others whole.
+#[test]
+fn the_key_bar_cuts_only_a_chip_too_wide_by_width() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Chat);
+    let long = format!("cat {}", "crates/a_long_folder/".repeat(12));
+    request("r1", &long, None, Some(100)).into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
+    for _ in 0..3 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    let output = frame(&ctx, &mut app, vec![]);
+    let bar = drawn_texts(&output).into_iter().filter(|(_, rect, _)| rect.top() > SCREEN.y - 40.0).collect::<Vec<_>>();
+    let allow = bar.iter().find(|(t, ..)| t.starts_with("y Allow:")).unwrap_or_else(|| panic!("{bar:?}"));
+    assert!(allow.1.width() <= SCREEN.x / 3.0 + 1.0, "cut to its share: {allow:?}");
+    assert!(bar.iter().any(|(t, ..)| t == "i Type a prompt"), "the rest whole: {bar:?}");
 }

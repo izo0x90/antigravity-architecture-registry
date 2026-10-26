@@ -3,8 +3,10 @@
 
 use super::super::*;
 
-/// The most characters of an action's words a key bar chip says.
-const BAR_WORDS: usize = 40;
+/// The widest a key bar chip is, of the bar's width: a longer one (a
+/// request's title can be a whole command) is cut to it, whole on hover;
+/// the rest are never cut.
+const CHIP_SHARE: f32 = 1.0 / 3.0;
 
 impl CockpitApp {
     /// A mark in words: its kind of buffer and where (as a buffer of that
@@ -102,17 +104,21 @@ impl CockpitApp {
             }
             return;
         }
+        let widest = ui.max_rect().width() * CHIP_SHARE;
         for b in self.bar_keys(bound) {
-            let keys = b.key_hint();
-            // Its words cut short (a request's title can be a whole command),
-            // so the bar keeps to its rows; whole on hover.
-            let label: String = if b.action.label.chars().count() > BAR_WORDS { format!("{}…", b.action.label.chars().take(BAR_WORDS - 1).collect::<String>()) } else { b.action.label.clone() };
-            let text = RichText::new(format!("{keys} {label}")).size(if narrow { crate::theme::look().text_title } else { crate::theme::look().text_body });
-            let mut button = egui::Button::new(text).corner_radius(crate::theme::look().radius_m);
+            let size = if narrow { crate::theme::look().text_title } else { crate::theme::look().text_body };
+            let words = format!("{} {}", b.key_hint(), b.action.label);
+            let mut button = egui::Button::new(RichText::new(&words).size(size)).corner_radius(crate::theme::look().radius_m);
             if narrow {
                 button = button.min_size(egui::vec2(32.0, 32.0));
             }
-            if ui.add(button).on_hover_text(&b.action.label).clicked() {
+            // Too wide for the bar's share: cut to it (whole on hover).
+            let wide = ui.painter().layout_no_wrap(words, egui::FontId::proportional(size), colors().text).size().x + 2.0 * ui.spacing().button_padding.x;
+            let clicked = match wide > widest {
+                true => ui.add_sized(egui::vec2(widest, ui.spacing().interact_size.y.max(if narrow { 32.0 } else { 0.0 })), button.truncate()),
+                false => ui.add(button),
+            };
+            if clicked.on_hover_text(&b.action.label).clicked() {
                 *run = Some(b.clone());
             }
         }
