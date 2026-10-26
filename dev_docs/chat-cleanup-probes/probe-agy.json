@@ -1,0 +1,372 @@
+{
+ "name": "agy",
+ "steps": [
+  {
+   "initialize": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+     "protocolVersion": 1,
+     "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+       "image": true,
+       "audio": true,
+       "embeddedContext": true
+      },
+      "mcpCapabilities": {
+       "http": true,
+       "sse": true
+      },
+      "sessionCapabilities": {
+       "list": {},
+       "resume": {}
+      },
+      "auth": {
+       "logout": {}
+      }
+     },
+     "authMethods": [
+      {
+       "id": "oauth-personal",
+       "name": "Log in with Google",
+       "description": "Log in with your Google account"
+      },
+      {
+       "id": "oauth-business",
+       "name": "Log in with Gemini Enterprise",
+       "description": "Log in with your Gemini Enterprise account"
+      },
+      {
+       "id": "gemini-api-key",
+       "name": "Gemini API key",
+       "description": "Use an API key with Gemini Developer API"
+      },
+      {
+       "id": "agent-platform",
+       "name": "Gemini Enterprise Agent Platform",
+       "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials or an API key"
+      }
+     ],
+     "agentInfo": {
+      "name": "antigravity-acp",
+      "title": "Google Antigravity",
+      "version": "agy_acp_server_1.1.1"
+     }
+    }
+   }
+  },
+  {
+   "session/new": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+     "sessionId": "0d5cd4f6-0c2f-41ad-bb17-ef3e2620ecab",
+     "modes": {
+      "currentModeId": "default",
+      "availableModes": [
+       {
+        "id": "default",
+        "name": "Default",
+        "description": "Default permission prompt flow"
+       },
+       {
+        "id": "auto_edit",
+        "name": "Auto Edit",
+        "description": "Auto-approve file edit tools"
+       },
+       {
+        "id": "yolo",
+        "name": "YOLO",
+        "description": "Auto-approve all tools"
+       }
+      ]
+     },
+     "configOptions": [
+      {
+       "currentValue": "gemini-4-argon-medium",
+       "options": [
+        {
+         "value": "gemini-4-argon-medium",
+         "name": "Gemini 4 Argon (Medium)",
+         "description": "gemini-4-argon-medium"
+        },
+        {
+         "value": "gemini-4-argon-high",
+         "name": "Gemini 4 Argon (High)",
+         "description": "gemini-4-argon-high"
+        },
+        {
+         "value": "gemini-4-argon-low",
+         "name": "Gemini 4 Argon (Low)",
+         "description": "gemini-4-argon-low"
+        },
+        {
+         "value": "gemini-3.8-flash-high",
+         "name": "Gemini 3.8 Flash (High)",
+         "description": "gemini-3.8-flash-high"
+        },
+        {
+         "value": "gemini-3.8-flash-medium",
+         "name": "Gemini 3.8 Flash (Medium)",
+         "description": "gemini-3.8-flash-medium"
+        },
+        {
+         "value": "gemini-3.8-flash-low",
+         "name": "Gemini 3.8 Flash (Low)",
+         "description": "gemini-3.8-flash-low"
+        }
+       ],
+       "id": "model",
+       "name": "Model",
+       "category": "model",
+       "type": "select"
+      },
+      {
+       "currentValue": "default",
+       "options": [
+        {
+         "value": "default",
+         "name": "Default",
+         "description": "Default permission prompt flow"
+        },
+        {
+         "value": "auto_edit",
+         "name": "Auto Edit",
+         "description": "Auto-approve file edit tools"
+        },
+        {
+         "value": "yolo",
+         "name": "YOLO",
+         "description": "Auto-approve all tools"
+        }
+       ],
+       "id": "mode",
+       "name": "Session Mode",
+       "category": "mode",
+       "type": "select"
+      }
+     ],
+     "models": {
+      "availableModels": [
+       {
+        "modelId": "gemini-4-argon-medium",
+        "name": "Gemini 4 Argon (Medium)",
+        "description": "gemini-4-argon-medium"
+       },
+       {
+        "modelId": "gemini-4-argon-high",
+        "name": "Gemini 4 Argon (High)",
+        "description": "gemini-4-argon-high"
+       },
+       {
+        "modelId": "gemini-4-argon-low",
+        "name": "Gemini 4 Argon (Low)",
+        "description": "gemini-4-argon-low"
+       },
+       {
+        "modelId": "gemini-3.8-flash-high",
+        "name": "Gemini 3.8 Flash (High)",
+        "description": "gemini-3.8-flash-high"
+       },
+       {
+        "modelId": "gemini-3.8-flash-medium",
+        "name": "Gemini 3.8 Flash (Medium)",
+        "description": "gemini-3.8-flash-medium"
+       },
+       {
+        "modelId": "gemini-3.8-flash-low",
+        "name": "Gemini 3.8 Flash (Low)",
+        "description": "gemini-3.8-flash-low"
+       }
+      ],
+      "currentModelId": "gemini-4-argon-medium"
+     }
+    }
+   }
+  },
+  {
+   "session/prompt": {
+    "result": {
+     "jsonrpc": "2.0",
+     "id": 3,
+     "result": {
+      "stopReason": "end_turn"
+     }
+    },
+    "agent_said": "PELICAN-42",
+    "other_updates": [
+     "available_commands_update",
+     "agent_message_chunk",
+     "agent_message_chunk"
+    ],
+    "agent_requests": []
+   }
+  },
+  {
+   "initialize again": {
+    "loadSession": true,
+    "promptCapabilities": {
+     "image": true,
+     "audio": true,
+     "embeddedContext": true
+    },
+    "mcpCapabilities": {
+     "http": true,
+     "sse": true
+    },
+    "sessionCapabilities": {
+     "list": {},
+     "resume": {}
+    },
+    "auth": {
+     "logout": {}
+    }
+   }
+  },
+  {
+   "session/load": {
+    "result": {
+     "jsonrpc": "2.0",
+     "id": 2,
+     "result": {
+      "modes": {
+       "currentModeId": "default",
+       "availableModes": [
+        {
+         "id": "default",
+         "name": "Default",
+         "description": "Default permission prompt flow"
+        },
+        {
+         "id": "auto_edit",
+         "name": "Auto Edit",
+         "description": "Auto-approve file edit tools"
+        },
+        {
+         "id": "yolo",
+         "name": "YOLO",
+         "description": "Auto-approve all tools"
+        }
+       ]
+      },
+      "configOptions": [
+       {
+        "currentValue": "gemini-4-argon-medium",
+        "options": [
+         {
+          "value": "gemini-4-argon-medium",
+          "name": "Gemini 4 Argon (Medium)",
+          "description": "gemini-4-argon-medium"
+         },
+         {
+          "value": "gemini-4-argon-high",
+          "name": "Gemini 4 Argon (High)",
+          "description": "gemini-4-argon-high"
+         },
+         {
+          "value": "gemini-4-argon-low",
+          "name": "Gemini 4 Argon (Low)",
+          "description": "gemini-4-argon-low"
+         },
+         {
+          "value": "gemini-3.8-flash-high",
+          "name": "Gemini 3.8 Flash (High)",
+          "description": "gemini-3.8-flash-high"
+         },
+         {
+          "value": "gemini-3.8-flash-medium",
+          "name": "Gemini 3.8 Flash (Medium)",
+          "description": "gemini-3.8-flash-medium"
+         },
+         {
+          "value": "gemini-3.8-flash-low",
+          "name": "Gemini 3.8 Flash (Low)",
+          "description": "gemini-3.8-flash-low"
+         }
+        ],
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select"
+       },
+       {
+        "currentValue": "default",
+        "options": [
+         {
+          "value": "default",
+          "name": "Default",
+          "description": "Default permission prompt flow"
+         },
+         {
+          "value": "auto_edit",
+          "name": "Auto Edit",
+          "description": "Auto-approve file edit tools"
+         },
+         {
+          "value": "yolo",
+          "name": "YOLO",
+          "description": "Auto-approve all tools"
+         }
+        ],
+        "id": "mode",
+        "name": "Session Mode",
+        "category": "mode",
+        "type": "select"
+       }
+      ],
+      "models": {
+       "availableModels": [
+        {
+         "modelId": "gemini-4-argon-medium",
+         "name": "Gemini 4 Argon (Medium)",
+         "description": "gemini-4-argon-medium"
+        },
+        {
+         "modelId": "gemini-4-argon-high",
+         "name": "Gemini 4 Argon (High)",
+         "description": "gemini-4-argon-high"
+        },
+        {
+         "modelId": "gemini-4-argon-low",
+         "name": "Gemini 4 Argon (Low)",
+         "description": "gemini-4-argon-low"
+        },
+        {
+         "modelId": "gemini-3.8-flash-high",
+         "name": "Gemini 3.8 Flash (High)",
+         "description": "gemini-3.8-flash-high"
+        },
+        {
+         "modelId": "gemini-3.8-flash-medium",
+         "name": "Gemini 3.8 Flash (Medium)",
+         "description": "gemini-3.8-flash-medium"
+        },
+        {
+         "modelId": "gemini-3.8-flash-low",
+         "name": "Gemini 3.8 Flash (Low)",
+         "description": "gemini-3.8-flash-low"
+        }
+       ],
+       "currentModelId": "gemini-4-argon-medium"
+      }
+     }
+    },
+    "user_message_chunks": [
+     {
+      "content": {
+       "text": "Look at #probe-note. What is the secret word in it? Answer with the word only.Embedded resource (nah://tag/probe-note):\n#probe-note (a tag)\nThe secret word is PELICAN-42.",
+       "type": "text"
+      },
+      "sessionUpdate": "user_message_chunk"
+     }
+    ],
+    "updates": [
+     "user_message_chunk",
+     "available_commands_update",
+     "agent_message_chunk"
+    ]
+   }
+  }
+ ]
+}

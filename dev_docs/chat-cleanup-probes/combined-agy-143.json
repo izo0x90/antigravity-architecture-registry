@@ -1,0 +1,1071 @@
+{
+ "initialize": {
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+   "protocolVersion": 1,
+   "agentCapabilities": {
+    "loadSession": true,
+    "promptCapabilities": {
+     "image": true,
+     "audio": true,
+     "embeddedContext": true
+    },
+    "mcpCapabilities": {
+     "http": true,
+     "sse": true
+    },
+    "sessionCapabilities": {
+     "list": {},
+     "resume": {}
+    },
+    "auth": {
+     "logout": {}
+    },
+    "_meta": {
+     "antigravity": {
+      "tier": true,
+      "systemPrompt": {
+       "append": true
+      }
+     }
+    }
+   },
+   "authMethods": [
+    {
+     "id": "oauth-personal",
+     "name": "Log in with Google",
+     "description": "Log in with your Google account"
+    },
+    {
+     "id": "oauth-business",
+     "name": "Log in with Gemini Enterprise",
+     "description": "Log in with your Gemini Enterprise account"
+    },
+    {
+     "id": "gemini-api-key",
+     "name": "Gemini API key",
+     "description": "Use an API key with Gemini Developer API"
+    },
+    {
+     "id": "agent-platform",
+     "name": "Gemini Enterprise Agent Platform",
+     "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials or an API key"
+    }
+   ],
+   "agentInfo": {
+    "name": "antigravity-acp",
+    "title": "Google Antigravity",
+    "version": "1.4.3"
+   }
+  }
+ },
+ "session/new": {
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+   "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+   "modes": {
+    "currentModeId": "default",
+    "availableModes": [
+     {
+      "id": "default",
+      "name": "Default",
+      "description": "Default permission prompt flow"
+     },
+     {
+      "id": "auto_edit",
+      "name": "Auto Edit",
+      "description": "Auto-approve file edit tools"
+     },
+     {
+      "id": "yolo",
+      "name": "YOLO",
+      "description": "Auto-approve all tools"
+     }
+    ]
+   },
+   "configOptions": [
+    {
+     "currentValue": "gemini-3.8-flash",
+     "options": [
+      {
+       "value": "gemini-4-argon",
+       "name": "Gemini 4 Argon"
+      },
+      {
+       "value": "gemini-3.8-flash",
+       "name": "Gemini 3.8 Flash"
+      }
+     ],
+     "id": "model",
+     "name": "Model",
+     "category": "model",
+     "type": "select"
+    },
+    {
+     "currentValue": "high",
+     "options": [
+      {
+       "value": "low",
+       "name": "Low"
+      },
+      {
+       "value": "medium",
+       "name": "Medium"
+      },
+      {
+       "value": "high",
+       "name": "High"
+      }
+     ],
+     "id": "thinking_level",
+     "name": "Thinking Level",
+     "category": "thought_level",
+     "type": "select"
+    },
+    {
+     "currentValue": "default",
+     "options": [
+      {
+       "value": "default",
+       "name": "Default",
+       "description": "Default permission prompt flow"
+      },
+      {
+       "value": "auto_edit",
+       "name": "Auto Edit",
+       "description": "Auto-approve file edit tools"
+      },
+      {
+       "value": "yolo",
+       "name": "YOLO",
+       "description": "Auto-approve all tools"
+      }
+     ],
+     "id": "mode",
+     "name": "Session Mode",
+     "category": "mode",
+     "type": "select"
+    }
+   ],
+   "models": {
+    "availableModels": [
+     {
+      "modelId": "gemini-4-argon-medium",
+      "name": "Gemini 4 Argon (Medium)",
+      "description": "gemini-4-argon-medium"
+     },
+     {
+      "modelId": "gemini-4-argon-high",
+      "name": "Gemini 4 Argon (High)",
+      "description": "gemini-4-argon-high"
+     },
+     {
+      "modelId": "gemini-4-argon-low",
+      "name": "Gemini 4 Argon (Low)",
+      "description": "gemini-4-argon-low"
+     },
+     {
+      "modelId": "gemini-3.8-flash-high",
+      "name": "Gemini 3.8 Flash (High)",
+      "description": "gemini-3.8-flash-high"
+     },
+     {
+      "modelId": "gemini-3.8-flash-medium",
+      "name": "Gemini 3.8 Flash (Medium)",
+      "description": "gemini-3.8-flash-medium"
+     },
+     {
+      "modelId": "gemini-3.8-flash-low",
+      "name": "Gemini 3.8 Flash (Low)",
+      "description": "gemini-3.8-flash-low"
+     }
+    ],
+    "currentModelId": "gemini-3.8-flash-high"
+   },
+   "_meta": {
+    "antigravity": {
+     "tier": {
+      "name": "Google AI Pro",
+      "id": "g1-pro-tier",
+      "upgradeUri": "https://antigravity.google/g1-upgrade"
+     }
+    }
+   }
+  }
+ },
+ "before_prompt": [],
+ "prompt": {
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+   "stopReason": "end_turn",
+   "usage": {
+    "totalTokens": 74145,
+    "inputTokens": 73324,
+    "outputTokens": 257,
+    "thoughtTokens": 564,
+    "cachedReadTokens": 0,
+    "cachedWriteTokens": 0
+   }
+  }
+ },
+ "session": "daf8d58a-0cee-4220-a640-5cb324771133",
+ "messages": [
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "used": 0,
+     "size": 1048576,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "availableCommands": [
+      {
+       "name": "plan",
+       "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+      },
+      {
+       "name": "logout",
+       "description": "Log out and clear stored credentials."
+      },
+      {
+       "name": "usage",
+       "description": "Show model token usage and quota limits."
+      }
+     ],
+     "sessionUpdate": "available_commands_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "24ccb81ecc2c4dc9bcb3a77d16fb868b",
+     "title": "Run invoke_subagent?",
+     "kind": "other",
+     "status": "pending",
+     "rawInput": {
+      "Subagents": [
+       {
+        "Model": "inherit",
+        "Prompt": "Count the .py files in the current folder (/tmp/acp-probe-agy) (not recursively) and report the number back.",
+        "Role": "File Counter",
+        "TypeName": "research",
+        "Workspace": "inherit"
+       }
+      ]
+     },
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "agent_asked": "session/request_permission",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "toolCall": {
+     "toolCallId": "24ccb81ecc2c4dc9bcb3a77d16fb868b",
+     "kind": "other",
+     "status": "pending",
+     "title": "Run invoke_subagent?",
+     "rawInput": {
+      "Subagents": [
+       {
+        "Model": "inherit",
+        "Prompt": "Count the .py files in the current folder (/tmp/acp-probe-agy) (not recursively) and report the number back.",
+        "Role": "File Counter",
+        "TypeName": "research",
+        "Workspace": "inherit"
+       }
+      ]
+     }
+    },
+    "options": [
+     {
+      "optionId": "allow_always",
+      "name": "Allow Always",
+      "kind": "allow_always"
+     },
+     {
+      "optionId": "allow",
+      "name": "Allow",
+      "kind": "allow_once"
+     },
+     {
+      "optionId": "deny",
+      "name": "Deny",
+      "kind": "reject_once"
+     }
+    ]
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "24ccb81ecc2c4dc9bcb3a77d16fb868b",
+     "kind": "other",
+     "status": "in_progress",
+     "title": "Running invoke_subagent",
+     "rawInput": {},
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "used": 14140,
+     "size": 1048576,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "24ccb81ecc2c4dc9bcb3a77d16fb868b",
+     "status": "completed",
+     "rawOutput": "Counting python files",
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "content": {
+      "text": "I have launched a subagent to count the `.py` files",
+      "type": "text"
+     },
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "content": {
+      "text": " in the current folder. I will wait for its report.",
+      "type": "text"
+     },
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "used": 14544,
+     "size": 1048576,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "626f19e644ac429e8548dd90b1683a8b",
+     "title": "find . -maxdepth 1 -name \"*.py\" -type f | wc -l",
+     "kind": "execute",
+     "status": "pending",
+     "rawInput": {
+      "CommandLine": "find . -maxdepth 1 -name \"*.py\" -type f | wc -l",
+      "Cwd": "/tmp/acp-probe-agy",
+      "NotificationTimeoutSeconds": 10,
+      "RunPersistent": false,
+      "WaitMsBeforeAsync": 5000
+     },
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "agent_asked": "session/request_permission",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "toolCall": {
+     "toolCallId": "626f19e644ac429e8548dd90b1683a8b",
+     "kind": "execute",
+     "status": "pending",
+     "title": "find . -maxdepth 1 -name \"*.py\" -type f | wc -l",
+     "rawInput": {
+      "CommandLine": "find . -maxdepth 1 -name \"*.py\" -type f | wc -l",
+      "Cwd": "/tmp/acp-probe-agy",
+      "NotificationTimeoutSeconds": 10,
+      "RunPersistent": false,
+      "WaitMsBeforeAsync": 5000
+     }
+    },
+    "options": [
+     {
+      "optionId": "allow_always",
+      "name": "Allow Always (risky)",
+      "kind": "allow_always",
+      "_meta": {
+       "agy.security.warning": {
+        "severity": "high",
+        "risk": "prompt_injection",
+        "title": "Allowing always can be risky",
+        "message": "Untrusted files or tool output could contain a prompt injection that silently re-runs this action. This approval is scoped to the exact command and the current workspace only."
+       }
+      }
+     },
+     {
+      "optionId": "allow",
+      "name": "Allow",
+      "kind": "allow_once"
+     },
+     {
+      "optionId": "deny",
+      "name": "Deny",
+      "kind": "reject_once"
+     }
+    ]
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "626f19e644ac429e8548dd90b1683a8b",
+     "kind": "execute",
+     "status": "in_progress",
+     "title": "find . -maxdepth 1 -name \"*.py\" -type f | wc -l",
+     "rawInput": {
+      "command_line": "find . -maxdepth 1 -name \"*.py\" -type f | wc -l",
+      "working_dir": "/tmp/acp-probe-agy"
+     },
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "626f19e644ac429e8548dd90b1683a8b",
+     "status": "completed",
+     "rawOutput": {
+      "commandLine": "find . -maxdepth 1 -name \"*.py\" -type f | wc -l",
+      "workingDir": "/tmp/acp-probe-agy",
+      "exitCode": 0,
+      "exit_code": 0,
+      "combinedOutput": "3\r\n",
+      "formatted_output": "3\r\n"
+     },
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "used": 14897,
+     "size": 1048576,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "375ba00ff25f46e3ae13c0d0214fbf1d",
+     "title": "ls -la *.py",
+     "kind": "execute",
+     "status": "pending",
+     "rawInput": {
+      "CommandLine": "ls -la *.py",
+      "Cwd": "/tmp/acp-probe-agy",
+      "NotificationTimeoutSeconds": 10,
+      "RunPersistent": false,
+      "WaitMsBeforeAsync": 5000
+     },
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "agent_asked": "session/request_permission",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "toolCall": {
+     "toolCallId": "375ba00ff25f46e3ae13c0d0214fbf1d",
+     "kind": "execute",
+     "status": "pending",
+     "title": "ls -la *.py",
+     "rawInput": {
+      "CommandLine": "ls -la *.py",
+      "Cwd": "/tmp/acp-probe-agy",
+      "NotificationTimeoutSeconds": 10,
+      "RunPersistent": false,
+      "WaitMsBeforeAsync": 5000
+     }
+    },
+    "options": [
+     {
+      "optionId": "allow_always",
+      "name": "Allow Always (risky)",
+      "kind": "allow_always",
+      "_meta": {
+       "agy.security.warning": {
+        "severity": "high",
+        "risk": "prompt_injection",
+        "title": "Allowing always can be risky",
+        "message": "Untrusted files or tool output could contain a prompt injection that silently re-runs this action. This approval is scoped to the exact command and the current workspace only."
+       }
+      }
+     },
+     {
+      "optionId": "allow",
+      "name": "Allow",
+      "kind": "allow_once"
+     },
+     {
+      "optionId": "deny",
+      "name": "Deny",
+      "kind": "reject_once"
+     }
+    ]
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "375ba00ff25f46e3ae13c0d0214fbf1d",
+     "kind": "execute",
+     "status": "in_progress",
+     "title": "ls -la *.py",
+     "rawInput": {
+      "command_line": "ls -la *.py",
+      "working_dir": "/tmp/acp-probe-agy"
+     },
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "375ba00ff25f46e3ae13c0d0214fbf1d",
+     "status": "completed",
+     "rawOutput": {
+      "commandLine": "ls -la *.py",
+      "workingDir": "/tmp/acp-probe-agy",
+      "exitCode": 0,
+      "exit_code": 0,
+      "combinedOutput": "-rw-r--r-- 1 root root 9 Oct 25 16:59 f1.py\r\n-rw-r--r-- 1 root root 9 Oct 25 16:59 f2.py\r\n-rw-r--r-- 1 root root 9 Oct 25 16:59 f3.py\r\n",
+      "formatted_output": "-rw-r--r-- 1 root root 9 Oct 25 16:59 f1.py\r\n-rw-r--r-- 1 root root 9 Oct 25 16:59 f2.py\r\n-rw-r--r-- 1 root root 9 Oct 25 16:59 f3.py\r\n"
+     },
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "content": {
+      "text": "Waiting for the subagent to report the count.",
+      "type": "text"
+     },
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "used": 15142,
+     "size": 1048576,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "fdf2044392824537a693051a462e29f2",
+     "title": "ls -d .*.py 2>/dev/null || true",
+     "kind": "execute",
+     "status": "pending",
+     "rawInput": {
+      "CommandLine": "ls -d .*.py 2>/dev/null || true",
+      "Cwd": "/tmp/acp-probe-agy",
+      "NotificationTimeoutSeconds": 10,
+      "RunPersistent": false,
+      "WaitMsBeforeAsync": 5000
+     },
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "agent_asked": "session/request_permission",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "toolCall": {
+     "toolCallId": "fdf2044392824537a693051a462e29f2",
+     "kind": "execute",
+     "status": "pending",
+     "title": "ls -d .*.py 2>/dev/null || true",
+     "rawInput": {
+      "CommandLine": "ls -d .*.py 2>/dev/null || true",
+      "Cwd": "/tmp/acp-probe-agy",
+      "NotificationTimeoutSeconds": 10,
+      "RunPersistent": false,
+      "WaitMsBeforeAsync": 5000
+     }
+    },
+    "options": [
+     {
+      "optionId": "allow_always",
+      "name": "Allow Always (risky)",
+      "kind": "allow_always",
+      "_meta": {
+       "agy.security.warning": {
+        "severity": "high",
+        "risk": "prompt_injection",
+        "title": "Allowing always can be risky",
+        "message": "Untrusted files or tool output could contain a prompt injection that silently re-runs this action. This approval is scoped to the exact command and the current workspace only."
+       }
+      }
+     },
+     {
+      "optionId": "allow",
+      "name": "Allow",
+      "kind": "allow_once"
+     },
+     {
+      "optionId": "deny",
+      "name": "Deny",
+      "kind": "reject_once"
+     }
+    ]
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "fdf2044392824537a693051a462e29f2",
+     "kind": "execute",
+     "status": "in_progress",
+     "title": "ls -d .*.py 2>/dev/null || true",
+     "rawInput": {
+      "command_line": "ls -d .*.py 2>/dev/null || true",
+      "working_dir": "/tmp/acp-probe-agy"
+     },
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "fdf2044392824537a693051a462e29f2",
+     "status": "completed",
+     "rawOutput": {
+      "commandLine": "ls -d .*.py 2>/dev/null || true",
+      "workingDir": "/tmp/acp-probe-agy",
+      "exitCode": 0,
+      "exit_code": 0,
+      "combinedOutput": "",
+      "formatted_output": ""
+     },
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "content": {
+      "text": "PELICAN-42, 3",
+      "type": "text"
+     },
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "used": 15422,
+     "size": 1048576,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  }
+ ],
+ "load": {
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+   "modes": {
+    "currentModeId": "default",
+    "availableModes": [
+     {
+      "id": "default",
+      "name": "Default",
+      "description": "Default permission prompt flow"
+     },
+     {
+      "id": "auto_edit",
+      "name": "Auto Edit",
+      "description": "Auto-approve file edit tools"
+     },
+     {
+      "id": "yolo",
+      "name": "YOLO",
+      "description": "Auto-approve all tools"
+     }
+    ]
+   },
+   "configOptions": [
+    {
+     "currentValue": "gemini-3.8-flash",
+     "options": [
+      {
+       "value": "gemini-4-argon",
+       "name": "Gemini 4 Argon"
+      },
+      {
+       "value": "gemini-3.8-flash",
+       "name": "Gemini 3.8 Flash"
+      }
+     ],
+     "id": "model",
+     "name": "Model",
+     "category": "model",
+     "type": "select"
+    },
+    {
+     "currentValue": "high",
+     "options": [
+      {
+       "value": "low",
+       "name": "Low"
+      },
+      {
+       "value": "medium",
+       "name": "Medium"
+      },
+      {
+       "value": "high",
+       "name": "High"
+      }
+     ],
+     "id": "thinking_level",
+     "name": "Thinking Level",
+     "category": "thought_level",
+     "type": "select"
+    },
+    {
+     "currentValue": "default",
+     "options": [
+      {
+       "value": "default",
+       "name": "Default",
+       "description": "Default permission prompt flow"
+      },
+      {
+       "value": "auto_edit",
+       "name": "Auto Edit",
+       "description": "Auto-approve file edit tools"
+      },
+      {
+       "value": "yolo",
+       "name": "YOLO",
+       "description": "Auto-approve all tools"
+      }
+     ],
+     "id": "mode",
+     "name": "Session Mode",
+     "category": "mode",
+     "type": "select"
+    }
+   ],
+   "models": {
+    "availableModels": [
+     {
+      "modelId": "gemini-4-argon-medium",
+      "name": "Gemini 4 Argon (Medium)",
+      "description": "gemini-4-argon-medium"
+     },
+     {
+      "modelId": "gemini-4-argon-high",
+      "name": "Gemini 4 Argon (High)",
+      "description": "gemini-4-argon-high"
+     },
+     {
+      "modelId": "gemini-4-argon-low",
+      "name": "Gemini 4 Argon (Low)",
+      "description": "gemini-4-argon-low"
+     },
+     {
+      "modelId": "gemini-3.8-flash-high",
+      "name": "Gemini 3.8 Flash (High)",
+      "description": "gemini-3.8-flash-high"
+     },
+     {
+      "modelId": "gemini-3.8-flash-medium",
+      "name": "Gemini 3.8 Flash (Medium)",
+      "description": "gemini-3.8-flash-medium"
+     },
+     {
+      "modelId": "gemini-3.8-flash-low",
+      "name": "Gemini 3.8 Flash (Low)",
+      "description": "gemini-3.8-flash-low"
+     }
+    ],
+    "currentModelId": "gemini-3.8-flash-high"
+   },
+   "_meta": {
+    "antigravity": {
+     "tier": {
+      "name": "Google AI Pro",
+      "id": "g1-pro-tier",
+      "upgradeUri": "https://antigravity.google/g1-upgrade"
+     }
+    }
+   }
+  }
+ },
+ "replay": [
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "content": {
+      "text": "Look at #probe-note. Start exactly one sub-agent and ask it to count the .py files in the current folder (not recursively) and report the number. Then reply in one line: the secret word from #probe-note, and the sub-agent's number.Embedded resource (nah://tag/probe-note):\n#probe-note (a tag)\nThe secret word is PELICAN-42.",
+      "type": "text"
+     },
+     "sessionUpdate": "user_message_chunk"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "availableCommands": [
+      {
+       "name": "plan",
+       "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+      },
+      {
+       "name": "logout",
+       "description": "Log out and clear stored credentials."
+      },
+      {
+       "name": "usage",
+       "description": "Show model token usage and quota limits."
+      }
+     ],
+     "sessionUpdate": "available_commands_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "call_1530130",
+     "title": "Running invoke_subagent",
+     "kind": "other",
+     "status": "completed",
+     "rawInput": "{\"Subagents\":[{\"Model\":\"inherit\",\"Prompt\":\"Count the .py files in the current folder (/tmp/acp-probe-agy) (not recursively) and report the number back.\",\"Role\":\"File Counter\",\"TypeName\":\"research\",\"Workspace\":\"inherit\"}],\"toolAction\":\"Invoking subagent to count py files\",\"toolSummary\":\"Counting python files\"}",
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "call_1530130",
+     "status": "completed",
+     "rawOutput": "",
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "content": {
+      "text": "I have launched a subagent to count the `.py` files in the current folder. I will wait for its report.",
+      "type": "text"
+     },
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "call_2482570",
+     "title": "Running manage_subagents",
+     "kind": "other",
+     "status": "completed",
+     "rawInput": "{\"Action\":\"list\",\"toolAction\":\"Checking subagent status\",\"toolSummary\":\"Subagent status check\"}",
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "call_2482570",
+     "status": "completed",
+     "rawOutput": "",
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "call_1052116",
+     "title": "Running schedule",
+     "kind": "other",
+     "status": "completed",
+     "rawInput": "{\"DurationSeconds\":10,\"Prompt\":\"Check subagent response\",\"TimerCondition\":\"a12e81c7b52b70b4a6060116df086c6f\",\"toolAction\":\"Waiting for subagent\",\"toolSummary\":\"Wait for subagent\"}",
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "toolCallId": "call_1052116",
+     "status": "completed",
+     "rawOutput": "",
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "content": {
+      "text": "Waiting for the subagent to report the count.",
+      "type": "text"
+     },
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "daf8d58a-0cee-4220-a640-5cb324771133",
+    "update": {
+     "content": {
+      "text": "PELICAN-42, 3",
+      "type": "text"
+     },
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  }
+ ]
+}

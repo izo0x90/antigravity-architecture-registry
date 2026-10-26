@@ -1,0 +1,520 @@
+{
+ "name": "claude095",
+ "steps": [
+  {
+   "initialize": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+     "protocolVersion": 1,
+     "agentCapabilities": {
+      "_meta": {
+       "claudeCode": {
+        "promptQueueing": true
+       },
+       "authStatus": {}
+      },
+      "promptCapabilities": {
+       "image": true,
+       "embeddedContext": true
+      },
+      "mcpCapabilities": {
+       "http": true,
+       "sse": true
+      },
+      "auth": {
+       "logout": {}
+      },
+      "providers": {},
+      "loadSession": true,
+      "sessionCapabilities": {
+       "additionalDirectories": {},
+       "close": {},
+       "delete": {},
+       "fork": {},
+       "list": {},
+       "resume": {},
+       "systemPrompt": {
+        "mode": {
+         "override": {}
+        }
+       }
+      }
+     },
+     "agentInfo": {
+      "name": "@agentclientprotocol/claude-agent-acp",
+      "title": "Claude Agent",
+      "version": "0.95.0"
+     },
+     "authMethods": [],
+     "_meta": {
+      "steering": {
+       "supported": true
+      }
+     }
+    }
+   }
+  },
+  {
+   "session/new": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+     "sessionId": "cf7b2e0d-dadf-4806-9f51-7d376e21440a",
+     "modes": {
+      "currentModeId": "default",
+      "availableModes": [
+       {
+        "id": "default",
+        "name": "Manual",
+        "description": "Always ask before making changes"
+       },
+       {
+        "id": "acceptEdits",
+        "name": "Accept edits",
+        "description": "Automatically accept all file edits"
+       },
+       {
+        "id": "plan",
+        "name": "Plan",
+        "description": "Create a plan before making changes"
+       },
+       {
+        "id": "auto",
+        "name": "Auto",
+        "description": "Claude handles permission decisions"
+       },
+       {
+        "id": "bypassPermissions",
+        "name": "Bypass permissions",
+        "description": "Accepts all permissions"
+       }
+      ]
+     },
+     "configOptions": [
+      {
+       "id": "mode",
+       "name": "Mode",
+       "description": "Session permission mode",
+       "category": "mode",
+       "type": "select",
+       "currentValue": "default",
+       "options": [
+        {
+         "value": "default",
+         "name": "Manual",
+         "description": "Always ask before making changes"
+        },
+        {
+         "value": "acceptEdits",
+         "name": "Accept edits",
+         "description": "Automatically accept all file edits"
+        },
+        {
+         "value": "plan",
+         "name": "Plan",
+         "description": "Create a plan before making changes"
+        },
+        {
+         "value": "auto",
+         "name": "Auto",
+         "description": "Claude handles permission decisions"
+        },
+        {
+         "value": "bypassPermissions",
+         "name": "Bypass permissions",
+         "description": "Accepts all permissions"
+        }
+       ]
+      },
+      {
+       "id": "model",
+       "name": "Model",
+       "description": "AI model to use",
+       "category": "model",
+       "type": "select",
+       "currentValue": "opus",
+       "options": [
+        {
+         "value": "default",
+         "name": "Default (recommended)",
+         "description": "Opus"
+        },
+        {
+         "value": "opus",
+         "name": "Opus 5.5",
+         "description": "Opus 5.5 \u00b7 Best for everyday, complex tasks"
+        },
+        {
+         "value": "claude-fable-5-1[1m]",
+         "name": "Fable 5.1",
+         "description": "Fable 5.1 \u00b7 Most capable for your hardest and longest-running tasks"
+        },
+        {
+         "value": "sonnet",
+         "name": "Sonnet 5.5",
+         "description": "Sonnet 5.5 \u00b7 Efficient for routine tasks"
+        },
+        {
+         "value": "haiku",
+         "name": "Haiku 5.5",
+         "description": "Haiku 5.5 \u00b7 Fastest for quick answers"
+        }
+       ]
+      },
+      {
+       "id": "effort",
+       "name": "Effort",
+       "description": "Available effort levels for this model",
+       "category": "thought_level",
+       "type": "select",
+       "currentValue": "high",
+       "options": [
+        {
+         "value": "default",
+         "name": "Default"
+        },
+        {
+         "value": "low",
+         "name": "Low"
+        },
+        {
+         "value": "medium",
+         "name": "Medium"
+        },
+        {
+         "value": "high",
+         "name": "High"
+        },
+        {
+         "value": "xhigh",
+         "name": "Xhigh"
+        },
+        {
+         "value": "max",
+         "name": "Max"
+        }
+       ]
+      },
+      {
+       "id": "fast",
+       "name": "Fast mode",
+       "description": "Faster responses on supported models",
+       "category": "model_config",
+       "type": "select",
+       "currentValue": "off",
+       "options": [
+        {
+         "value": "on",
+         "name": "On"
+        },
+        {
+         "value": "off",
+         "name": "Off"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "session/prompt": {
+    "result": {
+     "jsonrpc": "2.0",
+     "id": 3,
+     "result": {
+      "stopReason": "end_turn",
+      "usage": {
+       "inputTokens": 2,
+       "outputTokens": 9,
+       "cachedReadTokens": 11080,
+       "cachedWriteTokens": 5603,
+       "totalTokens": 16694
+      },
+      "_meta": {
+       "quota": {
+        "token_count": {
+         "totalTokens": 16694,
+         "inputTokens": 2,
+         "cachedInputTokens": 11080,
+         "cachedWriteTokens": 5603,
+         "outputTokens": 9,
+         "reasoningOutputTokens": 0
+        },
+        "model_usage": [
+         {
+          "model": "claude-haiku-5-5",
+          "token_count": {
+           "totalTokens": 1264,
+           "inputTokens": 1247,
+           "cachedInputTokens": 0,
+           "cachedWriteTokens": 0,
+           "outputTokens": 17,
+           "reasoningOutputTokens": 0
+          }
+         },
+         {
+          "model": "claude-opus-5-5",
+          "token_count": {
+           "totalTokens": 16694,
+           "inputTokens": 2,
+           "cachedInputTokens": 11080,
+           "cachedWriteTokens": 5603,
+           "outputTokens": 9,
+           "reasoningOutputTokens": 0
+          }
+         }
+        ]
+       }
+      }
+     }
+    },
+    "agent_said": "PELICAN-42",
+    "other_updates": [
+     "available_commands_update",
+     "available_commands_update",
+     "session_info_update",
+     "usage_update",
+     "agent_message_chunk",
+     "usage_update",
+     "usage_update"
+    ],
+    "agent_requests": []
+   }
+  },
+  {
+   "initialize again": {
+    "_meta": {
+     "claudeCode": {
+      "promptQueueing": true
+     },
+     "authStatus": {}
+    },
+    "promptCapabilities": {
+     "image": true,
+     "embeddedContext": true
+    },
+    "mcpCapabilities": {
+     "http": true,
+     "sse": true
+    },
+    "auth": {
+     "logout": {}
+    },
+    "providers": {},
+    "loadSession": true,
+    "sessionCapabilities": {
+     "additionalDirectories": {},
+     "close": {},
+     "delete": {},
+     "fork": {},
+     "list": {},
+     "resume": {},
+     "systemPrompt": {
+      "mode": {
+       "override": {}
+      }
+     }
+    }
+   }
+  },
+  {
+   "session/load": {
+    "result": {
+     "jsonrpc": "2.0",
+     "id": 2,
+     "result": {
+      "sessionId": "cf7b2e0d-dadf-4806-9f51-7d376e21440a",
+      "modes": {
+       "currentModeId": "default",
+       "availableModes": [
+        {
+         "id": "default",
+         "name": "Manual",
+         "description": "Always ask before making changes"
+        },
+        {
+         "id": "acceptEdits",
+         "name": "Accept edits",
+         "description": "Automatically accept all file edits"
+        },
+        {
+         "id": "plan",
+         "name": "Plan",
+         "description": "Create a plan before making changes"
+        },
+        {
+         "id": "auto",
+         "name": "Auto",
+         "description": "Claude handles permission decisions"
+        },
+        {
+         "id": "bypassPermissions",
+         "name": "Bypass permissions",
+         "description": "Accepts all permissions"
+        }
+       ]
+      },
+      "configOptions": [
+       {
+        "id": "mode",
+        "name": "Mode",
+        "description": "Session permission mode",
+        "category": "mode",
+        "type": "select",
+        "currentValue": "default",
+        "options": [
+         {
+          "value": "default",
+          "name": "Manual",
+          "description": "Always ask before making changes"
+         },
+         {
+          "value": "acceptEdits",
+          "name": "Accept edits",
+          "description": "Automatically accept all file edits"
+         },
+         {
+          "value": "plan",
+          "name": "Plan",
+          "description": "Create a plan before making changes"
+         },
+         {
+          "value": "auto",
+          "name": "Auto",
+          "description": "Claude handles permission decisions"
+         },
+         {
+          "value": "bypassPermissions",
+          "name": "Bypass permissions",
+          "description": "Accepts all permissions"
+         }
+        ]
+       },
+       {
+        "id": "model",
+        "name": "Model",
+        "description": "AI model to use",
+        "category": "model",
+        "type": "select",
+        "currentValue": "opus",
+        "options": [
+         {
+          "value": "default",
+          "name": "Default (recommended)",
+          "description": "Opus"
+         },
+         {
+          "value": "opus",
+          "name": "Opus 5.5",
+          "description": "Opus 5.5 \u00b7 Best for everyday, complex tasks"
+         },
+         {
+          "value": "claude-fable-5-1[1m]",
+          "name": "Fable 5.1",
+          "description": "Fable 5.1 \u00b7 Most capable for your hardest and longest-running tasks"
+         },
+         {
+          "value": "sonnet",
+          "name": "Sonnet 5.5",
+          "description": "Sonnet 5.5 \u00b7 Efficient for routine tasks"
+         },
+         {
+          "value": "haiku",
+          "name": "Haiku 5.5",
+          "description": "Haiku 5.5 \u00b7 Fastest for quick answers"
+         }
+        ]
+       },
+       {
+        "id": "effort",
+        "name": "Effort",
+        "description": "Available effort levels for this model",
+        "category": "thought_level",
+        "type": "select",
+        "currentValue": "high",
+        "options": [
+         {
+          "value": "default",
+          "name": "Default"
+         },
+         {
+          "value": "low",
+          "name": "Low"
+         },
+         {
+          "value": "medium",
+          "name": "Medium"
+         },
+         {
+          "value": "high",
+          "name": "High"
+         },
+         {
+          "value": "xhigh",
+          "name": "Xhigh"
+         },
+         {
+          "value": "max",
+          "name": "Max"
+         }
+        ]
+       },
+       {
+        "id": "fast",
+        "name": "Fast mode",
+        "description": "Faster responses on supported models",
+        "category": "model_config",
+        "type": "select",
+        "currentValue": "off",
+        "options": [
+         {
+          "value": "on",
+          "name": "On"
+         },
+         {
+          "value": "off",
+          "name": "Off"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "user_message_chunks": [
+     {
+      "sessionUpdate": "user_message_chunk",
+      "content": {
+       "type": "text",
+       "text": "Look at #probe-note. What is the secret word in it? Answer with the word only."
+      },
+      "messageId": "bb7cbf43-3790-4647-91f4-12c7d7f78b66"
+     },
+     {
+      "sessionUpdate": "user_message_chunk",
+      "content": {
+       "type": "text",
+       "text": "nah://tag/probe-note"
+      },
+      "messageId": "bb7cbf43-3790-4647-91f4-12c7d7f78b66"
+     },
+     {
+      "sessionUpdate": "user_message_chunk",
+      "content": {
+       "type": "text",
+       "text": "\n<context ref=\"nah://tag/probe-note\">\n#probe-note (a tag)\nThe secret word is PELICAN-42.\n</context>"
+      },
+      "messageId": "bb7cbf43-3790-4647-91f4-12c7d7f78b66"
+     }
+    ],
+    "updates": [
+     "user_message_chunk",
+     "user_message_chunk",
+     "user_message_chunk",
+     "agent_message_chunk"
+    ]
+   }
+  }
+ ]
+}

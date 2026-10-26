@@ -1,0 +1,98 @@
+# Reviewers run at a plan's stopping points (dev_docs/process/build-and-validate.md),
+# in `.nah/reviewers.toml`'s shape so the meta harness can run them once it
+# reviews change sets (TODO: "Rework the work queue and validation"). Not in
+# .nah/: the server would run them on every component verified.
+#
+# Each is a fresh agent given only: the plan's goal and rules, the system
+# description in build-and-validate.md, and the changed code. It reports
+# concrete problems (file, line, how it goes wrong), ranked; nothing vague.
+
+[reviewers.responsibility]
+category = "architecture"
+description = "Each part does one job and meets the others only at their interfaces."
+kind = "session"
+blocking = true
+brief = """
+Check separation of responsibility and coupling in the changed code. Does each module, type and
+function do one job? Does anything reach into another part's internals instead of using its
+interface (fields read from outside, a buffer naming the shell or another buffer, the shell naming a
+buffer type, a server part reaching into another's state)? Is there a parallel system beside an
+existing one (a second way to do what the code already does: permissions, keys, events, desk
+services, asks, theme)? Is anything decided in the wrong layer (UI deciding server policy, the server
+knowing about the cockpit's layout)? Name each problem with file and line and what it couples.
+"""
+
+[reviewers.performance]
+category = "performance"
+description = "Built to stay fast: per frame, per message, as it grows."
+kind = "session"
+blocking = true
+brief = """
+Look for work that costs more than it must. Per frame in the cockpit: allocations, layouts, clones,
+whole-list scans, requests made every frame. Per message on the server: copies, locks held across
+I/O or on async threads, blocking calls on the runtime. Network: chatty protocols, unbatched updates,
+full resends where a change would do. Growth: caches, queues, lists or histories without a bound.
+For each, say what grows or repeats, how often, and what it costs at realistic sizes (10,000 lines,
+hundreds of items, a busy terminal).
+"""
+
+[reviewers.correctness]
+category = "logic"
+description = "Edge cases, ordering, failure and the plan's rules hold."
+kind = "session"
+blocking = true
+brief = """
+Try to break it. Edge cases (empty, one, huge, unicode, wide characters, zero sizes), ordering and
+races (two readers, a reply arriving late, a restart in the middle, events before the state they
+refer to), error paths (what the user sees, whether state stays consistent), restarts and
+reconnects. Check every rule the plan states holds in the code, not just in the tests. Give a
+concrete sequence that goes wrong for each problem.
+"""
+
+[reviewers.faithfulness]
+category = "faithfulness"
+description = "The code does what the plan says, nothing quietly swapped."
+kind = "session"
+blocking = true
+brief = """
+Compare the plan's steps and rules with the code. Is each planned thing built as planned, or
+replaced by something easier, stubbed, half done, or left for later without saying so? Is anything
+built that the plan didn't ask for? Are the plan's recorded decisions honoured? List each gap with
+the plan's words and the code's file and line.
+"""
+
+[reviewers.permissions]
+category = "security"
+description = "Every route and tool checks what it needs, with no way around it."
+kind = "session"
+blocking = true
+brief = """
+Check every route takes its capability first (Needs<can::X>) or is a ticketed socket on purpose,
+every agent tool declares the capability it needs, and nothing reaches the same effect another way
+(a socket, a different route, the home relay, an agent tool that wraps a user-only action). Check
+what agents can read for anything they shouldn't (secrets, other servers' data).
+"""
+
+[reviewers.tests]
+category = "tests"
+description = "Tests protect behaviour, and the behaviour that matters is tested."
+kind = "session"
+blocking = false
+brief = """
+Read the changed tests. Flag tests that only test themselves (asserting what they just set up),
+tests of wording or layout rather than behaviour, tests reaching into internals another part
+shouldn't see, duplicated tests, and timing tests without headroom. Then list behaviour the plan
+relies on that no test protects. Prefer fewer, stronger tests: say which to cut or merge.
+"""
+
+[reviewers.consistency]
+category = "anti_patterns"
+description = "Matches the code's patterns; nothing reinvented."
+kind = "session"
+blocking = false
+brief = """
+Does the change follow the patterns already in the code (how keys are bound and said, the key bar,
+the palette, actions and controls, how buffers ask, words used on screen, error messages, config
+files)? Is anything hand-built that the code base or a maintained crate already does? Name the
+existing pattern or crate for each.
+"""

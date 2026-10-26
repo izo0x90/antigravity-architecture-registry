@@ -1,0 +1,277 @@
+{
+ "session": "171da13e-dc04-45d9-b66b-2f98a3b1edae",
+ "load": {
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+   "modes": {
+    "currentModeId": "default",
+    "availableModes": [
+     {
+      "id": "default",
+      "name": "Default",
+      "description": "Default permission prompt flow"
+     },
+     {
+      "id": "auto_edit",
+      "name": "Auto Edit",
+      "description": "Auto-approve file edit tools"
+     },
+     {
+      "id": "yolo",
+      "name": "YOLO",
+      "description": "Auto-approve all tools"
+     }
+    ]
+   },
+   "configOptions": [
+    {
+     "currentValue": "gemini-4-argon-medium",
+     "options": [
+      {
+       "value": "gemini-4-argon-medium",
+       "name": "Gemini 4 Argon (Medium)",
+       "description": "gemini-4-argon-medium"
+      },
+      {
+       "value": "gemini-4-argon-high",
+       "name": "Gemini 4 Argon (High)",
+       "description": "gemini-4-argon-high"
+      },
+      {
+       "value": "gemini-4-argon-low",
+       "name": "Gemini 4 Argon (Low)",
+       "description": "gemini-4-argon-low"
+      },
+      {
+       "value": "gemini-3.8-flash-high",
+       "name": "Gemini 3.8 Flash (High)",
+       "description": "gemini-3.8-flash-high"
+      },
+      {
+       "value": "gemini-3.8-flash-medium",
+       "name": "Gemini 3.8 Flash (Medium)",
+       "description": "gemini-3.8-flash-medium"
+      },
+      {
+       "value": "gemini-3.8-flash-low",
+       "name": "Gemini 3.8 Flash (Low)",
+       "description": "gemini-3.8-flash-low"
+      }
+     ],
+     "id": "model",
+     "name": "Model",
+     "category": "model",
+     "type": "select"
+    },
+    {
+     "currentValue": "default",
+     "options": [
+      {
+       "value": "default",
+       "name": "Default",
+       "description": "Default permission prompt flow"
+      },
+      {
+       "value": "auto_edit",
+       "name": "Auto Edit",
+       "description": "Auto-approve file edit tools"
+      },
+      {
+       "value": "yolo",
+       "name": "YOLO",
+       "description": "Auto-approve all tools"
+      }
+     ],
+     "id": "mode",
+     "name": "Session Mode",
+     "category": "mode",
+     "type": "select"
+    }
+   ],
+   "models": {
+    "availableModels": [
+     {
+      "modelId": "gemini-4-argon-medium",
+      "name": "Gemini 4 Argon (Medium)",
+      "description": "gemini-4-argon-medium"
+     },
+     {
+      "modelId": "gemini-4-argon-high",
+      "name": "Gemini 4 Argon (High)",
+      "description": "gemini-4-argon-high"
+     },
+     {
+      "modelId": "gemini-4-argon-low",
+      "name": "Gemini 4 Argon (Low)",
+      "description": "gemini-4-argon-low"
+     },
+     {
+      "modelId": "gemini-3.8-flash-high",
+      "name": "Gemini 3.8 Flash (High)",
+      "description": "gemini-3.8-flash-high"
+     },
+     {
+      "modelId": "gemini-3.8-flash-medium",
+      "name": "Gemini 3.8 Flash (Medium)",
+      "description": "gemini-3.8-flash-medium"
+     },
+     {
+      "modelId": "gemini-3.8-flash-low",
+      "name": "Gemini 3.8 Flash (Low)",
+      "description": "gemini-3.8-flash-low"
+     }
+    ],
+    "currentModelId": "gemini-4-argon-medium"
+   }
+  }
+ },
+ "updates": [
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "171da13e-dc04-45d9-b66b-2f98a3b1edae",
+    "update": {
+     "content": {
+      "text": "quick test say hello",
+      "type": "text"
+     },
+     "sessionUpdate": "user_message_chunk"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "171da13e-dc04-45d9-b66b-2f98a3b1edae",
+    "update": {
+     "availableCommands": [
+      {
+       "name": "plan",
+       "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+      },
+      {
+       "name": "logout",
+       "description": "Log out and clear stored credentials."
+      }
+     ],
+     "sessionUpdate": "available_commands_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "171da13e-dc04-45d9-b66b-2f98a3b1edae",
+    "update": {
+     "content": {
+      "text": "Hello! How can I help you today?",
+      "type": "text"
+     },
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "171da13e-dc04-45d9-b66b-2f98a3b1edae",
+    "update": {
+     "content": {
+      "text": "think  for a while  about things you like and draw me a pic in ascii",
+      "type": "text"
+     },
+     "sessionUpdate": "user_message_chunk"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "171da13e-dc04-45d9-b66b-2f98a3b1edae",
+    "update": {
+     "content": {
+      "text": "If I think about the things I gravitate toward\u2014clean architecture, interconnected graphs, late-night debugging sessions, and the feeling of launching something new (\"antigravity\")\u2014it looks a bit like a quiet night sky above a glowing terminal and a warm cup of coffee:\n\n```text\n          .       *             .         *           .\n    *          .        .   *         .          .        *\n         .         _..._          .        *        .\n       *         .:::::::.     .                .\n                :::::::::::          /\\               *\n        .       :::::::::::         /  \\     .\n                 `:::::::'         /____\\          .\n           *       `'''`           |    |      *\n     .                        .    | () |               .\n              _________________    |    |         *\n             |  _____________  |   |____|    .\n             | | >_          | |   /    \\          ( (\n             | |   o---o     | |  /      \\          ) )\n             | |   |  /      | | /________\\      ........\n             | |   o         | |    || ||        |      |]\n             | |_____________| |    || ||        \\      /\n             |_________________|    '' ''         `----'\n            /  ===============  \\\n           /_____________________\\\n```\n\nA little mix of:\n- **Graphs & Trees** (`o---o`) \u2014 untangling complex dependencies and architectures.\n- **Space & Flight** \u2014 defying gravity and exploring unknown territory.\n- **The Terminal & Coffee** \u2014 the classic companions of building things from scratch.",
+      "type": "text"
+     },
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "171da13e-dc04-45d9-b66b-2f98a3b1edae",
+    "update": {
+     "content": {
+      "text": "Use a sub-agent to count the .rs files in crates/cockpit-ui/src/chat, then tell me the number. Keep it short.",
+      "type": "text"
+     },
+     "sessionUpdate": "user_message_chunk"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "171da13e-dc04-45d9-b66b-2f98a3b1edae",
+    "update": {
+     "toolCallId": "call_1521929",
+     "title": "Running invoke_subagent",
+     "kind": "other",
+     "status": "completed",
+     "rawInput": "{\"Subagents\":[{\"Model\":\"inherit\",\"Prompt\":\"Count the number of .rs files in `/Users/izo/code/antigravity_architecture_registry/meta-harness/crates/cockpit-ui/src/chat` and return the count and the list of files. Keep it short.\",\"Role\":\"File Counter\",\"TypeName\":\"research\"}],\"toolAction\":\"Invoking research subagent\",\"toolSummary\":\"Invoke research subagent\"}",
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "171da13e-dc04-45d9-b66b-2f98a3b1edae",
+    "update": {
+     "toolCallId": "call_1521929",
+     "status": "completed",
+     "rawOutput": "",
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "171da13e-dc04-45d9-b66b-2f98a3b1edae",
+    "update": {
+     "content": {
+      "text": "Sub-agent launched to count the `.rs` files in `crates/cockpit-ui/src/chat`. Waiting for its response.",
+      "type": "text"
+     },
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "session/update",
+   "params": {
+    "sessionId": "171da13e-dc04-45d9-b66b-2f98a3b1edae",
+    "update": {
+     "content": {
+      "text": "There are **10** `.rs` files in [`crates/cockpit-ui/src/chat`](file:///Users/izo/code/antigravity_architecture_registry/meta-harness/crates/cockpit-ui/src/chat).",
+      "type": "text"
+     },
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  }
+ ]
+}
