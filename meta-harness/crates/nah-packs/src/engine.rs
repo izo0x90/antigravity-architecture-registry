@@ -419,7 +419,7 @@ fn download(url: &str, file: &Path, limit: Duration) -> Result<String, String> {
         out.write_all(&buf[..n]).map_err(|e| e.to_string())?;
     }
     out.sync_all().map_err(|e| e.to_string())?;
-    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+    Ok(crate::hex(&hasher.finalize()))
 }
 
 #[cfg(unix)]
@@ -570,7 +570,7 @@ pub fn server_launch(catalog: &Catalog, lock: &Lock, name: &str, project: &Path)
     let pack = catalog.get(name)?;
     let server = pack.manifest.server.as_ref().ok_or_else(|| PackError::NotA { pack: name.to_owned(), kind: Kind::Server })?;
     let dest = lock.packs.get(name).map(|i| i.dest.clone());
-    let project_key: String = sha2::Sha256::digest(project.to_string_lossy().as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect();
+    let project_key = crate::hex(&sha2::Sha256::digest(project.to_string_lossy().as_bytes())[..8]);
     let cache = catalog.root.parent().unwrap_or(&catalog.root).join("cache").join(name).join(project_key);
     let mut values = base_values(pack, dest.as_deref());
     let (root, cache_text) = (project.to_string_lossy(), cache.to_string_lossy());

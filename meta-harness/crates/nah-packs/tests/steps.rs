@@ -13,8 +13,7 @@ fn shipped(name: &str) -> String {
 }
 
 fn sha256(path: &Path) -> String {
-    use sha2::Digest;
-    sha2::Sha256::digest(std::fs::read(path).unwrap()).iter().map(|b| format!("{b:02x}")).collect()
+    nah_packs::sha256_hex(&std::fs::read(path).unwrap())
 }
 
 /// A tar of `files` (path, text, mode).

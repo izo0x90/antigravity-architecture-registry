@@ -29,11 +29,6 @@ fn world() -> World {
     World { _dir: dir, places }
 }
 
-fn sha256(bytes: &[u8]) -> String {
-    use sha2::Digest;
-    sha2::Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
-}
-
 /// A zip holding `files`.
 fn zip(path: &Path, files: &[(&str, &str)]) -> String {
     let mut w = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
@@ -42,7 +37,7 @@ fn zip(path: &Path, files: &[(&str, &str)]) -> String {
         w.write_all(text.as_bytes()).unwrap();
     }
     w.finish().unwrap();
-    sha256(&std::fs::read(path).unwrap())
+    nah_packs::sha256_hex(&std::fs::read(path).unwrap())
 }
 
 fn harness(version: &str, url: &Path, sum: &str) -> String {

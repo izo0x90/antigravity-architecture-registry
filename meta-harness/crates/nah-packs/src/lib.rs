@@ -14,6 +14,18 @@ mod steps;
 pub mod template;
 
 pub use catalog::{Catalog, Distribution, Pack, Places, Timeouts};
+
+/// `bytes`' SHA-256, in lowercase hex (as a download's checksum is
+/// written).
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    hex(&sha2::Sha256::digest(bytes))
+}
+
+/// `bytes` in lowercase hex.
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
 pub use engine::{HarnessLaunch, ServerLaunch, State, font_face, harness_launch, install, server_launch, state, tool_version};
 pub use lock::{Installed, Lock};
 pub use manifest::{Kind, Manifest, Provides};
